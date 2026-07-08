@@ -1,0 +1,289 @@
+// OPAL LAB - Dental Laboratory Management System
+// Schema only - no database connection in this phase
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  SECRETARY
+  DESIGNER
+  PRINTER
+  MILLING
+  PROCESSING
+  FINISH
+  PACKAGING
+  DOCTOR
+  OWNER
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum MaterialType {
+  TEMPORARY
+  DENTURE
+  PFM
+  ZIRCONIA
+  TITANIUM
+  MODEL
+}
+
+enum WorkType {
+  SCREWED
+  ABUTMENTS
+  MOCKUP
+  BAR
+  NIGHT_GUARD_WHITENING_MILLED
+}
+
+enum OrderStatus {
+  RECEIVED
+  FILES_ATTACHED
+  DESIGN
+  PRINTING_3D
+  MILLING
+  PROCESSING
+  FINISH
+  PACKAGING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum InventoryType {
+  RAW_MATERIALS
+  PARTS_COMPONENTS
+  OWNER_ASSETS
+}
+
+enum FileType {
+  PLX
+  STL
+  OBJ
+  PLY
+  OTHER_3D
+  IMAGE
+  DOCUMENT
+}
+
+enum AttendanceMethod {
+  NFC
+  MANUAL
+  GEOFENCE_AUTO
+}
+
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  phone     String?
+  role      UserRole
+  nfcTagId  String?  @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  doctor              Doctor?
+  assignedOrders      Order[]              @relation("AssignedDesigner")
+  processingOrders    Order[]              @relation("ProcessingEmployee")
+  finishOrders        Order[]              @relation("FinishEmployee")
+  statusChanges       OrderStatusHistory[]
+  attendanceRecords   AttendanceRecord[]
+  inventoryMovements  InventoryMovement[]
+}
+
+model Doctor {
+  id             String        @id @default(cuid())
+  userId         String?       @unique
+  name           String
+  clinic         String?
+  phone          String?
+  email          String?
+  address        String?
+  balance        Float         @default(0)
+  paymentStatus  PaymentStatus @default(PENDING)
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  user     User?     @relation(fields: [userId], references: [id])
+  orders   Order[]
+  payments Payment[]
+}
+
+model Patient {
+  id        String   @id @default(cuid())
+  name      String
+  age       Int?
+  gender    Gender?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[]
+}
+
+model Order {
+  id               String         @id @default(cuid())
+  serialNumber     String         @unique
+  doctorId         String
+  patientId        String
+  entryDate        DateTime       @default(now())
+  completionDate   DateTime?
+  shade            String?
+  materials        MaterialType[]
+  workTypes        WorkType[]
+  selectedTeeth    Int[]
+  description      String?
+  status           OrderStatus    @default(RECEIVED)
+  assignedDesignerId String?
+  processingEmployeeId String?
+  finishEmployeeId String?
+  totalPrice       Float?
+  notes            String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  doctor             Doctor               @relation(fields: [doctorId], references: [id])
+  patient            Patient              @relation(fields: [patientId], references: [id])
+  assignedDesigner   User?                @relation("AssignedDesigner", fields: [assignedDesignerId], references: [id])
+  processingEmployee User?                @relation("ProcessingEmployee", fields: [processingEmployeeId], references: [id])
+  finishEmployee     User?                @relation("FinishEmployee", fields: [finishEmployeeId], references: [id])
+  files              OrderFile[]
+  statusHistory      OrderStatusHistory[]
+  shipment           Shipment?
+  inventoryUsages    InventoryUsage[]
+}
+
+model OrderFile {
+  id         String   @id @default(cuid())
+  orderId    String
+  fileName   String
+  fileType   FileType
+  fileSize   Int?
+  uploadedBy String
+  uploadedAt DateTime @default(now())
+  notes      String?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(cuid())
+  orderId   String
+  status    OrderStatus
+  changedBy String
+  notes     String?
+  createdAt DateTime    @default(now())
+
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changer User  @relation(fields: [changedBy], references: [id])
+}
+
+model InventoryItem {
+  id            String        @id @default(cuid())
+  inventoryType InventoryType
+  name          String
+  barcode       String        @unique
+  description   String?
+  imageUrl      String?
+  purchaseCost  Float
+  quantity      Int           @default(0)
+  minQuantity   Int           @default(0)
+  unit          String        @default("יחידה")
+  location      String?
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  movements InventoryMovement[]
+  usages    InventoryUsage[]
+}
+
+model InventoryMovement {
+  id          String   @id @default(cuid())
+  itemId      String
+  quantity    Int
+  type        String
+  notes       String?
+  performedBy String
+  createdAt   DateTime @default(now())
+
+  item      InventoryItem @relation(fields: [itemId], references: [id])
+  performer User          @relation(fields: [performedBy], references: [id])
+}
+
+model InventoryUsage {
+  id       String @id @default(cuid())
+  orderId  String
+  itemId   String
+  quantity Int
+
+  order Order         @relation(fields: [orderId], references: [id])
+  item  InventoryItem @relation(fields: [itemId], references: [id])
+}
+
+model Shipment {
+  id              String    @id @default(cuid())
+  orderId         String    @unique
+  deliveryNote    String    @unique
+  packagedBy      String?
+  packagedAt      DateTime?
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  courierName     String?
+  courierPhone    String?
+  notes           String?
+  createdAt       DateTime  @default(now())
+
+  order Order @relation(fields: [orderId], references: [id])
+}
+
+model Payment {
+  id          String        @id @default(cuid())
+  doctorId    String
+  amount      Float
+  status      PaymentStatus
+  description String?
+  paidAt      DateTime?
+  createdAt   DateTime      @default(now())
+
+  doctor Doctor @relation(fields: [doctorId], references: [id])
+}
+
+model AttendanceRecord {
+  id        String           @id @default(cuid())
+  userId    String
+  checkIn   DateTime
+  checkOut  DateTime?
+  method    AttendanceMethod
+  nfcTagId  String?
+  latitude  Float?
+  longitude Float?
+  notes     String?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model LabSettings {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
