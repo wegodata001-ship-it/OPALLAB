@@ -35,10 +35,11 @@ export default function ShippingPage() {
     dateRange
   );
 
-  const generatePreview = () => {
+  const generatePreview = async () => {
     if (!selectedId) return;
-    setPreviewNote(previewDeliveryNote(selectedId));
-    updateOrderStatus({ orderId: selectedId, status: "PACKAGING", changedBy: currentUser!.id, notes: "מוכן לאריזה" });
+    const note = await previewDeliveryNote();
+    setPreviewNote(note);
+    await updateOrderStatus({ orderId: selectedId, status: "PACKAGING", changedBy: currentUser!.id, notes: "מוכן לאריזה" });
   };
 
   const deliveryHtml = (note: string, order = selected) => {
@@ -50,9 +51,9 @@ export default function ShippingPage() {
       <tr><td>תאריך</td><td>${formatDate(new Date())}</td></tr></table>`;
   };
 
-  const confirmShip = () => {
+  const confirmShip = async () => {
     if (!selectedId || !previewNote) return;
-    createShipment(selectedId, previewNote, courier ? { name: courier.name, phone: courier.phone } : undefined);
+    await createShipment(selectedId, previewNote, courier ? { name: courier.name, phone: courier.phone } : undefined);
     setSelectedId(""); setPreviewNote(""); setCourierId("");
   };
 

@@ -30,10 +30,12 @@ export default function InventoryPage() {
   const [newCat, setNewCat] = useState({ name: "", color: "#10b981" });
   const [stockIn, setStockIn] = useState({ qty: "", cost: "", notes: "" });
   const fileRef = useRef<HTMLInputElement>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   const [newItem, setNewItem] = useState({
     name: "", barcode: "", purchaseCost: "", quantity: "", type: inventoryCategories[0]?.id ?? "RAW_MATERIALS",
-    imageUrl: "" as string | null, location: "", description: "",
+    location: "", description: "",
   });
 
   const canSeeOwner = currentUser?.role === "OWNER" || currentUser?.role === "ADMIN";
@@ -48,21 +50,22 @@ export default function InventoryPage() {
   const handleImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setNewItem((p) => ({ ...p, imageUrl: reader.result as string }));
-    reader.readAsDataURL(file);
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
   };
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (!newItem.name || !newItem.barcode) return;
-    addInventoryItem({
+    await addInventoryItem({
       inventoryType: newItem.type, name: newItem.name, barcode: newItem.barcode,
       purchaseCost: parseFloat(newItem.purchaseCost) || 0, quantity: parseInt(newItem.quantity) || 0,
       minQuantity: 5, unit: "יחידה", location: newItem.location || null,
-      description: newItem.description || null, imageUrl: newItem.imageUrl, isActive: true,
-    }, parseFloat(newItem.purchaseCost) || 0);
+      description: newItem.description || null, imageUrl: null, isActive: true,
+    }, parseFloat(newItem.purchaseCost) || 0, imageFile ?? undefined);
     setShowAdd(false);
-    setNewItem({ name: "", barcode: "", purchaseCost: "", quantity: "", type: visibleCategories[0]?.id ?? "RAW_MATERIALS", imageUrl: null, location: "", description: "" });
+    setImageFile(null);
+    setImagePreview(null);
+    setNewItem({ name: "", barcode: "", purchaseCost: "", quantity: "", type: visibleCategories[0]?.id ?? "RAW_MATERIALS", location: "", description: "" });
   };
 
   const handleStockIn = () => {
@@ -152,9 +155,9 @@ export default function InventoryPage() {
             <Label>תמונת מוצר</Label>
             <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleImage} />
             <button type="button" onClick={() => fileRef.current?.click()} className="flex items-center gap-2 mt-1 px-4 py-2 border rounded-lg text-sm hover:bg-slate-50">
-              <ImageIcon className="h-4 w-4" />{newItem.imageUrl ? "תמונה נבחרה ✓" : "העלאת תמונה"}
+              <ImageIcon className="h-4 w-4" />{imagePreview ? "תמונה נבחרה ✓" : "העלאת תמונה"}
             </button>
-            {newItem.imageUrl && <img src={newItem.imageUrl} alt="" className="mt-2 h-24 rounded-lg object-cover" />}
+            {imagePreview && <img src={imagePreview} alt="" className="mt-2 h-24 rounded-lg object-cover" />}
           </div>
           <Button onClick={handleAdd} className="w-full">שמירה</Button>
         </div>

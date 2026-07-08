@@ -19,11 +19,12 @@ const PATH_MODULE: Record<string, AppModule> = {
 };
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, currentUser } = useApp();
+  const { isAuthenticated, isLoading, currentUser } = useApp();
   const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
+    if (isLoading) return;
     if (!isAuthenticated) {
       router.replace("/");
       return;
@@ -35,9 +36,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     if (module && !canAccess(currentUser.role, module)) {
       router.replace(getDefaultRoute(currentUser.role));
     }
-  }, [isAuthenticated, currentUser, pathname, router]);
+  }, [isAuthenticated, isLoading, currentUser, pathname, router]);
 
-  if (!isAuthenticated || !currentUser) {
+  if (isLoading || !isAuthenticated || !currentUser) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-opal-gold border-t-transparent" />

@@ -64,9 +64,14 @@ function AttendanceKiosk() {
     return () => navigator.geolocation.clearWatch(watch);
   }, [currentUser, activeRecords, checkOut]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!login(username, password)) setMessage("שם משתמש או סיסמה שגויים");
+    try {
+      const user = await login(username, password);
+      if (!user) setMessage("שם משתמש או סיסמה שגויים");
+    } catch {
+      setMessage("שם משתמש או סיסמה שגויים");
+    }
   };
 
   if (!currentUser) {

@@ -18,8 +18,6 @@ import { Search, Plus, Upload, List } from "lucide-react";
 import { DateRangeFilter } from "@/components/shared/date-range-filter";
 import { cn } from "@/lib/utils";
 
-import { detectFileType, readFileForUpload } from "@/lib/file-utils";
-
 function OrdersContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -61,11 +59,11 @@ function OrdersContent() {
   const toggleWorkType = (w: WorkType) =>
     setWorkTypes((p) => (p.includes(w) ? p.filter((x) => x !== w) : [...p, w]));
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedDoctor = doctorName.trim();
     const matched = trimmedDoctor ? doctors.find((d) => d.name.trim() === trimmedDoctor) : undefined;
-    const order = createOrder({
+    const order = await createOrder({
       doctorId: matched?.id,
       doctorName: trimmedDoctor || undefined,
       patientName: patientName.trim() || undefined,
@@ -93,10 +91,7 @@ function OrdersContent() {
   const handleFiles = useCallback(async (files: FileList | null) => {
     if (!files || !uploadOrderId) return;
     for (const f of Array.from(files)) {
-      const { dataUrl, mimeType } = await readFileForUpload(f);
-      addOrderFile(uploadOrderId, {
-        fileName: f.name, fileType: detectFileType(f.name), fileSize: f.size, dataUrl, mimeType,
-      });
+      await addOrderFile(uploadOrderId, f);
     }
   }, [uploadOrderId, addOrderFile]);
 

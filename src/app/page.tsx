@@ -9,23 +9,35 @@ import { useApp } from "@/providers/AppProvider";
 import { getDefaultRoute } from "@/lib/permissions";
 
 export default function LoginPage() {
-  const { login, isAuthenticated, currentUser } = useApp();
+  const { login, isAuthenticated, isLoading, currentUser } = useApp();
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-opal-gold border-t-transparent" />
+      </div>
+    );
+  }
 
   if (isAuthenticated && currentUser) {
     router.replace(getDefaultRoute(currentUser.role));
     return null;
   }
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const user = login(username, password);
-    if (user) {
-      router.push(getDefaultRoute(user.role));
-    } else {
+    try {
+      const user = await login(username, password);
+      if (user) {
+        router.push(getDefaultRoute(user.role));
+      } else {
+        setError("שם משתמש או סיסמה שגויים");
+      }
+    } catch {
       setError("שם משתמש או סיסמה שגויים");
     }
   };

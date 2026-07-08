@@ -1,5 +1,4 @@
 // OPAL LAB - Dental Laboratory Management System
-// Schema only - no database connection in this phase
 
 generator client {
   provider = "prisma-client-js"
@@ -7,7 +6,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum UserRole {
@@ -79,6 +77,7 @@ enum AttendanceMethod {
   NFC
   MANUAL
   GEOFENCE_AUTO
+  WIFI
 }
 
 enum PaymentStatus {
@@ -88,43 +87,92 @@ enum PaymentStatus {
   OVERDUE
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String
-  phone     String?
-  role      UserRole
-  nfcTagId  String?  @unique
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+enum SalaryType {
+  MONTHLY
+  HOURLY
+}
 
-  doctor              Doctor?
-  assignedOrders      Order[]              @relation("AssignedDesigner")
-  processingOrders    Order[]              @relation("ProcessingEmployee")
-  finishOrders        Order[]              @relation("FinishEmployee")
-  statusChanges       OrderStatusHistory[]
-  attendanceRecords   AttendanceRecord[]
-  inventoryMovements  InventoryMovement[]
+enum PaymentMethod {
+  CASH
+  CHECK
+  TRANSFER
+  CREDIT_CARD
+}
+
+enum TransactionType {
+  PAYMENT
+  CHARGE
+  SALARY
+}
+
+enum MovementType {
+  IN
+  OUT
+  ADJUSTMENT
+}
+
+model User {
+  id         String      @id @default(cuid())
+  username   String      @unique
+  password   String
+  email      String      @unique
+  name       String
+  phone      String?
+  role       UserRole
+  nfcTagId   String?     @unique
+  address    String?
+  salary     Float?
+  salaryType SalaryType?
+  hourlyRate Float?
+  color      String?
+  isActive   Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  doctor             Doctor?
+  assignedOrders     Order[]              @relation("AssignedDesigner")
+  processingOrders   Order[]              @relation("ProcessingEmployee")
+  finishOrders       Order[]              @relation("FinishEmployee")
+  statusChanges      OrderStatusHistory[]
+  attendanceRecords  AttendanceRecord[]
+  inventoryMovements InventoryMovement[]
+  employeePayments   Payment[]            @relation("EmployeePayments")
+
+  @@index([role, isActive])
 }
 
 model Doctor {
-  id             String        @id @default(cuid())
-  userId         String?       @unique
-  name           String
-  clinic         String?
-  phone          String?
-  email          String?
-  address        String?
-  balance        Float         @default(0)
-  paymentStatus  PaymentStatus @default(PENDING)
-  isActive       Boolean       @default(true)
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  id            String        @id @default(cuid())
+  userId        String?       @unique
+  name          String
+  clinic        String?
+  phone         String?
+  email         String?
+  address       String?
+  balance       Float         @default(0)
+  paymentStatus PaymentStatus @default(PENDING)
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
   user     User?     @relation(fields: [userId], references: [id])
   orders   Order[]
   payments Payment[]
+
+  @@index([name])
+  @@index([paymentStatus])
+}
+
+model Courier {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
 }
 
 model Patient {
@@ -136,28 +184,31 @@ model Patient {
   updatedAt DateTime @updatedAt
 
   orders Order[]
+
+  @@index([name])
 }
 
 model Order {
-  id               String         @id @default(cuid())
-  serialNumber     String         @unique
-  doctorId         String
-  patientId        String
-  entryDate        DateTime       @default(now())
-  completionDate   DateTime?
-  shade            String?
-  materials        MaterialType[]
-  workTypes        WorkType[]
-  selectedTeeth    Int[]
-  description      String?
-  status           OrderStatus    @default(RECEIVED)
-  assignedDesignerId String?
+  id                   String         @id @default(cuid())
+  serialNumber         String         @unique
+  doctorId             String
+  patientId            String
+  entryDate            DateTime       @default(now())
+  completionDate       DateTime?
+  shade                String?
+  materials            MaterialType[]
+  workTypes            WorkType[]
+  selectedTeeth        Int[]
+  description          String?
+  status               OrderStatus    @default(RECEIVED)
+  assignedDesignerId   String?
   processingEmployeeId String?
-  finishEmployeeId String?
-  totalPrice       Float?
-  notes            String?
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  finishEmployeeId     String?
+  totalPrice           Float?
+  notes                String?
+  completedStages      Json           @default("{}")
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
 
   doctor             Doctor               @relation(fields: [doctorId], references: [id])
   patient            Patient              @relation(fields: [patientId], references: [id])
@@ -168,19 +219,30 @@ model Order {
   statusHistory      OrderStatusHistory[]
   shipment           Shipment?
   inventoryUsages    InventoryUsage[]
+  payments           Payment[]
+
+  @@index([status])
+  @@index([doctorId])
+  @@index([entryDate])
+  @@index([createdAt])
 }
 
 model OrderFile {
-  id         String   @id @default(cuid())
-  orderId    String
-  fileName   String
-  fileType   FileType
-  fileSize   Int?
-  uploadedBy String
-  uploadedAt DateTime @default(now())
-  notes      String?
+  id          String   @id @default(cuid())
+  orderId     String
+  fileName    String
+  fileType    FileType
+  fileSize    Int?
+  storagePath String?
+  bucket      String?
+  mimeType    String?
+  uploadedBy  String
+  uploadedAt  DateTime @default(now())
+  notes       String?
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
 }
 
 model OrderStatusHistory {
@@ -193,39 +255,58 @@ model OrderStatusHistory {
 
   order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
   changer User  @relation(fields: [changedBy], references: [id])
+
+  @@index([orderId, createdAt])
+}
+
+model InventoryCategory {
+  id       String  @id
+  name     String
+  color    String
+  isSystem Boolean @default(false)
+
+  @@index([isSystem])
 }
 
 model InventoryItem {
-  id            String        @id @default(cuid())
-  inventoryType InventoryType
+  id            String   @id @default(cuid())
+  inventoryType String
   name          String
-  barcode       String        @unique
+  barcode       String   @unique
   description   String?
   imageUrl      String?
+  storagePath   String?
   purchaseCost  Float
-  quantity      Int           @default(0)
-  minQuantity   Int           @default(0)
-  unit          String        @default("יחידה")
+  quantity      Int      @default(0)
+  minQuantity   Int      @default(0)
+  unit          String   @default("יחידה")
   location      String?
-  isActive      Boolean       @default(true)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   movements InventoryMovement[]
   usages    InventoryUsage[]
+
+  @@index([inventoryType, isActive])
+  @@index([name])
 }
 
 model InventoryMovement {
-  id          String   @id @default(cuid())
+  id          String       @id @default(cuid())
   itemId      String
   quantity    Int
-  type        String
+  type        MovementType
+  unitCost    Float        @default(0)
   notes       String?
+  orderRef    String?
   performedBy String
-  createdAt   DateTime @default(now())
+  createdAt   DateTime     @default(now())
 
   item      InventoryItem @relation(fields: [itemId], references: [id])
   performer User          @relation(fields: [performedBy], references: [id])
+
+  @@index([itemId, createdAt])
 }
 
 model InventoryUsage {
@@ -239,31 +320,48 @@ model InventoryUsage {
 }
 
 model Shipment {
-  id              String    @id @default(cuid())
-  orderId         String    @unique
-  deliveryNote    String    @unique
-  packagedBy      String?
-  packagedAt      DateTime?
-  shippedAt       DateTime?
-  deliveredAt     DateTime?
-  courierName     String?
-  courierPhone    String?
-  notes           String?
-  createdAt       DateTime  @default(now())
+  id           String    @id @default(cuid())
+  orderId      String    @unique
+  deliveryNote String    @unique
+  packagedBy   String?
+  packagedAt   DateTime?
+  shippedAt    DateTime?
+  deliveredAt  DateTime?
+  courierName  String?
+  courierPhone String?
+  notes        String?
+  createdAt    DateTime  @default(now())
 
   order Order @relation(fields: [orderId], references: [id])
+
+  @@index([deliveryNote])
 }
 
 model Payment {
-  id          String        @id @default(cuid())
-  doctorId    String
-  amount      Float
-  status      PaymentStatus
-  description String?
-  paidAt      DateTime?
-  createdAt   DateTime      @default(now())
+  id              String         @id @default(cuid())
+  doctorId        String?
+  employeeId      String?
+  orderId         String?
+  serialNumber    String?
+  patientName     String?
+  amount          Float
+  type            TransactionType
+  status          PaymentStatus
+  description     String?
+  paidAt          DateTime?
+  paymentMethod   PaymentMethod?
+  referenceNumber String?
+  deliveryNote    String?
+  createdAt       DateTime       @default(now())
 
-  doctor Doctor @relation(fields: [doctorId], references: [id])
+  doctor   Doctor? @relation(fields: [doctorId], references: [id])
+  employee User?   @relation("EmployeePayments", fields: [employeeId], references: [id])
+  order    Order?  @relation(fields: [orderId], references: [id])
+
+  @@index([doctorId, createdAt])
+  @@index([employeeId, createdAt])
+  @@index([orderId])
+  @@index([type, status])
 }
 
 model AttendanceRecord {
@@ -279,6 +377,9 @@ model AttendanceRecord {
   createdAt DateTime         @default(now())
 
   user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, checkIn])
+  @@index([checkOut])
 }
 
 model LabSettings {

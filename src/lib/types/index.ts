@@ -163,6 +163,7 @@ export interface OrderFile {
   notes?: string | null;
   dataUrl?: string | null;
   mimeType?: string | null;
+  storagePath?: string | null;
 }
 
 export interface OrderStatusHistory {

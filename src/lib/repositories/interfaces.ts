@@ -52,9 +52,5 @@ export interface IUserRepository {
   findById(id: string): Promise<User | null>;
 }
 
-// Mock implementations are in AppProvider.tsx
-// To connect to Supabase:
-// 1. Set DATABASE_URL in .env
-// 2. Run: npx prisma migrate dev
-// 3. Create src/lib/repositories/prisma/*.ts implementing these interfaces
-// 4. Swap AppProvider to use Prisma repositories instead of useState
+// Prisma repository implementations live in src/lib/services/app-data.service.ts
+// API routes in src/app/api/* call the service layer.

@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import type { OrderFile, FileType } from "@/lib/types";
+import type { OrderFile } from "@/lib/types";
 import { FILE_TYPE_LABELS } from "@/lib/constants/labels";
-import { detectFileType, readFileForUpload, isPreviewable } from "@/lib/file-utils";
+import { isPreviewable } from "@/lib/file-utils";
 import { FilePreviewModal } from "@/components/orders/file-preview-modal";
 import { Upload, Eye, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -11,26 +11,19 @@ import { cn } from "@/lib/utils";
 interface OrderFilesSectionProps {
   orderId: string;
   files: OrderFile[];
-  onUpload: (file: { fileName: string; fileType: FileType; fileSize: number; dataUrl: string | null; mimeType: string }) => void;
+  onUpload: (file: File) => void | Promise<void>;
   canUpload?: boolean;
 }
 
-export function OrderFilesSection({ orderId, files, onUpload, canUpload = true }: OrderFilesSectionProps) {
+export function OrderFilesSection({ files, onUpload, canUpload = true }: OrderFilesSectionProps) {
   const [preview, setPreview] = useState<OrderFile | null>(null);
   const [uploading, setUploading] = useState(false);
 
   const handleFiles = useCallback(async (list: FileList | null) => {
     if (!list) return;
     setUploading(true);
-    for (const f of Array.from(list)) {
-      const { dataUrl, mimeType } = await readFileForUpload(f);
-      onUpload({
-        fileName: f.name,
-        fileType: detectFileType(f.name),
-        fileSize: f.size,
-        dataUrl,
-        mimeType,
-      });
+    for (const file of Array.from(list)) {
+      await onUpload(file);
     }
     setUploading(false);
   }, [onUpload]);
@@ -46,7 +39,7 @@ export function OrderFilesSection({ orderId, files, onUpload, canUpload = true }
           <span className="text-sm font-medium text-opal-gold-dark">
             {uploading ? "מעלה..." : "העלאת קבצים (ניתן לבחור מספר קבצים)"}
           </span>
-          <input type="file" multiple className="hidden" accept="*/*" onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
+          <input type="file" multiple className="hidden" accept="*/*" onChange={(e) => { void handleFiles(e.target.files); e.target.value = ""; }} />
         </label>
       )}
 
