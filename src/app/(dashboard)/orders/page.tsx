@@ -89,8 +89,9 @@ function OrdersContent() {
 
   const handleFiles = useCallback(async (files: FileList | null) => {
     if (!files || !uploadOrderId) return;
+    const batchFolderId = crypto.randomUUID();
     for (const f of Array.from(files)) {
-      await addOrderFile(uploadOrderId, f);
+      await addOrderFile(uploadOrderId, f, undefined, batchFolderId);
     }
   }, [uploadOrderId, addOrderFile]);
 

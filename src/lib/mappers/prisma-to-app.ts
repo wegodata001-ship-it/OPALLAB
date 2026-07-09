@@ -158,6 +158,7 @@ export async function mapOrderFile(file: PrismaOrderFile): Promise<OrderFile> {
     uploadedAt: file.uploadedAt,
     notes: file.notes,
     mimeType: file.mimeType,
+    storagePath: file.storagePath,
     dataUrl,
   };
 }

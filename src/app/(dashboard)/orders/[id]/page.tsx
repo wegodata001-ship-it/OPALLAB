@@ -114,7 +114,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
               orderId={order.id}
               files={order.files}
               canUpload={!!canEdit}
-              onUpload={(f) => addOrderFile(order.id, f)}
+              onUpload={(f, folderId) => addOrderFile(order.id, f, undefined, folderId)}
             />
           </CardContent>
         </Card>

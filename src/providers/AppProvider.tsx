@@ -80,7 +80,7 @@ interface AppContextValue {
   updateOrderStatus: (input: UpdateOrderStatusInput) => Promise<void>;
   completeStage: (input: CompleteStageInput) => Promise<void>;
   undoStage: (input: UndoStageInput) => Promise<void>;
-  addOrderFile: (orderId: string, file: File, notes?: string) => Promise<void>;
+  addOrderFile: (orderId: string, file: File, notes?: string, folderId?: string) => Promise<void>;
   previewDeliveryNote: () => Promise<string>;
   createShipment: (orderId: string, deliveryNote: string, courier?: { name: string; phone: string }) => Promise<Shipment>;
   updateInventoryItem: (id: string, updates: Partial<InventoryItem>) => Promise<void>;
@@ -230,12 +230,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await refresh();
   }, [currentUser, refresh]);
 
-  const addOrderFile = useCallback(async (orderId: string, file: File, notes?: string) => {
+  const addOrderFile = useCallback(async (orderId: string, file: File, notes?: string, folderId?: string) => {
     if (!currentUser) return;
     const formData = new FormData();
     formData.append("orderId", orderId);
     formData.append("file", file);
     if (notes) formData.append("notes", notes);
+    if (folderId) formData.append("folderId", folderId);
     await apiPost("/api/orders/files", formData);
     await refresh();
   }, [currentUser, refresh]);

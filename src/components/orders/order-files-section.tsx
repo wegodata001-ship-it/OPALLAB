@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 interface OrderFilesSectionProps {
   orderId: string;
   files: OrderFile[];
-  onUpload: (file: File) => void | Promise<void>;
+  onUpload: (file: File, folderId?: string) => void | Promise<void>;
   canUpload?: boolean;
 }
 
@@ -22,8 +22,9 @@ export function OrderFilesSection({ files, onUpload, canUpload = true }: OrderFi
   const handleFiles = useCallback(async (list: FileList | null) => {
     if (!list) return;
     setUploading(true);
+    const batchFolderId = crypto.randomUUID();
     for (const file of Array.from(list)) {
-      await onUpload(file);
+      await onUpload(file, batchFolderId);
     }
     setUploading(false);
   }, [onUpload]);
@@ -60,7 +61,7 @@ export function OrderFilesSection({ files, onUpload, canUpload = true }: OrderFi
               </span>
               <span className="flex items-center gap-2 shrink-0 mr-2">
                 <span className="text-slate-400 text-xs">{FILE_TYPE_LABELS[f.fileType]}</span>
-                {f.dataUrl && isPreviewable(f.mimeType, f.fileName) && (
+                {isPreviewable(f.mimeType, f.fileName) && (
                   <Eye className="h-4 w-4 text-opal-gold" />
                 )}
               </span>

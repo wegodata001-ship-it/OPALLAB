@@ -40,6 +40,31 @@ export async function getSignedUrl(
   return data.signedUrl;
 }
 
+export async function downloadStorageFile(
+  bucket: StorageBucket,
+  storagePath: string,
+): Promise<{ buffer: Buffer; contentType: string | null }> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase.storage.from(bucket).download(storagePath);
+  if (error || !data) {
+    throw new AppError("STORAGE_ERROR", `הורדת הקובץ נכשלה: ${error?.message ?? "unknown"}`, 500, error);
+  }
+  const arrayBuffer = await data.arrayBuffer();
+  return { buffer: Buffer.from(arrayBuffer), contentType: data.type || null };
+}
+
+export async function listStorageFolder(
+  bucket: StorageBucket,
+  prefix: string,
+): Promise<string[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase.storage.from(bucket).list(prefix);
+  if (error) {
+    throw new AppError("STORAGE_ERROR", `רשימת קבצים נכשלה: ${error.message}`, 500, error);
+  }
+  return (data ?? []).map((item) => item.name);
+}
+
 export async function deleteFile(bucket: StorageBucket, storagePath: string): Promise<void> {
   const supabase = getSupabaseAdmin();
   const { error } = await supabase.storage.from(bucket).remove([storagePath]);

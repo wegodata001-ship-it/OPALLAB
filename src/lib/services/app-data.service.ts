@@ -398,10 +398,12 @@ export class AppDataService {
       mimeType: string;
       buffer: Buffer;
     },
+    options?: { folderId?: string },
   ): Promise<OrderFile> {
     const now = new Date();
-    const fileId = crypto.randomUUID();
-    const storagePath = buildOrderFilePath(orderId, fileId, file.fileName);
+    const folderId = options?.folderId ?? crypto.randomUUID();
+    const recordId = crypto.randomUUID();
+    const storagePath = buildOrderFilePath(orderId, folderId, file.fileName);
 
     await uploadFile(STORAGE_BUCKETS.ORDER_FILES, storagePath, file.buffer, file.mimeType);
 
@@ -411,7 +413,7 @@ export class AppDataService {
 
       const created = await tx.orderFile.create({
         data: {
-          id: fileId,
+          id: recordId,
           orderId,
           fileName: file.fileName,
           fileType: file.fileType,
