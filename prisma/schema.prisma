@@ -109,6 +109,10 @@ enum MovementType {
   IN
   OUT
   ADJUSTMENT
+  TRANSFER
+  CATEGORY_CHANGE
+  EDIT
+  DELETE
 }
 
 model User {
@@ -119,6 +123,8 @@ model User {
   name       String
   phone      String?
   role       UserRole
+  roles      UserRole[]  @default([])
+  authUserId String?     @unique
   nfcTagId   String?     @unique
   address    String?
   salary     Float?
@@ -137,6 +143,7 @@ model User {
   attendanceRecords  AttendanceRecord[]
   inventoryMovements InventoryMovement[]
   employeePayments   Payment[]            @relation("EmployeePayments")
+  auditLogs          AuditLog[]
 
   @@index([role, isActive])
 }
@@ -268,6 +275,15 @@ model InventoryCategory {
   @@index([isSystem])
 }
 
+model Warehouse {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 model InventoryItem {
   id            String   @id @default(cuid())
   inventoryType String
@@ -293,15 +309,21 @@ model InventoryItem {
 }
 
 model InventoryMovement {
-  id          String       @id @default(cuid())
-  itemId      String
-  quantity    Int
-  type        MovementType
-  unitCost    Float        @default(0)
-  notes       String?
-  orderRef    String?
-  performedBy String
-  createdAt   DateTime     @default(now())
+  id           String       @id @default(cuid())
+  itemId       String
+  quantity     Int
+  type         MovementType
+  unitCost     Float        @default(0)
+  notes        String?
+  orderRef     String?
+  reason       String?
+  supplier     String?
+  fromCategory String?
+  toCategory   String?
+  fromLocation String?
+  toLocation   String?
+  performedBy  String
+  createdAt    DateTime     @default(now())
 
   item      InventoryItem @relation(fields: [itemId], references: [id])
   performer User          @relation(fields: [performedBy], references: [id])
@@ -387,4 +409,20 @@ model LabSettings {
   key       String   @unique
   value     String
   updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  action     String
+  entityType String
+  entityId   String
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId, createdAt])
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
 }

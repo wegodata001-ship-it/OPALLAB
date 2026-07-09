@@ -14,8 +14,9 @@ import { useApp } from "@/providers/AppProvider";
 import { LAB_INFO, MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS, ORDER_STATUS_LABELS } from "@/lib/constants/labels";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { MaterialType, WorkType, Gender, OrderStatus, DateRange } from "@/lib/types";
-import { Search, Plus, Upload, List } from "lucide-react";
+import { Search, Plus, Upload, List, UserPlus } from "lucide-react";
 import { DateRangeFilter } from "@/components/shared/date-range-filter";
+import { DoctorFormModal } from "@/components/settings/doctor-form-modal";
 import { cn } from "@/lib/utils";
 
 function OrdersContent() {
@@ -32,7 +33,8 @@ function OrdersContent() {
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
 
   // New order form state
-  const [doctorName, setDoctorName] = useState("");
+  const [doctorId, setDoctorId] = useState("");
+  const [showDoctorModal, setShowDoctorModal] = useState(false);
   const [patientName, setPatientName] = useState("");
   const [patientAge, setPatientAge] = useState("");
   const [patientGender, setPatientGender] = useState<Gender | "">("");
@@ -61,11 +63,8 @@ function OrdersContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmedDoctor = doctorName.trim();
-    const matched = trimmedDoctor ? doctors.find((d) => d.name.trim() === trimmedDoctor) : undefined;
     const order = await createOrder({
-      doctorId: matched?.id,
-      doctorName: trimmedDoctor || undefined,
+      doctorId: doctorId || undefined,
       patientName: patientName.trim() || undefined,
       patientAge: patientAge ? parseInt(patientAge) : undefined,
       patientGender: patientGender || undefined,
@@ -74,7 +73,7 @@ function OrdersContent() {
       completionDate: completionDate ? new Date(completionDate) : undefined,
       totalPrice: totalPrice ? parseFloat(totalPrice) : undefined,
     });
-    setDoctorName("");
+    setDoctorId("");
     setPatientName("");
     setPatientAge("");
     setPatientGender("");
@@ -229,17 +228,23 @@ function OrdersContent() {
             <CardContent className="p-6 space-y-5">
               <div className="grid sm:grid-cols-3 gap-4">
                 <div>
-                  <Label>שם הרופא</Label>
-                  <Input
-                    list="doctors-list"
-                    value={doctorName}
-                    onChange={(e) => setDoctorName(e.target.value)}
-                    placeholder="הקלד שם או בחר מהרשימה"
-                  />
-                  <datalist id="doctors-list">
-                    {doctors.map((d) => <option key={d.id} value={d.name} />)}
-                  </datalist>
-                  <p className="text-xs text-slate-400 mt-1">ניתן להקליד שם חדש — ייווצר רופא אוטומטית</p>
+                  <Label>רופא</Label>
+                  <div className="flex gap-2 mt-1">
+                    <Select
+                      value={doctorId}
+                      onChange={(e) => setDoctorId(e.target.value)}
+                      className="flex-1"
+                    >
+                      <option value="">בחר רופא...</option>
+                      {doctors.filter((d) => d.isActive).map((d) => (
+                        <option key={d.id} value={d.id}>{d.name}{d.clinic ? ` · ${d.clinic}` : ""}</option>
+                      ))}
+                    </Select>
+                    <Button type="button" variant="outline" onClick={() => setShowDoctorModal(true)}>
+                      <UserPlus className="h-4 w-4" />
+                      רופא חדש
+                    </Button>
+                  </div>
                 </div>
                 <div><Label>שם המטופל</Label><Input value={patientName} onChange={(e) => setPatientName(e.target.value)} placeholder="אופציונלי" /></div>
                 <div><Label>צבע Shade</Label><Input value={shade} onChange={(e) => setShade(e.target.value)} placeholder="A2" /></div>
@@ -292,6 +297,13 @@ function OrdersContent() {
           </Card>
         </form>
       )}
+
+      <DoctorFormModal
+        open={showDoctorModal}
+        onClose={() => setShowDoctorModal(false)}
+        mode="create"
+        onSaved={(doctor) => setDoctorId(doctor.id)}
+      />
     </>
   );
 }

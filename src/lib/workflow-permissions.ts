@@ -1,4 +1,5 @@
 import type { OrderStatus, User, UserRole, StageCompletion } from "@/lib/types";
+import { getUserRoles, isSystemAdminUser, userHasAnyRole } from "@/lib/user-roles";
 
 const ADMIN_ROLES: UserRole[] = ["ADMIN", "OWNER", "SECRETARY"];
 
@@ -12,12 +13,13 @@ export const PRODUCTION_STAGES: { status: OrderStatus; label: string; roles: Use
 
 const PRIVILEGED_ROLES: UserRole[] = ADMIN_ROLES;
 
-export function isPrivilegedRole(role: UserRole): boolean {
-  return PRIVILEGED_ROLES.includes(role);
+export function isPrivilegedRole(user: Pick<User, "role" | "roles">): boolean {
+  return isSystemAdminUser(user);
 }
 
-export function getStagesForRole(role: UserRole): OrderStatus[] {
-  return PRODUCTION_STAGES.filter((s) => s.roles.includes(role)).map((s) => s.status);
+export function getStagesForRole(user: Pick<User, "role" | "roles">): OrderStatus[] {
+  const roles = getUserRoles(user);
+  return PRODUCTION_STAGES.filter((s) => roles.some((r) => s.roles.includes(r))).map((s) => s.status);
 }
 
 export function canCompleteStage(
@@ -29,7 +31,7 @@ export function canCompleteStage(
   if (completedStages[stage]) return false;
   if (orderStatus !== stage) return false;
   const def = PRODUCTION_STAGES.find((s) => s.status === stage);
-  return def?.roles.includes(user.role) ?? false;
+  return def ? userHasAnyRole(user, def.roles) : false;
 }
 
 /** עובד יכול לבטל רק שלב שסימן בעצמו; מנהל/מזכירות — כל שלב */
@@ -40,7 +42,7 @@ export function canUndoStage(
 ): boolean {
   const completion = completedStages[stage];
   if (!completion) return false;
-  if (isPrivilegedRole(user.role)) return true;
+  if (isPrivilegedRole(user)) return true;
   return completion.completedBy === user.id;
 }
 
@@ -49,10 +51,14 @@ export function canViewOrderInWorkflow(
   orderStatus: OrderStatus,
   completedStages: Record<string, StageCompletion>,
 ): boolean {
-  if (isPrivilegedRole(user.role)) return true;
-  const myStages = getStagesForRole(user.role);
+  if (isPrivilegedRole(user)) return true;
+  const myStages = getStagesForRole(user);
   if (myStages.includes(orderStatus)) return true;
   return myStages.some((stage) => completedStages[stage]?.completedBy === user.id);
+}
+
+export function rolesSummary(roles: UserRole[]): string {
+  return roles.map((r) => ROLE_PERMISSIONS_SUMMARY[r]).join(" · ");
 }
 
 export const ROLE_PERMISSIONS_SUMMARY: Record<UserRole, string> = {

@@ -19,7 +19,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useApp } from "@/providers/AppProvider";
 import { LAB_INFO, USER_ROLE_LABELS } from "@/lib/constants/labels";
-import { canAccess, type AppModule } from "@/lib/permissions";
+import { canAccessUser, type AppModule } from "@/lib/permissions";
+import { getUserRoles } from "@/lib/user-roles";
 import { useState } from "react";
 import type { UserRole } from "@/lib/types";
 
@@ -49,7 +50,7 @@ export function Sidebar() {
 
   if (!currentUser) return null;
 
-  const filteredNav = navItems.filter((item) => canAccess(currentUser.role, item.module));
+  const filteredNav = navItems.filter((item) => canAccessUser(currentUser, item.module));
 
   const NavContent = () => (
     <>
@@ -91,7 +92,9 @@ export function Sidebar() {
       <div className="border-t border-white/10 p-4">
         <div className="rounded-xl bg-white/5 p-3">
           <p className="text-sm font-medium text-white truncate">{currentUser.name}</p>
-          <p className="text-xs text-opal-gold">{USER_ROLE_LABELS[currentUser.role]}</p>
+          <p className="text-xs text-opal-gold">
+            {getUserRoles(currentUser).map((r) => USER_ROLE_LABELS[r]).join(" · ")}
+          </p>
         </div>
       </div>
     </>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LAB_INFO } from "@/lib/constants/labels";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    if (isAuthenticated && currentUser) {
+      router.replace(getDefaultRoute(currentUser));
+    }
+  }, [isAuthenticated, currentUser, router]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -24,8 +30,11 @@ export default function LoginPage() {
   }
 
   if (isAuthenticated && currentUser) {
-    router.replace(getDefaultRoute(currentUser.role));
-    return null;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-opal-gold border-t-transparent" />
+      </div>
+    );
   }
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -33,7 +42,7 @@ export default function LoginPage() {
     try {
       const user = await login(username, password);
       if (user) {
-        router.push(getDefaultRoute(user.role));
+        router.push(getDefaultRoute(user));
       } else {
         setError("שם משתמש או סיסמה שגויים");
       }

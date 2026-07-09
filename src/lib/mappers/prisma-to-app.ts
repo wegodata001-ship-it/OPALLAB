@@ -45,6 +45,7 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 export function mapUser(user: PrismaUser): User {
+  const roles = user.roles?.length ? user.roles : [user.role];
   return {
     id: user.id,
     username: user.username,
@@ -53,6 +54,8 @@ export function mapUser(user: PrismaUser): User {
     name: user.name,
     phone: user.phone,
     role: user.role,
+    roles,
+    authUserId: user.authUserId,
     nfcTagId: user.nfcTagId,
     address: user.address,
     salary: user.salary,

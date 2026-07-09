@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useApp } from "@/providers/AppProvider";
-import { canAccess, getDefaultRoute, type AppModule } from "@/lib/permissions";
+import { canAccessUser, getDefaultRoute, type AppModule } from "@/lib/permissions";
 
 const PATH_MODULE: Record<string, AppModule> = {
   "/dashboard": "dashboard",
@@ -33,8 +33,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
     const base = "/" + pathname.split("/").filter(Boolean)[0];
     const module = PATH_MODULE[base];
-    if (module && !canAccess(currentUser.role, module)) {
-      router.replace(getDefaultRoute(currentUser.role));
+    if (module && !canAccessUser(currentUser, module)) {
+      router.replace(getDefaultRoute(currentUser));
     }
   }, [isAuthenticated, isLoading, currentUser, pathname, router]);
 

@@ -38,7 +38,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     );
   }
 
-  const canEdit = currentUser && canEditOrders(currentUser.role);
+  const canEdit = currentUser && canEditOrders(currentUser);
 
   const pdfHtml = `
     <h2>הזמנה ${order.serialNumber}</h2>

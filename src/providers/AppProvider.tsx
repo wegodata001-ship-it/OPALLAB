@@ -19,6 +19,8 @@ import type {
   Order,
   OrderWithRelations,
   OrderStatus,
+  CreateDoctorInput,
+  UpdateDoctorInput,
   CreateOrderInput,
   UpdateOrderInput,
   UpdateOrderStatusInput,
@@ -36,7 +38,10 @@ import type {
   Courier,
   LabSettings,
   AttendanceMethod,
+  Warehouse,
+  AuditLogEntry,
 } from "@/lib/types";
+import { getUserRoles } from "@/lib/user-roles";
 
 const STAGE_NEXT: Partial<Record<OrderStatus, OrderStatus>> = {
   DESIGN: "PRINTING_3D",
@@ -63,6 +68,7 @@ interface AppContextValue {
   movements: InventoryMovement[];
   shipments: Shipment[];
   attendance: AttendanceRecord[];
+  warehouses: Warehouse[];
   getOrderById: (id: string) => OrderWithRelations | undefined;
   getOrdersByStatus: (status: OrderStatus) => OrderWithRelations[];
   getOrdersByDoctor: (doctorId: string) => OrderWithRelations[];
@@ -78,6 +84,12 @@ interface AppContextValue {
   previewDeliveryNote: () => Promise<string>;
   createShipment: (orderId: string, deliveryNote: string, courier?: { name: string; phone: string }) => Promise<Shipment>;
   updateInventoryItem: (id: string, updates: Partial<InventoryItem>) => Promise<void>;
+  deleteInventoryItem: (id: string) => Promise<void>;
+  transferInventoryCategory: (itemId: string, toCategory: string, notes?: string) => Promise<void>;
+  transferInventoryWarehouse: (itemId: string, toLocation: string, notes?: string) => Promise<void>;
+  stockOutInventory: (input: { itemId: string; quantity: number; reason: string; notes?: string }) => Promise<void>;
+  stockInInventory: (input: { itemId: string; quantity: number; unitCost: number; supplier?: string; notes?: string }) => Promise<void>;
+  getItemHistory: (itemId: string) => Promise<AuditLogEntry[]>;
   addInventoryItem: (
     item: Omit<InventoryItem, "id" | "createdAt" | "updatedAt">,
     initialCost?: number,
@@ -91,9 +103,10 @@ interface AppContextValue {
   addPayment: (payment: Omit<Payment, "id" | "createdAt">) => Promise<void>;
   updateDoctorBalance: (doctorId: string, amount: number, status?: PaymentStatus) => Promise<void>;
   addUser: (user: Omit<User, "id" | "createdAt" | "updatedAt">) => Promise<User>;
-  updateUser: (id: string, updates: Partial<User>) => Promise<void>;
-  addDoctor: (doctor: Omit<Doctor, "id" | "createdAt" | "updatedAt" | "balance" | "paymentStatus">) => Promise<Doctor>;
-  updateDoctor: (id: string, updates: Partial<Doctor>) => Promise<void>;
+  updateUser: (id: string, updates: Partial<User> & { password?: string }) => Promise<void>;
+  addDoctor: (input: CreateDoctorInput) => Promise<Doctor>;
+  updateDoctor: (id: string, updates: UpdateDoctorInput) => Promise<Doctor>;
+  updateCourier: (id: string, updates: Partial<Courier>) => Promise<void>;
   addCourier: (courier: Omit<Courier, "id">) => Promise<Courier>;
   labSettings: LabSettings;
   updateLabSettings: (updates: Partial<LabSettings>) => Promise<void>;
@@ -126,6 +139,8 @@ const emptySnapshot: AppDataSnapshot = {
   shipments: [],
   attendance: [],
   labSettings: defaultLabSettings,
+  warehouses: [],
+  auditLogs: [],
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -144,8 +159,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async function bootstrap() {
       try {
         const me = await apiGet<{ user: User | null }>("/api/auth/me");
-        if (me.user) setCurrentUser(me.user);
-        await refresh();
+        if (me.user) {
+          setCurrentUser(me.user);
+          await refresh();
+        }
       } catch (error) {
         console.error("Bootstrap failed:", error);
       } finally {
@@ -258,6 +275,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await refresh();
   }, [refresh]);
 
+  const deleteInventoryItem = useCallback(async (id: string) => {
+    await apiPost("/api/inventory", { action: "delete", itemId: id });
+    await refresh();
+  }, [refresh]);
+
+  const transferInventoryCategory = useCallback(async (itemId: string, toCategory: string, notes?: string) => {
+    await apiPost("/api/inventory", { action: "transfer-category", itemId, toCategory, notes });
+    await refresh();
+  }, [refresh]);
+
+  const transferInventoryWarehouse = useCallback(async (itemId: string, toLocation: string, notes?: string) => {
+    await apiPost("/api/inventory", { action: "transfer-warehouse", itemId, toLocation, notes });
+    await refresh();
+  }, [refresh]);
+
+  const stockOutInventory = useCallback(async (input: { itemId: string; quantity: number; reason: string; notes?: string }) => {
+    await apiPost("/api/inventory", { action: "stock-out", ...input });
+    await refresh();
+  }, [refresh]);
+
+  const stockInInventory = useCallback(async (input: { itemId: string; quantity: number; unitCost: number; supplier?: string; notes?: string }) => {
+    await apiPost("/api/inventory", { action: "stock-in", ...input });
+    await refresh();
+  }, [refresh]);
+
+  const getItemHistory = useCallback(async (itemId: string) => {
+    const result = await apiPost<{ history: AuditLogEntry[] }>("/api/inventory", { action: "history", itemId });
+    return result.history;
+  }, []);
+
   const addInventoryCategory = useCallback(async (name: string, color: string) => {
     const result = await apiPost<{ category: InventoryCategory }>("/api/inventory", {
       action: "category",
@@ -288,14 +335,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await refresh();
   }, [refresh]);
 
-  const addDoctor = useCallback(async (doctor: Omit<Doctor, "id" | "createdAt" | "updatedAt" | "balance" | "paymentStatus">) => {
-    const result = await apiPost<{ doctor: Doctor }>("/api/people", { entity: "doctor", action: "add", data: doctor });
+  const addDoctor = useCallback(async (input: CreateDoctorInput) => {
+    const result = await apiPost<{ doctor: Doctor }>("/api/people", { entity: "doctor", action: "add", data: input });
     await refresh();
     return result.doctor;
   }, [refresh]);
 
-  const updateDoctor = useCallback(async (id: string, updates: Partial<Doctor>) => {
-    await apiPost("/api/people", { entity: "doctor", action: "update", id, updates });
+  const updateDoctor = useCallback(async (id: string, updates: UpdateDoctorInput) => {
+    const result = await apiPost<{ doctor: Doctor }>("/api/people", { entity: "doctor", action: "update", id, updates });
+    await refresh();
+    return result.doctor;
+  }, [refresh]);
+
+  const updateCourier = useCallback(async (id: string, updates: Partial<Courier>) => {
+    await apiPost("/api/people", { entity: "courier", action: "update", id, updates });
     await refresh();
   }, [refresh]);
 
@@ -326,7 +379,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const getShipmentByDeliveryNote = useCallback((note: string) => store.shipments.find((s) => s.deliveryNote === note), [store.shipments]);
-  const getUsersByRole = useCallback((role: UserRole) => store.users.filter((u) => u.role === role && u.isActive), [store.users]);
+  const getUsersByRole = useCallback((role: UserRole) =>
+    store.users.filter((u) => u.isActive && getUserRoles(u).includes(role)),
+  [store.users]);
   const getLowStockItems = useCallback(() => store.inventory.filter((i) => i.quantity <= i.minQuantity && i.isActive), [store.inventory]);
   const getInventoryByType = useCallback((type: InventoryType) => store.inventory.filter((i) => i.inventoryType === type && i.isActive), [store.inventory]);
   const getActiveAttendance = useCallback(() => store.attendance.filter((a) => !a.checkOut), [store.attendance]);
@@ -373,6 +428,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     movements: store.movements,
     shipments: store.shipments,
     attendance: store.attendance,
+    warehouses: store.warehouses,
     getOrderById,
     getOrdersByStatus,
     getOrdersByDoctor,
@@ -388,6 +444,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     previewDeliveryNote,
     createShipment,
     updateInventoryItem,
+    deleteInventoryItem,
+    transferInventoryCategory,
+    transferInventoryWarehouse,
+    stockOutInventory,
+    stockInInventory,
+    getItemHistory,
     addInventoryItem,
     addInventoryMovement,
     addInventoryCategory,
@@ -400,6 +462,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     updateUser,
     addDoctor,
     updateDoctor,
+    updateCourier,
     addCourier,
     labSettings: store.labSettings ?? defaultLabSettings,
     updateLabSettings,

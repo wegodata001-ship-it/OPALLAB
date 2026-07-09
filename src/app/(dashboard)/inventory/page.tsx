@@ -11,16 +11,29 @@ import { DateRangeFilter } from "@/components/shared/date-range-filter";
 import { useApp } from "@/providers/AppProvider";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { filterByDateRange } from "@/lib/date-filter";
-import type { InventoryItem, DateRange } from "@/lib/types";
-import { AlertTriangle, Plus, Package, ImageIcon } from "lucide-react";
+import type { AuditLogEntry, InventoryItem, DateRange } from "@/lib/types";
+import { AlertTriangle, Plus, Package, ImageIcon, MoreVertical } from "lucide-react";
+import { userHasAnyRole } from "@/lib/user-roles";
 import { cn } from "@/lib/utils";
 
 export default function InventoryPage() {
   const {
-    inventory, inventoryCategories, getInventoryByType, getCategoryLabel,
-    updateInventoryItem, addInventoryItem, addInventoryMovement, addInventoryCategory,
+    inventory, inventoryCategories, warehouses, getInventoryByType, getCategoryLabel,
+    updateInventoryItem, addInventoryItem, addInventoryCategory,
     getMovementsByItem, users, currentUser,
+    deleteInventoryItem, transferInventoryCategory, transferInventoryWarehouse,
+    stockOutInventory, stockInInventory, getItemHistory,
   } = useApp();
+
+  const [actionItem, setActionItem] = useState<InventoryItem | null>(null);
+  const [actionMenu, setActionMenu] = useState<string | null>(null);
+  const [modal, setModal] = useState<"edit" | "transfer-cat" | "transfer-wh" | "stock-out" | "stock-in" | "history" | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", barcode: "", purchaseCost: "", minQuantity: "", location: "", description: "" });
+  const [transferCat, setTransferCat] = useState("");
+  const [transferWh, setTransferWh] = useState("");
+  const [stockOutForm, setStockOutForm] = useState({ qty: "", reason: "", notes: "" });
+  const [stockInForm, setStockInForm] = useState({ qty: "", cost: "", supplier: "", notes: "" });
+  const [auditHistory, setAuditHistory] = useState<AuditLogEntry[]>([]);
 
   const [tab, setTab] = useState<string>("ALL");
   const [showAdd, setShowAdd] = useState(false);
@@ -38,7 +51,7 @@ export default function InventoryPage() {
     location: "", description: "",
   });
 
-  const canSeeOwner = currentUser?.role === "OWNER" || currentUser?.role === "ADMIN";
+  const canSeeOwner = currentUser ? userHasAnyRole(currentUser, ["OWNER", "ADMIN"]) : false;
   const visibleCategories = inventoryCategories.filter((c) => c.id !== "OWNER_ASSETS" || canSeeOwner);
 
   const items = tab === "ALL"
@@ -68,15 +81,55 @@ export default function InventoryPage() {
     setNewItem({ name: "", barcode: "", purchaseCost: "", quantity: "", type: visibleCategories[0]?.id ?? "RAW_MATERIALS", location: "", description: "" });
   };
 
-  const handleStockIn = () => {
-    if (!selectedItem || !stockIn.qty) return;
-    addInventoryMovement({
-      itemId: selectedItem.id, quantity: parseInt(stockIn.qty), type: "IN",
-      unitCost: parseFloat(stockIn.cost) || selectedItem.purchaseCost,
-      notes: stockIn.notes || "הוספת מלאי", performedBy: currentUser?.id ?? "system",
+  const openActions = (item: InventoryItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setActionItem(item);
+    setActionMenu(actionMenu === item.id ? null : item.id);
+  };
+
+  const openModal = async (type: typeof modal, item: InventoryItem) => {
+    setActionItem(item);
+    setActionMenu(null);
+    setModal(type);
+    if (type === "edit") {
+      setEditForm({
+        name: item.name,
+        barcode: item.barcode,
+        purchaseCost: String(item.purchaseCost),
+        minQuantity: String(item.minQuantity),
+        location: item.location ?? "",
+        description: item.description ?? "",
+      });
+    }
+    if (type === "history") {
+      const history = await getItemHistory(item.id);
+      setAuditHistory(history);
+    }
+  };
+
+  const handleStockInModal = async () => {
+    if (!actionItem || !stockInForm.qty) return;
+    await stockInInventory({
+      itemId: actionItem.id,
+      quantity: parseInt(stockInForm.qty),
+      unitCost: parseFloat(stockInForm.cost) || actionItem.purchaseCost,
+      supplier: stockInForm.supplier || undefined,
+      notes: stockInForm.notes || undefined,
     });
-    setStockIn({ qty: "", cost: "", notes: "" });
-    setSelectedItem((prev) => prev ? { ...prev, quantity: prev.quantity + parseInt(stockIn.qty) } : null);
+    setModal(null);
+    setStockInForm({ qty: "", cost: "", supplier: "", notes: "" });
+  };
+
+  const handleStockOutModal = async () => {
+    if (!actionItem || !stockOutForm.qty || !stockOutForm.reason) return;
+    await stockOutInventory({
+      itemId: actionItem.id,
+      quantity: parseInt(stockOutForm.qty),
+      reason: stockOutForm.reason,
+      notes: stockOutForm.notes || undefined,
+    });
+    setModal(null);
+    setStockOutForm({ qty: "", reason: "", notes: "" });
   };
 
   const movements = selectedItem
@@ -113,9 +166,42 @@ export default function InventoryPage() {
           const cat = inventoryCategories.find((c) => c.id === item.inventoryType);
           const low = item.quantity <= item.minQuantity;
           return (
-            <Card key={item.id} className={cn("cursor-pointer hover:shadow-md transition-all", low && "border-amber-200")} onClick={() => setSelectedItem(item)}>
+            <Card key={item.id} className={cn("hover:shadow-md transition-all relative", low && "border-amber-200")}>
               <CardContent className="p-4">
-                <div className="flex gap-3">
+                <button type="button" className="absolute left-3 top-3 p-1 rounded hover:bg-slate-100" onClick={(e) => openActions(item, e)}>
+                  <MoreVertical className="h-4 w-4 text-slate-400" />
+                </button>
+                {actionMenu === item.id && (
+                  <div className="absolute left-3 top-10 z-20 bg-white border rounded-xl shadow-lg py-1 text-sm min-w-[10rem]">
+                    {[
+                      ["עריכה", "edit"],
+                      ["קליטת מלאי", "stock-in"],
+                      ["הוצאת מלאי", "stock-out"],
+                      ["העברת קטגוריה", "transfer-cat"],
+                      ["העברת מחסן", "transfer-wh"],
+                      ["היסטוריה", "history"],
+                      ["מחיקה", "delete"],
+                    ].map(([label, key]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={cn("block w-full text-right px-3 py-2 hover:bg-slate-50", key === "delete" && "text-red-600")}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (key === "delete") {
+                            void deleteInventoryItem(item.id);
+                            setActionMenu(null);
+                          } else {
+                            void openModal(key as typeof modal, item);
+                          }
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-3 cursor-pointer" onClick={() => setSelectedItem(item)}>
                   <div className="h-16 w-16 rounded-lg bg-slate-100 flex items-center justify-center shrink-0 overflow-hidden">
                     {item.imageUrl ? <img src={item.imageUrl} alt="" className="h-full w-full object-cover" /> : <Package className="h-6 w-6 text-slate-300" />}
                   </div>
@@ -187,13 +273,22 @@ export default function InventoryPage() {
             </div>
 
             <div className="p-3 rounded-xl bg-slate-50 border">
-              <p className="text-sm font-medium mb-2">הוספת מלאי (מחיר רכישה משתנה)</p>
+              <p className="text-sm font-medium mb-2">קליטת מלאי מהירה</p>
               <div className="grid grid-cols-3 gap-2">
                 <Input type="number" placeholder="כמות" value={stockIn.qty} onChange={(e) => setStockIn({ ...stockIn, qty: e.target.value })} />
                 <Input type="number" placeholder="מחיר יחידה ₪" value={stockIn.cost} onChange={(e) => setStockIn({ ...stockIn, cost: e.target.value })} />
                 <Input placeholder="הערות" value={stockIn.notes} onChange={(e) => setStockIn({ ...stockIn, notes: e.target.value })} />
               </div>
-              <Button size="sm" className="mt-2" onClick={handleStockIn}>רישום כניסה</Button>
+              <Button size="sm" className="mt-2" onClick={() => {
+                if (!selectedItem || !stockIn.qty) return;
+                void stockInInventory({
+                  itemId: selectedItem.id,
+                  quantity: parseInt(stockIn.qty),
+                  unitCost: parseFloat(stockIn.cost) || selectedItem.purchaseCost,
+                  notes: stockIn.notes || "הוספת מלאי",
+                });
+                setStockIn({ qty: "", cost: "", notes: "" });
+              }}>רישום כניסה</Button>
             </div>
 
             <div>
@@ -223,6 +318,93 @@ export default function InventoryPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal open={modal === "edit"} onClose={() => setModal(null)} title="עריכת פריט">
+        <div className="space-y-3">
+          <div><Label>שם</Label><Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></div>
+          <div><Label>ברקוד</Label><Input value={editForm.barcode} onChange={(e) => setEditForm({ ...editForm, barcode: e.target.value })} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><Label>עלות</Label><Input type="number" value={editForm.purchaseCost} onChange={(e) => setEditForm({ ...editForm, purchaseCost: e.target.value })} /></div>
+            <div><Label>מינימום</Label><Input type="number" value={editForm.minQuantity} onChange={(e) => setEditForm({ ...editForm, minQuantity: e.target.value })} /></div>
+          </div>
+          <div><Label>מיקום</Label><Input value={editForm.location} onChange={(e) => setEditForm({ ...editForm, location: e.target.value })} /></div>
+          <div><Label>תיאור</Label><Input value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} /></div>
+          <Button className="w-full" onClick={() => {
+            if (!actionItem) return;
+            void updateInventoryItem(actionItem.id, {
+              name: editForm.name,
+              barcode: editForm.barcode,
+              purchaseCost: parseFloat(editForm.purchaseCost) || 0,
+              minQuantity: parseInt(editForm.minQuantity) || 0,
+              location: editForm.location || null,
+              description: editForm.description || null,
+            }).then(() => setModal(null));
+          }}>שמירה</Button>
+        </div>
+      </Modal>
+
+      <Modal open={modal === "transfer-cat"} onClose={() => setModal(null)} title="העברת קטגוריה">
+        <div className="space-y-3">
+          <Select value={transferCat} onChange={(e) => setTransferCat(e.target.value)}>
+            <option value="">בחר קטגוריה</option>
+            {inventoryCategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </Select>
+          <Button className="w-full" disabled={!transferCat || !actionItem} onClick={() => {
+            if (!actionItem || !transferCat) return;
+            void transferInventoryCategory(actionItem.id, transferCat).then(() => setModal(null));
+          }}>העברה</Button>
+        </div>
+      </Modal>
+
+      <Modal open={modal === "transfer-wh"} onClose={() => setModal(null)} title="העברת מחסן">
+        <div className="space-y-3">
+          <Select value={transferWh} onChange={(e) => setTransferWh(e.target.value)}>
+            <option value="">בחר מחסן</option>
+            {warehouses.map((w) => <option key={w.id} value={w.name}>{w.name}</option>)}
+          </Select>
+          <Button className="w-full" disabled={!transferWh || !actionItem} onClick={() => {
+            if (!actionItem || !transferWh) return;
+            void transferInventoryWarehouse(actionItem.id, transferWh).then(() => setModal(null));
+          }}>העברה</Button>
+        </div>
+      </Modal>
+
+      <Modal open={modal === "stock-out"} onClose={() => setModal(null)} title="הוצאת מלאי">
+        <div className="space-y-3">
+          <Input type="number" placeholder="כמות" value={stockOutForm.qty} onChange={(e) => setStockOutForm({ ...stockOutForm, qty: e.target.value })} />
+          <Input placeholder="סיבה" value={stockOutForm.reason} onChange={(e) => setStockOutForm({ ...stockOutForm, reason: e.target.value })} />
+          <Input placeholder="הערות" value={stockOutForm.notes} onChange={(e) => setStockOutForm({ ...stockOutForm, notes: e.target.value })} />
+          <Button className="w-full" onClick={() => void handleStockOutModal()}>רישום הוצאה</Button>
+        </div>
+      </Modal>
+
+      <Modal open={modal === "stock-in"} onClose={() => setModal(null)} title="קליטת מלאי">
+        <div className="space-y-3">
+          <Input type="number" placeholder="כמות" value={stockInForm.qty} onChange={(e) => setStockInForm({ ...stockInForm, qty: e.target.value })} />
+          <Input type="number" placeholder="מחיר יחידה" value={stockInForm.cost} onChange={(e) => setStockInForm({ ...stockInForm, cost: e.target.value })} />
+          <Input placeholder="ספק" value={stockInForm.supplier} onChange={(e) => setStockInForm({ ...stockInForm, supplier: e.target.value })} />
+          <Input placeholder="הערות" value={stockInForm.notes} onChange={(e) => setStockInForm({ ...stockInForm, notes: e.target.value })} />
+          <Button className="w-full" onClick={() => void handleStockInModal()}>רישום קליטה</Button>
+        </div>
+      </Modal>
+
+      <Modal open={modal === "history"} onClose={() => setModal(null)} title="היסטוריית מוצר" className="max-w-2xl">
+        <div className="space-y-2 max-h-96 overflow-y-auto">
+          {auditHistory.map((entry) => (
+            <div key={entry.id} className="p-2 rounded-lg bg-slate-50 text-sm flex justify-between">
+              <div>
+                <p className="font-medium">{entry.action}</p>
+                {entry.details && <p className="text-xs text-slate-400">{JSON.stringify(entry.details)}</p>}
+              </div>
+              <div className="text-left text-xs text-slate-400">
+                <p>{formatDateTime(entry.createdAt)}</p>
+                <p>{entry.userName}</p>
+              </div>
+            </div>
+          ))}
+          {auditHistory.length === 0 && <p className="text-center text-slate-400 py-6">אין היסטוריה</p>}
+        </div>
       </Modal>
     </>
   );

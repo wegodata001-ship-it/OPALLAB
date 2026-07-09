@@ -47,7 +47,7 @@ export default function WorkflowPage() {
       <Header
         title="מעקב ייצור"
         description={
-          isPrivilegedRole(currentUser.role)
+          isPrivilegedRole(currentUser)
             ? "סמן ✓ בסיום כל שלב — ניהול מלא"
             : "ניתן לסמן ולבטל רק את השלבים השייכים לתפקידך"
         }

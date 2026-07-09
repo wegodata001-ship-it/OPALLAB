@@ -86,6 +86,8 @@ export interface User {
   name: string;
   phone?: string | null;
   role: UserRole;
+  roles: UserRole[];
+  authUserId?: string | null;
   nfcTagId?: string | null;
   address?: string | null;
   salary?: number | null;
@@ -110,6 +112,31 @@ export interface Doctor {
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface CreateDoctorInput {
+  name: string;
+  clinic?: string | null;
+  phone?: string | null;
+  email: string;
+  address?: string | null;
+  notes?: string | null;
+  username: string;
+  password: string;
+  confirmPassword?: string;
+}
+
+export interface UpdateDoctorInput {
+  name?: string;
+  clinic?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  notes?: string | null;
+  isActive?: boolean;
+  username?: string;
+  password?: string;
+  userIsActive?: boolean;
 }
 
 export interface Courier {
@@ -196,12 +223,38 @@ export interface InventoryMovement {
   id: string;
   itemId: string;
   quantity: number;
-  type: "IN" | "OUT" | "ADJUSTMENT";
+  type: "IN" | "OUT" | "ADJUSTMENT" | "TRANSFER" | "CATEGORY_CHANGE" | "EDIT" | "DELETE";
   unitCost: number;
   notes?: string | null;
   orderRef?: string | null;
+  reason?: string | null;
+  supplier?: string | null;
+  fromCategory?: string | null;
+  toCategory?: string | null;
+  fromLocation?: string | null;
+  toLocation?: string | null;
   performedBy: string;
   createdAt: Date;
+}
+
+export interface Warehouse {
+  id: string;
+  name: string;
+  description?: string | null;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  userId: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  details?: Record<string, unknown> | null;
+  createdAt: Date;
+  userName?: string;
 }
 
 export interface Shipment {

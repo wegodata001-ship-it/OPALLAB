@@ -32,7 +32,13 @@ function reviveValue(key: string, value: unknown): unknown {
     }
     return stages;
   }
-  if (Array.isArray(value)) return value.map((item) => reviveItem(item));
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      item !== null && typeof item === "object"
+        ? reviveItem(item as Record<string, unknown>)
+        : item,
+    );
+  }
   if (typeof value === "object") return reviveItem(value as Record<string, unknown>);
   return value;
 }

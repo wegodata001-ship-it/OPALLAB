@@ -55,7 +55,7 @@ export default function MyWorkPage() {
   }, 0);
 
   const isActive = currentUser ? getActiveAttendance().some((a) => a.userId === currentUser.id) : false;
-  const myStages = currentUser ? getStagesForRole(currentUser.role) : [];
+  const myStages = currentUser ? getStagesForRole(currentUser) : [];
 
   const workReports = useMemo(() => {
     if (!currentUser) return [];

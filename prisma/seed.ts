@@ -21,6 +21,7 @@ async function main() {
       name: "מנהל מערכת",
       phone: "0507890123",
       role: "ADMIN",
+      roles: ["ADMIN"],
       nfcTagId: "NFC-ADMIN",
       address: "סחנין",
       color: "#64748b",
@@ -58,7 +59,21 @@ async function main() {
     });
   }
 
-  console.log(`Bootstrap complete. Admin user: ${admin.username}`);
+  const warehouses = [
+    { name: "מחסן ראשי", description: "מחסן מרכזי" },
+    { name: "חדר הדפסה", description: "מלאי הדפסה 3D" },
+    { name: "מחסן CAD", description: "עיצוב ו-CAD" },
+  ];
+
+  for (const warehouse of warehouses) {
+    await prisma.warehouse.upsert({
+      where: { name: warehouse.name },
+      update: warehouse,
+      create: warehouse,
+    });
+  }
+
+  await prisma.$executeRawUnsafe(`UPDATE "User" SET roles = ARRAY[role]::"UserRole"[] WHERE cardinality(roles) = 0`);
 }
 
 main()

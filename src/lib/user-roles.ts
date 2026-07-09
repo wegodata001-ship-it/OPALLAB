@@ -1,0 +1,79 @@
+import type { Doctor, User, UserRole } from "@/lib/types";
+
+const ROLE_PRIORITY: UserRole[] = [
+  "OWNER",
+  "ADMIN",
+  "SECRETARY",
+  "DESIGNER",
+  "PRINTER",
+  "MILLING",
+  "PROCESSING",
+  "FINISH",
+  "PACKAGING",
+  "DOCTOR",
+];
+
+export function getUserRoles(user: Pick<User, "role" | "roles">): UserRole[] {
+  if (user.roles?.length) return [...new Set(user.roles)];
+  return [user.role];
+}
+
+export function primaryRole(roles: UserRole[]): UserRole {
+  for (const role of ROLE_PRIORITY) {
+    if (roles.includes(role)) return role;
+  }
+  return roles[0] ?? "DESIGNER";
+}
+
+export function userHasRole(user: Pick<User, "role" | "roles">, role: UserRole): boolean {
+  return getUserRoles(user).includes(role);
+}
+
+export function userHasAnyRole(user: Pick<User, "role" | "roles">, roles: UserRole[]): boolean {
+  const userRoles = getUserRoles(user);
+  return roles.some((role) => userRoles.includes(role));
+}
+
+export function normalizeUserRoles(roles: UserRole[]): UserRole[] {
+  const unique = [...new Set(roles.filter(Boolean))];
+  if (!unique.length) throw new Error("נדרש לפחות תפקיד אחד");
+  return unique;
+}
+
+export const EMPLOYEE_ROLES: UserRole[] = [
+  "SECRETARY",
+  "DESIGNER",
+  "PRINTER",
+  "MILLING",
+  "PROCESSING",
+  "FINISH",
+  "PACKAGING",
+];
+
+export const PRODUCTION_ROLES: UserRole[] = [
+  "DESIGNER",
+  "PRINTER",
+  "MILLING",
+  "PROCESSING",
+  "FINISH",
+  "PACKAGING",
+];
+
+export function isLabEmployee(user: Pick<User, "role" | "roles">): boolean {
+  return userHasAnyRole(user, [...EMPLOYEE_ROLES, "ADMIN", "OWNER"]);
+}
+
+export function isDoctorUser(user: Pick<User, "role" | "roles">): boolean {
+  return userHasRole(user, "DOCTOR");
+}
+
+export function isSystemAdminUser(user: Pick<User, "role" | "roles">): boolean {
+  return userHasAnyRole(user, ["ADMIN", "OWNER", "SECRETARY"]);
+}
+
+export function getDoctorIdForUser(
+  user: Pick<User, "id" | "role" | "roles">,
+  doctors: Pick<Doctor, "id" | "userId">[],
+): string | undefined {
+  return doctors.find((d) => d.userId === user.id)?.id;
+}
