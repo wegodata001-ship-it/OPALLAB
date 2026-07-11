@@ -12,7 +12,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(path, { credentials: "include" });
+  const response = await fetch(path, { credentials: "include", cache: "no-store" });
   return parseResponse<T>(response);
 }
 

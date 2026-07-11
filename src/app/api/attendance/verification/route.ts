@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireSessionUserId } from "@/lib/auth/session";
-import { buildAttendancePhotoPath } from "@/lib/attendance/attendance-storage";
+import { buildAttendancePhotoPath } from "@/lib/attendance/verification/storage";
 import { uploadFile } from "@/lib/supabase/storage";
 import { STORAGE_BUCKETS } from "@/lib/supabase/admin";
 import { AppError } from "@/lib/errors/app-error";
@@ -25,8 +25,11 @@ export async function POST(req: Request) {
 
     const bytes = Buffer.from(await file.arrayBuffer());
     const createdAt = new Date();
-    const storagePath = buildAttendancePhotoPath(userId, kind as "check-in" | "check-out", createdAt);
-    const fileName = storagePath.split("/").pop() || `${kind}.jpg`;
+    const { storagePath, fileName } = buildAttendancePhotoPath(
+      userId,
+      kind as "check-in" | "check-out",
+      createdAt,
+    );
 
     await uploadFile(STORAGE_BUCKETS.USERS, storagePath, bytes, file.type || "image/jpeg");
     const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKETS.USERS}/${storagePath}`;

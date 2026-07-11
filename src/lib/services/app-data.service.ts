@@ -1,4 +1,6 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { $Enums } from "@prisma/client";
 import { AppError } from "@/lib/errors/app-error";
 import {
   hashPassword,
@@ -51,11 +53,19 @@ import {
   uploadFile,
 } from "@/lib/supabase/storage";
 import { defaultLabSettings } from "@/lib/constants/lab-settings";
-import { filterSnapshotForUser } from "@/lib/access-control";
+import { filterSnapshotForUser, buildOrderWhereForUser } from "@/lib/access-control";
 import { writeAuditLog } from "@/lib/audit-log";
 import { createAuthUser, updateAuthUser } from "@/lib/supabase/auth-admin";
 import { normalizeUserRoles, primaryRole } from "@/lib/user-roles";
 import type { AuditLogEntry, Warehouse } from "@/lib/types";
+
+function toPrismaAttendanceMethod(method: AttendanceMethod): $Enums.AttendanceMethod {
+  const map = $Enums.AttendanceMethod;
+  if (method in map) {
+    return map[method as keyof typeof map];
+  }
+  return map.NFC;
+}
 
 const STAGE_NEXT: Partial<Record<OrderStatus, OrderStatus>> = {
   DESIGN: "PRINTING_3D",
@@ -98,7 +108,13 @@ export class AppDataService {
     return user ? mapUser(user) : null;
   }
 
-  async getSnapshot(): Promise<AppDataSnapshot> {
+  async getSnapshot(orderWhere?: Prisma.OrderWhereInput): Promise<AppDataSnapshot> {
+    const ordersQuery = prisma.order.findMany({
+      ...(orderWhere ? { where: orderWhere } : {}),
+      include: ORDER_INCLUDE,
+      orderBy: { createdAt: "desc" },
+    });
+
     const [
       users,
       doctors,
@@ -117,7 +133,7 @@ export class AppDataService {
       prisma.doctor.findMany({ orderBy: { name: "asc" } }),
       prisma.courier.findMany({ orderBy: { name: "asc" } }),
       prisma.payment.findMany({ orderBy: { createdAt: "desc" } }),
-      prisma.order.findMany({ include: ORDER_INCLUDE, orderBy: { createdAt: "desc" } }),
+      ordersQuery,
       prisma.inventoryItem.findMany({ orderBy: { name: "asc" } }),
       prisma.inventoryCategory.findMany({ orderBy: { name: "asc" } }),
       prisma.inventoryMovement.findMany({ orderBy: { createdAt: "desc" } }),
@@ -147,7 +163,10 @@ export class AppDataService {
   async getSnapshotForUser(userId: string): Promise<AppDataSnapshot> {
     const user = await this.getUserById(userId);
     if (!user) throw new AppError("UNAUTHORIZED", "משתמש לא נמצא", 401);
-    const snapshot = await this.getSnapshot();
+
+    const doctors = await prisma.doctor.findMany({ orderBy: { name: "asc" } });
+    const orderWhere = buildOrderWhereForUser(user, doctors.map(mapDoctor));
+    const snapshot = await this.getSnapshot(orderWhere ?? undefined);
     return filterSnapshotForUser(snapshot, user);
   }
 
@@ -1135,38 +1154,73 @@ export class AppDataService {
     );
   }
 
+  async getOpenAttendanceRecord(userId: string) {
+    return prisma.attendanceRecord.findFirst({
+      where: { userId, checkOut: null },
+      orderBy: { checkIn: "desc" },
+    });
+  }
+
   async checkIn(
     userId: string,
     method: AttendanceMethod = "NFC",
     meta?: import("@/lib/types").AttendanceCheckInMeta,
   ): Promise<void> {
-    const { reverseGeocode } = await import("@/lib/geocode");
+    const openRecord = await this.getOpenAttendanceRecord(userId);
+    if (openRecord) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Employee already has an active attendance record.",
+        409,
+      );
+    }
+
+    const { reverseGeocodeDetailed } = await import("@/lib/geocode");
     const user = await prisma.user.findUnique({ where: { id: userId } });
     const now = new Date();
 
-    let checkInAddress: string | null = null;
+    let geo = {
+      formatted: null as string | null,
+      country: null as string | null,
+      city: null as string | null,
+      street: null as string | null,
+      houseNumber: null as string | null,
+    };
+
     if (meta?.latitude != null && meta?.longitude != null) {
-      checkInAddress = meta.address ?? (await reverseGeocode(meta.latitude, meta.longitude));
-    } else if (meta !== undefined) {
-      checkInAddress = "מיקום לא התקבל";
+      geo = await reverseGeocodeDetailed(meta.latitude, meta.longitude);
     }
+
+    const device = meta?.device;
 
     await prisma.attendanceRecord.create({
       data: {
         userId,
         checkIn: now,
-        method,
+        method: toPrismaAttendanceMethod(method),
         nfcTagId: user?.nfcTagId ?? null,
         latitude: meta?.latitude ?? null,
         longitude: meta?.longitude ?? null,
         checkInLatitude: meta?.latitude ?? null,
         checkInLongitude: meta?.longitude ?? null,
         checkInAccuracy: meta?.accuracy ?? null,
-        checkInAddress,
+        checkInAddress: geo.formatted,
+        checkInAddressCountry: geo.country,
+        checkInAddressCity: geo.city,
+        checkInAddressStreet: geo.street,
+        checkInAddressHouseNumber: geo.houseNumber,
         checkInPhotoUrl: meta?.photoUrl ?? null,
         checkInPhotoPath: meta?.photoPath ?? null,
-        deviceInfo: meta?.deviceInfo ?? null,
-        notes: [meta?.wifiSsid ? `WiFi: ${meta.wifiSsid}` : null, meta?.fileName ? `Фото: ${meta.fileName}` : null].filter(Boolean).join(" | ") || null,
+        checkInDeviceBrowser: device?.browser ?? null,
+        checkInDeviceOs: device?.os ?? null,
+        checkInDeviceType: device?.deviceType ?? null,
+        checkInUserAgent: device?.userAgent ?? null,
+        checkInScreenSize: device?.screenSize ?? null,
+        checkInTimezone: device?.timezone ?? null,
+        deviceInfo: device
+          ? `${device.browser} · ${device.os} · ${device.deviceType}`
+          : meta?.deviceInfo ?? null,
+        notes: meta?.fileName ? `תמונה: ${meta.fileName}` : null,
       },
     });
   }
@@ -1176,36 +1230,66 @@ export class AppDataService {
     method: AttendanceMethod = "NFC",
     meta?: import("@/lib/types").AttendanceLocationMeta,
   ): Promise<void> {
-    const { reverseGeocode } = await import("@/lib/geocode");
+    const { reverseGeocodeDetailed } = await import("@/lib/geocode");
     const now = new Date();
-    const active = await prisma.attendanceRecord.findFirst({
+    const openRecords = await prisma.attendanceRecord.findMany({
       where: { userId, checkOut: null },
       orderBy: { checkIn: "desc" },
     });
-    if (!active) return;
-
-    let checkOutAddress: string | null = null;
-    if (meta?.latitude != null && meta?.longitude != null) {
-      checkOutAddress = meta.address ?? (await reverseGeocode(meta.latitude, meta.longitude));
-    } else if (meta !== undefined) {
-      checkOutAddress = "מיקום לא התקבל";
+    if (!openRecords.length) {
+      throw new AppError("NOT_FOUND", "אין רישום כניסה פתוח.", 404);
     }
+
+    const [active, ...legacyOpenRecords] = openRecords;
+
+    let geo = {
+      formatted: null as string | null,
+      country: null as string | null,
+      city: null as string | null,
+      street: null as string | null,
+      houseNumber: null as string | null,
+    };
+
+    if (meta?.latitude != null && meta?.longitude != null) {
+      geo = await reverseGeocodeDetailed(meta.latitude, meta.longitude);
+    }
+
+    const device = meta?.device;
 
     await prisma.attendanceRecord.update({
       where: { id: active.id },
       data: {
         checkOut: now,
-        method,
+        method: toPrismaAttendanceMethod(method),
         checkOutLatitude: meta?.latitude ?? null,
         checkOutLongitude: meta?.longitude ?? null,
         checkOutAccuracy: meta?.accuracy ?? null,
-        checkOutAddress,
+        checkOutAddress: geo.formatted,
+        checkOutAddressCountry: geo.country,
+        checkOutAddressCity: geo.city,
+        checkOutAddressStreet: geo.street,
+        checkOutAddressHouseNumber: geo.houseNumber,
         checkOutPhotoUrl: meta?.photoUrl ?? null,
         checkOutPhotoPath: meta?.photoPath ?? null,
-        deviceInfo: meta?.deviceInfo ?? active.deviceInfo,
-        notes: active.notes ?? (meta?.fileName ? `Фото: ${meta.fileName}` : null),
+        checkOutDeviceBrowser: device?.browser ?? null,
+        checkOutDeviceOs: device?.os ?? null,
+        checkOutDeviceType: device?.deviceType ?? null,
+        checkOutUserAgent: device?.userAgent ?? null,
+        checkOutScreenSize: device?.screenSize ?? null,
+        checkOutTimezone: device?.timezone ?? null,
+        deviceInfo: device
+          ? `${device.browser} · ${device.os} · ${device.deviceType}`
+          : active.deviceInfo,
+        notes: active.notes ?? (meta?.fileName ? `תמונה: ${meta.fileName}` : null),
       },
     });
+
+    if (legacyOpenRecords.length > 0) {
+      await prisma.attendanceRecord.updateMany({
+        where: { id: { in: legacyOpenRecords.map((r) => r.id) } },
+        data: { checkOut: now },
+      });
+    }
   }
 
   async updateAttendance(

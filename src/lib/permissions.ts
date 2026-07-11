@@ -16,7 +16,9 @@ export type AppModule =
   | "attendance"
   | "portal"
   | "settings"
-  | "my-work";
+  | "my-work"
+  | "my-attendance"
+  | "attendance-management";
 
 const ADMIN_MODULES: AppModule[] = [
   "dashboard",
@@ -26,8 +28,10 @@ const ADMIN_MODULES: AppModule[] = [
   "accounts",
   "shipping",
   "attendance",
+  "attendance-management",
   "settings",
   "my-work",
+  "my-attendance",
 ];
 
 const LAB_EMPLOYEE_MODULES: AppModule[] = [
@@ -35,12 +39,13 @@ const LAB_EMPLOYEE_MODULES: AppModule[] = [
   "orders",
   "workflow",
   "my-work",
+  "my-attendance",
 ];
 
 const ROLE_MODULES: Record<UserRole, AppModule[]> = {
   ADMIN: ADMIN_MODULES,
-  OWNER: ADMIN_MODULES,
-  SECRETARY: ADMIN_MODULES,
+  OWNER: ADMIN_MODULES.filter((m) => m !== "attendance-management"),
+  SECRETARY: ADMIN_MODULES.filter((m) => m !== "attendance-management"),
   DESIGNER: LAB_EMPLOYEE_MODULES,
   PRINTER: LAB_EMPLOYEE_MODULES,
   MILLING: LAB_EMPLOYEE_MODULES,

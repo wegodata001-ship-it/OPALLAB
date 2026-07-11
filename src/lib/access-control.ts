@@ -1,8 +1,39 @@
+import type { Prisma } from "@prisma/client";
 import type { AppDataSnapshot } from "@/lib/services/app-data.service";
-import type { User } from "@/lib/types";
+import type { Doctor, User } from "@/lib/types";
 import { canAccessModule, canViewAllOrders, isDoctorPortalUser } from "@/lib/permissions";
-import { filterOrdersForProductionUser } from "@/lib/workflow-permissions";
+import { getStagesForRole } from "@/lib/workflow-permissions";
 import { getDoctorIdForUser, isSystemAdminUser } from "@/lib/user-roles";
+
+/**
+ * Prisma filter for orders visible to a user.
+ * - Admin / secretary: null (no filter — all orders)
+ * - Doctor portal: orders for linked doctor
+ * - Production employee: orders whose current stage (status) matches any of the user's roles
+ *
+ * Never filters by assignedDesignerId / processingEmployeeId / finishEmployeeId.
+ */
+export function buildOrderWhereForUser(
+  user: User,
+  doctors: Pick<Doctor, "id" | "userId">[],
+): Prisma.OrderWhereInput | null {
+  if (isDoctorPortalUser(user)) {
+    const doctorId = getDoctorIdForUser(user, doctors);
+    if (!doctorId) return { id: { in: [] } };
+    return { doctorId };
+  }
+
+  if (isSystemAdminUser(user)) {
+    return null;
+  }
+
+  const stages = getStagesForRole(user);
+  if (!stages.length) {
+    return { id: { in: [] } };
+  }
+
+  return { status: { in: stages } };
+}
 
 export function filterSnapshotForUser(snapshot: AppDataSnapshot, user: User): AppDataSnapshot {
   if (isDoctorPortalUser(user)) {
@@ -60,7 +91,6 @@ export function filterSnapshotForUser(snapshot: AppDataSnapshot, user: User): Ap
   }
 
   if (!isSystemAdminUser(user) && !isDoctorPortalUser(user)) {
-    filtered.orders = filterOrdersForProductionUser(user, snapshot.orders);
     const visibleOrderIds = new Set(filtered.orders.map((o) => o.id));
     filtered.shipments = snapshot.shipments.filter((s) => visibleOrderIds.has(s.orderId));
   } else if (!canViewAllOrders(user)) {

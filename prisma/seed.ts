@@ -1,13 +1,6 @@
 import { prisma } from "../src/lib/prisma";
 import bcrypt from "bcryptjs";
 
-const defaultLabSettings = {
-  allowedWifiSsids: ["OPAL-LAB", "OPAL_WIFI"],
-  wifiAttendanceEnabled: true,
-  requireGeofence: true,
-  attendanceCode: "opal1234",
-};
-
 async function main() {
   const passwordHash = await bcrypt.hash("1234", 12);
 
@@ -44,20 +37,11 @@ async function main() {
     });
   }
 
-  const labEntries = [
-    { key: "allowedWifiSsids", value: JSON.stringify(defaultLabSettings.allowedWifiSsids) },
-    { key: "wifiAttendanceEnabled", value: String(defaultLabSettings.wifiAttendanceEnabled) },
-    { key: "requireGeofence", value: String(defaultLabSettings.requireGeofence) },
-    { key: "attendanceCode", value: defaultLabSettings.attendanceCode },
-  ];
-
-  for (const entry of labEntries) {
-    await prisma.labSettings.upsert({
-      where: { key: entry.key },
-      update: { value: entry.value },
-      create: entry,
-    });
-  }
+  await prisma.labSettings.deleteMany({
+    where: {
+      key: { in: ["allowedWifiSsids", "wifiAttendanceEnabled", "requireGeofence", "attendanceCode"] },
+    },
+  });
 
   const warehouses = [
     { name: "מחסן ראשי", description: "מחסן מרכזי" },

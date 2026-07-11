@@ -25,7 +25,7 @@ export function AttendanceLocationDisplay({
   return (
     <div className="text-sm space-y-0.5">
       <p className="font-medium text-slate-800">
-        {label}: {formatTime(time)}
+        {label ? `${label}: ` : ""}{formatTime(time)}
       </p>
       <p className="text-slate-600 flex items-start gap-1.5">
         <MapPin className="h-3.5 w-3.5 shrink-0 mt-0.5" />

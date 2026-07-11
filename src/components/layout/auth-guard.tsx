@@ -17,6 +17,8 @@ const PATH_MODULE: Record<string, AppModule> = {
   "/portal": "portal",
   "/settings": "settings",
   "/my-work": "my-work",
+  "/my-attendance": "my-attendance",
+  "/attendance-management": "attendance-management",
 };
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {

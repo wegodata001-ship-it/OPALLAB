@@ -12,6 +12,7 @@ import { StatusBadge } from "@/components/orders/status-badge";
 import { ExportActions } from "@/components/shared/export-actions";
 import { useApp } from "@/providers/AppProvider";
 import { LAB_INFO, MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS, ORDER_STATUS_LABELS } from "@/lib/constants/labels";
+import { getStagesForRole, isPrivilegedRole } from "@/lib/workflow-permissions";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { MaterialType, WorkType, Gender, OrderStatus, DateRange } from "@/lib/types";
 import { Search, Plus, Upload, List, UserPlus } from "lucide-react";
@@ -22,11 +23,10 @@ import { cn } from "@/lib/utils";
 function OrdersContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const tab = searchParams.get("tab") === "new" ? "new" : "list";
-  const savedSerial = searchParams.get("saved");
+  const tabParam = searchParams.get("tab") === "new" ? "new" : "list";
   const setTab = (t: "list" | "new") => router.push(t === "new" ? "/orders?tab=new" : "/orders");
 
-  const { orders, doctors, createOrder, addOrderFile } = useApp();
+  const { orders, doctors, createOrder, addOrderFile, currentUser } = useApp();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<OrderStatus | "ALL">("ALL");
   const [uploadOrderId, setUploadOrderId] = useState("");
@@ -45,6 +45,13 @@ function OrdersContent() {
   const [description, setDescription] = useState("");
   const [completionDate, setCompletionDate] = useState("");
   const [totalPrice, setTotalPrice] = useState("");
+
+  const isAdmin = currentUser ? isPrivilegedRole(currentUser) : false;
+  const tab = !isAdmin && tabParam === "new" ? "list" : tabParam;
+  const savedSerial = searchParams.get("saved");
+  const employeeStageLabels = currentUser && !isAdmin
+    ? getStagesForRole(currentUser).map((s) => ORDER_STATUS_LABELS[s]).join(" · ")
+    : "";
 
   const filtered = orders.filter((o) => {
     const matchSearch = !search || o.serialNumber.includes(search) || o.doctor.name.includes(search) || o.patient.name.includes(search);
@@ -103,7 +110,13 @@ function OrdersContent() {
     <>
       <Header
         title="הזמנות"
-        description="ניהול הזמנות, קליטה חדשה ושיוך קבצים"
+        description={
+          isAdmin
+            ? "ניהול הזמנות, קליטה חדשה ושיוך קבצים"
+            : employeeStageLabels
+              ? `הזמנות בשלבי הייצור שלך: ${employeeStageLabels}`
+              : "הזמנות לפי שלבי הייצור המותרים לתפקידך"
+        }
         actions={
           <ExportActions
             title="הזמנות OPAL LAB"
@@ -117,9 +130,11 @@ function OrdersContent() {
         <button onClick={() => setTab("list")} className={cn("flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all", tab === "list" ? "bg-white shadow text-slate-900" : "text-slate-500")}>
           <List className="h-4 w-4" /> רשימה
         </button>
-        <button onClick={() => setTab("new")} className={cn("flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all", tab === "new" ? "bg-white shadow text-opal-gold-dark" : "text-slate-500")}>
-          <Plus className="h-4 w-4" /> הזמנה חדשה
-        </button>
+        {isAdmin && (
+          <button onClick={() => setTab("new")} className={cn("flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all", tab === "new" ? "bg-white shadow text-opal-gold-dark" : "text-slate-500")}>
+            <Plus className="h-4 w-4" /> הזמנה חדשה
+          </button>
+        )}
       </div>
 
       {tab === "list" ? (

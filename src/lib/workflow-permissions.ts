@@ -26,7 +26,7 @@ export function getStagesForRole(user: Pick<User, "role" | "roles">): OrderStatu
   return stages;
 }
 
-/** סינון הזמנות לעובדי ייצור — רק שלב נוכחי תואם להרשאות */
+/** @deprecated Prefer Prisma filter via buildOrderWhereForUser — kept for tests/utilities */
 export function filterOrdersForProductionUser<T extends Order>(user: User, orders: T[]): T[] {
   if (isPrivilegedRole(user)) return orders;
   const myStages = getStagesForRole(user);

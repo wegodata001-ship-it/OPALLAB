@@ -2,22 +2,35 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
-  pool: Pool | undefined;
+/** Bump when Prisma schema enums change — invalidates cached dev client. */
+const PRISMA_SCHEMA_GENERATION = 2;
+
+type PrismaGlobal = {
+  prisma?: PrismaClient;
+  pool?: Pool;
+  schemaGeneration?: number;
 };
 
-function createPrismaClient(): PrismaClient {
+const globalStore = globalThis as typeof globalThis & { __opalPrisma?: PrismaGlobal };
+
+function getStore(): PrismaGlobal {
+  if (!globalStore.__opalPrisma) {
+    globalStore.__opalPrisma = {};
+  }
+  return globalStore.__opalPrisma;
+}
+
+function createPrismaClient(store: PrismaGlobal): PrismaClient {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
     throw new Error("DATABASE_URL is not configured");
   }
 
-  const pool = globalForPrisma.pool ?? new Pool({ connectionString });
+  const pool = store.pool ?? new Pool({ connectionString });
   const adapter = new PrismaPg(pool);
 
   if (process.env.NODE_ENV !== "production") {
-    globalForPrisma.pool = pool;
+    store.pool = pool;
   }
 
   return new PrismaClient({
@@ -26,8 +39,23 @@ function createPrismaClient(): PrismaClient {
   });
 }
 
-export const prisma = globalForPrisma.prisma ?? createPrismaClient();
+function getPrismaClient(): PrismaClient {
+  const store = getStore();
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
+  if (process.env.NODE_ENV !== "production") {
+    if (store.schemaGeneration !== PRISMA_SCHEMA_GENERATION && store.prisma) {
+      void store.prisma.$disconnect();
+      store.prisma = undefined;
+      store.pool = undefined;
+    }
+    store.schemaGeneration = PRISMA_SCHEMA_GENERATION;
+  }
+
+  if (!store.prisma) {
+    store.prisma = createPrismaClient(store);
+  }
+
+  return store.prisma;
 }
+
+export const prisma = getPrismaClient();

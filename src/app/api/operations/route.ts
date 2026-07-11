@@ -1,11 +1,12 @@
 import { requireSessionUserId } from "@/lib/auth/session";
 import { appDataService } from "@/lib/services/app-data.service";
 import { jsonError, jsonOk, parseJsonBody } from "@/lib/api/response";
+import { AppError } from "@/lib/errors/app-error";
 import type { AttendanceMethod, AttendanceRecord, AttendanceCheckInMeta, AttendanceLocationMeta, LabSettings } from "@/lib/types";
 
 export async function POST(request: Request) {
   try {
-    await requireSessionUserId();
+    const sessionUserId = await requireSessionUserId();
     const body = await parseJsonBody<
       | { action: "check-in"; userId: string; method?: AttendanceMethod; meta?: AttendanceCheckInMeta }
       | { action: "check-out"; userId: string; method?: AttendanceMethod; meta?: AttendanceLocationMeta }
@@ -14,10 +15,16 @@ export async function POST(request: Request) {
     >(request);
 
     if (body.action === "check-in") {
+      if (body.userId !== sessionUserId) {
+        throw new AppError("FORBIDDEN", "אין הרשאה לרשום נוכחות עבור משתמש אחר", 403);
+      }
       await appDataService.checkIn(body.userId, body.method, body.meta);
       return jsonOk({ ok: true });
     }
     if (body.action === "check-out") {
+      if (body.userId !== sessionUserId) {
+        throw new AppError("FORBIDDEN", "אין הרשאה לרשום נוכחות עבור משתמש אחר", 403);
+      }
       await appDataService.checkOut(body.userId, body.method, body.meta);
       return jsonOk({ ok: true });
     }

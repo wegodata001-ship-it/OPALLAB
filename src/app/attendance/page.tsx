@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useApp } from "@/providers/AppProvider";
 import { LAB_INFO, USER_ROLE_LABELS } from "@/lib/constants/labels";
 import { formatDateTime } from "@/lib/utils";
-import { captureGps } from "@/lib/client-gps";
+import { captureGpsOptional } from "@/lib/client-gps";
 import { Nfc, MapPin, ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -29,7 +29,7 @@ function AttendanceKiosk() {
     setPulse(true);
     setTimeout(() => setPulse(false), 1200);
     try {
-      const gps = await captureGps();
+      const gps = await captureGpsOptional();
       const active = activeRecords.find((a) => a.userId === currentUser.id);
       if (active) {
         await checkOut(currentUser.id, "NFC", gps);

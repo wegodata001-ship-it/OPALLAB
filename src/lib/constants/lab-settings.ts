@@ -1,8 +1,4 @@
 import type { LabSettings } from "@/lib/types";
 
-export const defaultLabSettings: LabSettings = {
-  allowedWifiSsids: ["OPAL-LAB", "OPAL_WIFI"],
-  wifiAttendanceEnabled: true,
-  requireGeofence: true,
-  attendanceCode: "opal1234",
-};
+/** Lab settings — WiFi attendance removed in Attendance V2 */
+export const defaultLabSettings: LabSettings = {};

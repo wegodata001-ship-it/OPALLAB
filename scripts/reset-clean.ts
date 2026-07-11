@@ -77,20 +77,11 @@ async function seedMinimalSettings() {
 
   await prisma.inventoryCategory.deleteMany({ where: { isSystem: false } });
 
-  const labEntries = [
-    { key: "allowedWifiSsids", value: JSON.stringify(["OPAL-LAB", "OPAL_WIFI"]) },
-    { key: "wifiAttendanceEnabled", value: "true" },
-    { key: "requireGeofence", value: "true" },
-    { key: "attendanceCode", value: "opal1234" },
-  ];
-
-  for (const entry of labEntries) {
-    await prisma.labSettings.upsert({
-      where: { key: entry.key },
-      update: { value: entry.value },
-      create: entry,
-    });
-  }
+  await prisma.labSettings.deleteMany({
+    where: {
+      key: { in: ["allowedWifiSsids", "wifiAttendanceEnabled", "requireGeofence", "attendanceCode"] },
+    },
+  });
 
   for (const warehouse of [
     { name: "מחסן ראשי", description: "מחסן מרכזי" },

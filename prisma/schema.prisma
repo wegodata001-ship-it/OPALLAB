@@ -78,6 +78,7 @@ enum AttendanceMethod {
   MANUAL
   GEOFENCE_AUTO
   WIFI
+  GPS
 }
 
 enum PaymentStatus {
@@ -407,6 +408,26 @@ model AttendanceRecord {
   checkOutPhotoUrl  String?
   checkInPhotoPath  String?
   checkOutPhotoPath String?
+  checkInAddressCountry     String?
+  checkInAddressCity        String?
+  checkInAddressStreet      String?
+  checkInAddressHouseNumber String?
+  checkOutAddressCountry     String?
+  checkOutAddressCity        String?
+  checkOutAddressStreet      String?
+  checkOutAddressHouseNumber String?
+  checkInDeviceBrowser  String?
+  checkInDeviceOs       String?
+  checkInDeviceType     String?
+  checkInUserAgent      String?
+  checkInScreenSize     String?
+  checkInTimezone       String?
+  checkOutDeviceBrowser String?
+  checkOutDeviceOs      String?
+  checkOutDeviceType    String?
+  checkOutUserAgent     String?
+  checkOutScreenSize    String?
+  checkOutTimezone      String?
   deviceInfo        String?
   notes             String?
   createdAt         DateTime         @default(now())

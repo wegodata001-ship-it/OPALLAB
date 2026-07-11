@@ -1,37 +1,28 @@
-/** Client-side GPS capture for attendance (non-blocking). */
+/** Legacy NFC kiosk GPS — thin wrapper over verification module. */
+import { captureDeviceInfo, captureGpsForVerification } from "@/lib/attendance/verification";
+
 export interface GpsCapture {
   latitude?: number;
   longitude?: number;
   accuracy?: number;
   deviceInfo?: string;
+  timestamp?: Date;
 }
 
-export function getDeviceInfo(): string | undefined {
-  if (typeof navigator === "undefined") return undefined;
-  return navigator.userAgent.slice(0, 240);
-}
-
-export async function captureGps(): Promise<GpsCapture> {
-  const deviceInfo = getDeviceInfo();
-  if (typeof navigator === "undefined" || !navigator.geolocation) {
-    return { deviceInfo };
-  }
-
+/** Optional GPS for NFC kiosk (non-blocking). */
+export async function captureGpsOptional(): Promise<GpsCapture> {
   try {
-    const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0,
-      });
-    });
+    const gps = await captureGpsForVerification();
+    const device = captureDeviceInfo();
     return {
-      latitude: position.coords.latitude,
-      longitude: position.coords.longitude,
-      accuracy: position.coords.accuracy,
-      deviceInfo,
+      latitude: gps.latitude,
+      longitude: gps.longitude,
+      accuracy: gps.accuracy,
+      deviceInfo: device.userAgent.slice(0, 240),
+      timestamp: gps.capturedAt,
     };
   } catch {
-    return { deviceInfo };
+    const device = captureDeviceInfo();
+    return { deviceInfo: device.userAgent.slice(0, 240) };
   }
 }

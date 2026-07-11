@@ -13,7 +13,8 @@ import { filterByDateRange } from "@/lib/date-filter";
 import { PAYMENT_STATUS_LABELS, PAYMENT_METHOD_LABELS, USER_ROLE_LABELS } from "@/lib/constants/labels";
 import { calculateEmployeePay, getSalaryLabel } from "@/lib/salary";
 import { printHtml } from "@/lib/export";
-import { AttendanceLocationDisplay } from "@/components/attendance/location-display";
+import { AttendanceAdminRecord } from "@/components/attendance/AttendanceAdminRecord";
+import { canViewAttendanceVerification } from "@/lib/attendance/attendance-verification";
 import { LAB_INFO } from "@/lib/constants/labels";
 import type { DateRange, Payment, PaymentMethod } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -49,7 +50,7 @@ function PaymentRow({ p, onViewDelivery }: { p: Payment; onViewDelivery?: (note:
 }
 
 export default function AccountsPage() {
-  const { doctors, users, payments, orders, shipments, addPayment, attendance, updateAttendance } = useApp();
+  const { doctors, users, payments, orders, shipments, addPayment, attendance, updateAttendance, currentUser } = useApp();
   const [tab, setTab] = useState<"doctors" | "employees">("doctors");
   const [selectedDoctor, setSelectedDoctor] = useState(doctors[0]?.id ?? "");
   const [selectedEmployee, setSelectedEmployee] = useState("");
@@ -273,47 +274,35 @@ export default function AccountsPage() {
               <Card>
                 <CardHeader><CardTitle>דיווח שעות — {emp.name}</CardTitle></CardHeader>
                 <CardContent className="space-y-2 max-h-96 overflow-y-auto">
-                  {empAttendance.map((a) => {
-                    const hours = a.checkOut ? ((a.checkOut.getTime() - a.checkIn.getTime()) / 3600000).toFixed(1) : "פעיל";
-                    const inLat = a.checkInLatitude ?? a.latitude;
-                    const inLng = a.checkInLongitude ?? a.longitude;
-                    return (
-                      <div key={a.id} className="p-3 rounded-lg bg-slate-50 text-sm space-y-3">
-                        <div className="grid sm:grid-cols-4 gap-2 items-start">
-                          <div><Label className="text-[10px]">כניסה</Label>
-                            <Input type="datetime-local" className="h-8 text-xs" defaultValue={a.checkIn.toISOString().slice(0, 16)}
-                              onChange={(e) => updateAttendance(a.id, { checkIn: new Date(e.target.value) })} />
-                          </div>
-                          <div><Label className="text-[10px]">יציאה</Label>
-                            <Input type="datetime-local" className="h-8 text-xs" defaultValue={a.checkOut?.toISOString().slice(0, 16) ?? ""}
-                              onChange={(e) => updateAttendance(a.id, { checkOut: e.target.value ? new Date(e.target.value) : null })} />
-                          </div>
-                          <p className="font-bold text-center pt-4">{hours} שע׳</p>
-                          <p className="text-xs text-slate-400 pt-4">{formatDate(a.checkIn)}</p>
-                        </div>
-                        <div className="grid sm:grid-cols-2 gap-3 border-t pt-3">
-                          <AttendanceLocationDisplay
-                            label="כניסה"
-                            time={a.checkIn}
-                            address={a.checkInAddress}
-                            lat={inLat}
-                            lng={inLng}
+                  {empAttendance.map((a) => (
+                    <div key={a.id} className="space-y-2">
+                      <div className="grid sm:grid-cols-2 gap-2 p-2 rounded-lg bg-slate-50">
+                        <div>
+                          <Label className="text-[10px]">עריכת כניסה</Label>
+                          <Input
+                            type="datetime-local"
+                            className="h-8 text-xs"
+                            defaultValue={a.checkIn.toISOString().slice(0, 16)}
+                            onChange={(e) => updateAttendance(a.id, { checkIn: new Date(e.target.value) })}
                           />
-                          {a.checkOut ? (
-                            <AttendanceLocationDisplay
-                              label="יציאה"
-                              time={a.checkOut}
-                              address={a.checkOutAddress}
-                              lat={a.checkOutLatitude}
-                              lng={a.checkOutLongitude}
-                            />
-                          ) : (
-                            <p className="text-xs text-slate-400 pt-4">יציאה: עדיין פעיל</p>
-                          )}
+                        </div>
+                        <div>
+                          <Label className="text-[10px]">עריכת יציאה</Label>
+                          <Input
+                            type="datetime-local"
+                            className="h-8 text-xs"
+                            defaultValue={a.checkOut?.toISOString().slice(0, 16) ?? ""}
+                            onChange={(e) => updateAttendance(a.id, { checkOut: e.target.value ? new Date(e.target.value) : null })}
+                          />
                         </div>
                       </div>
-                    );
-                  })}
+                      <AttendanceAdminRecord
+                        record={a}
+                        employeeName={emp.name}
+                        canViewPhotos={canViewAttendanceVerification(currentUser, a.userId)}
+                      />
+                    </div>
+                  ))}
                   {empAttendance.length === 0 && <p className="text-center text-slate-400 py-6">אין דיווחים בטווח</p>}
                 </CardContent>
               </Card>

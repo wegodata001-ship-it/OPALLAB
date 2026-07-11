@@ -58,7 +58,7 @@ export type FileType =
   | "IMAGE"
   | "DOCUMENT";
 
-export type AttendanceMethod = "NFC" | "MANUAL" | "GEOFENCE_AUTO" | "WIFI";
+export type AttendanceMethod = "NFC" | "MANUAL" | "GEOFENCE_AUTO" | "WIFI" | "GPS";
 
 export type PaymentStatus = "PENDING" | "PARTIAL" | "PAID" | "OVERDUE";
 
@@ -66,12 +66,8 @@ export type SalaryType = "MONTHLY" | "HOURLY";
 
 export type PaymentMethod = "CASH" | "CHECK" | "TRANSFER" | "CREDIT_CARD";
 
-export interface LabSettings {
-  allowedWifiSsids: string[];
-  wifiAttendanceEnabled: boolean;
-  requireGeofence: boolean;
-  attendanceCode: string;
-}
+/** Lab settings — WiFi attendance removed in Attendance V2 */
+export interface LabSettings {}
 
 export interface StageCompletion {
   completedBy: string;
@@ -291,6 +287,15 @@ export interface Payment {
   createdAt: Date;
 }
 
+export interface AttendanceDeviceMeta {
+  browser: string;
+  os: string;
+  deviceType: string;
+  userAgent: string;
+  screenSize: string;
+  timezone: string;
+}
+
 export interface AttendanceLocationMeta {
   latitude?: number;
   longitude?: number;
@@ -300,11 +305,10 @@ export interface AttendanceLocationMeta {
   photoUrl?: string | null;
   photoPath?: string | null;
   fileName?: string | null;
+  device?: AttendanceDeviceMeta;
 }
 
-export interface AttendanceCheckInMeta extends AttendanceLocationMeta {
-  wifiSsid?: string;
-}
+export type AttendanceCheckInMeta = AttendanceLocationMeta;
 
 export interface AttendanceRecord {
   id: string;
@@ -327,6 +331,26 @@ export interface AttendanceRecord {
   checkOutPhotoUrl?: string | null;
   checkInPhotoPath?: string | null;
   checkOutPhotoPath?: string | null;
+  checkInAddressCountry?: string | null;
+  checkInAddressCity?: string | null;
+  checkInAddressStreet?: string | null;
+  checkInAddressHouseNumber?: string | null;
+  checkOutAddressCountry?: string | null;
+  checkOutAddressCity?: string | null;
+  checkOutAddressStreet?: string | null;
+  checkOutAddressHouseNumber?: string | null;
+  checkInDeviceBrowser?: string | null;
+  checkInDeviceOs?: string | null;
+  checkInDeviceType?: string | null;
+  checkInUserAgent?: string | null;
+  checkInScreenSize?: string | null;
+  checkInTimezone?: string | null;
+  checkOutDeviceBrowser?: string | null;
+  checkOutDeviceOs?: string | null;
+  checkOutDeviceType?: string | null;
+  checkOutUserAgent?: string | null;
+  checkOutScreenSize?: string | null;
+  checkOutTimezone?: string | null;
   deviceInfo?: string | null;
   notes?: string | null;
   createdAt: Date;

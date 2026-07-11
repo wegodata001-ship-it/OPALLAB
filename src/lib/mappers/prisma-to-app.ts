@@ -33,7 +33,6 @@ import type {
   StageCompletion,
   User,
 } from "@/lib/types";
-import { defaultLabSettings } from "@/lib/constants/lab-settings";
 import { getSignedUrl, STORAGE_BUCKETS } from "@/lib/supabase/storage";
 
 export async function hashPassword(password: string): Promise<string> {
@@ -202,33 +201,12 @@ export async function mapOrderWithRelations(order: OrderWithIncludes): Promise<O
   };
 }
 
-export function mapLabSettings(entries: { key: string; value: string }[]): LabSettings {
-  const settings = { ...defaultLabSettings };
-  for (const entry of entries) {
-    if (entry.key === "allowedWifiSsids") {
-      try {
-        settings.allowedWifiSsids = JSON.parse(entry.value) as string[];
-      } catch {
-        settings.allowedWifiSsids = defaultLabSettings.allowedWifiSsids;
-      }
-    } else if (entry.key === "wifiAttendanceEnabled") {
-      settings.wifiAttendanceEnabled = entry.value === "true";
-    } else if (entry.key === "requireGeofence") {
-      settings.requireGeofence = entry.value === "true";
-    } else if (entry.key === "attendanceCode") {
-      settings.attendanceCode = entry.value;
-    }
-  }
-  return settings;
+export function mapLabSettings(_entries: { key: string; value: string }[]): LabSettings {
+  return {};
 }
 
-export function labSettingsToEntries(settings: LabSettings): { key: string; value: string }[] {
-  return [
-    { key: "allowedWifiSsids", value: JSON.stringify(settings.allowedWifiSsids) },
-    { key: "wifiAttendanceEnabled", value: String(settings.wifiAttendanceEnabled) },
-    { key: "requireGeofence", value: String(settings.requireGeofence) },
-    { key: "attendanceCode", value: settings.attendanceCode },
-  ];
+export function labSettingsToEntries(_settings: LabSettings): { key: string; value: string }[] {
+  return [];
 }
 
 export const ORDER_INCLUDE = {

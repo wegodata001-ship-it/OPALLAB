@@ -14,16 +14,15 @@ import { rolesSummary } from "@/lib/workflow-permissions";
 import { RoleMultiSelect } from "@/components/settings/role-multi-select";
 import { DoctorFormModal } from "@/components/settings/doctor-form-modal";
 import { getUserRoles, primaryRole } from "@/lib/user-roles";
-import { UserPlus, Stethoscope, Truck, Wifi, Pencil } from "lucide-react";
+import { UserPlus, Stethoscope, Truck, Pencil } from "lucide-react";
 
 export default function SettingsPage() {
   const {
-    users, doctors, couriers, labSettings,
-    addUser, updateUser, addCourier, updateCourier, updateLabSettings,
+    users, doctors, couriers,
+    addUser, updateUser, addCourier, updateCourier,
   } = useApp();
 
-  const [tab, setTab] = useState<"employees" | "doctors" | "couriers" | "system">("employees");
-  const [newWifi, setNewWifi] = useState("");
+  const [tab, setTab] = useState<"employees" | "doctors" | "couriers">("employees");
   const [doctorModal, setDoctorModal] = useState<null | { mode: "create" } | { mode: "edit"; doctor: Doctor }>(null);
 
   const [newEmp, setNewEmp] = useState({
@@ -129,7 +128,6 @@ export default function SettingsPage() {
           { key: "employees" as const, label: "עובדים", icon: UserPlus },
           { key: "doctors" as const, label: "רופאים", icon: Stethoscope },
           { key: "couriers" as const, label: "שליחים", icon: Truck },
-          { key: "system" as const, label: "מערכת / WiFi", icon: Wifi },
         ]).map(({ key, label, icon: Icon }) => (
           <button key={key} onClick={() => setTab(key)} className={cn("flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium", tab === key ? "bg-opal-gold text-white" : "bg-white border")}>
             <Icon className="h-4 w-4" />{label}
@@ -254,41 +252,6 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {tab === "system" && (
-        <Card>
-          <CardHeader><CardTitle>נוכחות דרך WiFi</CardTitle></CardHeader>
-          <CardContent className="space-y-4 max-w-lg">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={labSettings.wifiAttendanceEnabled} onChange={(e) => updateLabSettings({ wifiAttendanceEnabled: e.target.checked })} className="accent-opal-gold" />
-              חייב דיווח נוכחות דרך רשת WiFi מורשית
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={labSettings.requireGeofence} onChange={(e) => updateLabSettings({ requireGeofence: e.target.checked })} className="accent-opal-gold" />
-              אימות מיקום GPS (גיאופנס) בנוסף ל-WiFi
-            </label>
-            <div>
-              <Label>קוד נוכחות (אופציונלי)</Label>
-              <Input value={labSettings.attendanceCode} onChange={(e) => updateLabSettings({ attendanceCode: e.target.value })} placeholder="opal1234" />
-            </div>
-            <div>
-              <Label>רשתות WiFi מורשות</Label>
-              <div className="flex gap-2 mt-1">
-                <Input value={newWifi} onChange={(e) => setNewWifi(e.target.value)} placeholder="שם הרשת (SSID)" />
-                <Button type="button" onClick={addWifi}>הוספה</Button>
-              </div>
-              <div className="flex flex-wrap gap-2 mt-2">
-                {labSettings.allowedWifiSsids.map((ssid) => (
-                  <span key={ssid} className="px-3 py-1 rounded-full bg-slate-100 text-sm flex items-center gap-2">
-                    {ssid}
-                    <button type="button" className="text-red-500 text-xs" onClick={() => updateLabSettings({ allowedWifiSsids: labSettings.allowedWifiSsids.filter((s) => s !== ssid) })}>×</button>
-                  </span>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       <Modal open={!!editEmp} onClose={() => setEditEmp(null)} title="עריכת עובד" className="max-w-2xl">
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
@@ -353,13 +316,6 @@ export default function SettingsPage() {
       </Modal>
     </>
   );
-
-  function addWifi() {
-    const ssid = newWifi.trim();
-    if (!ssid || labSettings.allowedWifiSsids.includes(ssid)) return;
-    updateLabSettings({ allowedWifiSsids: [...labSettings.allowedWifiSsids, ssid] });
-    setNewWifi("");
-  }
 
   function handleAddCourier() {
     const name = newCourier.name.trim() || "שליח חדש";
