@@ -446,17 +446,28 @@ export class AppDataService {
         },
       });
 
-      if (order.status === "RECEIVED") {
+      if (order.status === "RECEIVED" || order.status === "FILES_ATTACHED") {
+        if (order.status === "RECEIVED") {
+          await tx.orderStatusHistory.create({
+            data: {
+              orderId,
+              status: "FILES_ATTACHED",
+              changedBy: userId,
+              notes: `צורף: ${file.fileName}`,
+            },
+          });
+        }
+
         await tx.order.update({
           where: { id: orderId },
-          data: { status: "FILES_ATTACHED", updatedAt: now },
+          data: { status: "DESIGN", updatedAt: now },
         });
         await tx.orderStatusHistory.create({
           data: {
             orderId,
-            status: "FILES_ATTACHED",
+            status: "DESIGN",
             changedBy: userId,
-            notes: `צורף: ${file.fileName}`,
+            notes: "התחלת ייצור — עיצוב",
           },
         });
       }

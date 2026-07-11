@@ -26,6 +26,8 @@ export const PRODUCTION_STAGES: { status: OrderStatus; label: string; roles: Use
 export const STAGE_COMPLETION_FORBIDDEN_MESSAGE =
   "You are not authorized to complete this production stage.";
 
+export type ProductionStageState = "WAITING" | "CURRENT" | "COMPLETED";
+
 export function isPrivilegedRole(user: Pick<User, "role" | "roles">): boolean {
   return isSystemAdminUser(user);
 }
@@ -44,6 +46,22 @@ export function hasStageCompletionRole(user: Pick<User, "role" | "roles">, stage
 export function getStagesForRole(user: Pick<User, "role" | "roles">): OrderStatus[] {
   const roles = getUserRoles(user);
   return PRODUCTION_STAGES.filter((s) => roles.some((r) => s.roles.includes(r))).map((s) => s.status);
+}
+
+export function getProductionStageState(
+  stage: OrderStatus,
+  orderStatus: OrderStatus,
+  completedStages: Record<string, StageCompletion>,
+): ProductionStageState {
+  if (completedStages[stage]) return "COMPLETED";
+
+  const stageIndex = PRODUCTION_STAGES.findIndex((s) => s.status === stage);
+  const currentIndex = PRODUCTION_STAGES.findIndex((s) => s.status === orderStatus);
+
+  if (stageIndex < 0 || currentIndex < 0) return "WAITING";
+  if (stageIndex < currentIndex) return "COMPLETED";
+  if (stageIndex === currentIndex) return "CURRENT";
+  return "WAITING";
 }
 
 /** Pipeline order for comparing whether an order is before/at/after the employee's stages. */

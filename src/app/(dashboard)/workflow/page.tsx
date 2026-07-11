@@ -19,6 +19,7 @@ import {
   PRODUCTION_STAGES,
   canCompleteStage,
   canUndoStage,
+  getProductionStageState,
   hasStageCompletionRole,
   isStageCompletionAdmin,
 } from "@/lib/workflow-permissions";
@@ -76,13 +77,15 @@ export default function WorkflowPage() {
               <CardContent className="flex-1 p-4">
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                   {PRODUCTION_STAGES.map((stage) => {
-                    const done = !!order.completedStages[stage.status];
+                    const stageState = getProductionStageState(stage.status, order.status, order.completedStages);
+                    const done = stageState === "COMPLETED";
+                    const isCurrent = stageState === "CURRENT";
                     const completion = order.completedStages[stage.status];
-                    const completer = done ? users.find((u) => u.id === completion?.completedBy) : null;
+                    const completer = completion ? users.find((u) => u.id === completion.completedBy) : null;
                     const hasRole = hasStageCompletionRole(currentUser, stage.status);
                     const canDo = canCompleteStage(currentUser, stage.status, order.status, order.completedStages);
-                    const canUndo = done && canUndoStage(currentUser, stage.status, order.completedStages);
-                    const noPermission = !done && !hasRole;
+                    const canUndo = !!completion && canUndoStage(currentUser, stage.status, order.completedStages);
+                    const noPermission = isCurrent && !hasRole;
 
                     return (
                       <div
@@ -90,8 +93,8 @@ export default function WorkflowPage() {
                         className={cn(
                           "rounded-xl border-2 p-3 text-center transition-all",
                           done && "border-emerald-300 bg-emerald-50",
-                          order.status === stage.status && !done && "border-opal-gold bg-opal-gold/5 ring-2 ring-opal-gold/20",
-                          !done && order.status !== stage.status && "border-slate-100 bg-slate-50"
+                          isCurrent && "border-opal-gold bg-opal-gold/5 ring-2 ring-opal-gold/20",
+                          stageState === "WAITING" && "border-slate-100 bg-slate-50"
                         )}
                       >
                         <p className="text-xs font-medium text-slate-600 mb-2">{stage.label}</p>
@@ -100,8 +103,14 @@ export default function WorkflowPage() {
                             <div className="h-10 w-10 rounded-full bg-emerald-500 flex items-center justify-center">
                               <Check className="h-6 w-6 text-white" strokeWidth={3} />
                             </div>
-                            <p className="text-[10px] text-emerald-700 font-medium">{completer?.name?.split(" ")[0]}</p>
-                            <p className="text-[9px] text-slate-400">{formatDateTime(completion!.completedAt)}</p>
+                            <p className="text-[10px] text-emerald-700 font-medium">
+                              {completer?.name?.split(" ")[0] ?? "הושלם"}
+                            </p>
+                            {completion?.completedAt ? (
+                              <p className="text-[9px] text-slate-400">{formatDateTime(completion.completedAt)}</p>
+                            ) : (
+                              <p className="text-[9px] text-slate-400">שלב קודם</p>
+                            )}
                             {canUndo ? (
                               <button
                                 type="button"
@@ -139,8 +148,11 @@ export default function WorkflowPage() {
                             </Button>
                           </span>
                         ) : (
-                          <div className="h-10 w-10 mx-auto rounded-full border-2 border-dashed border-slate-200 flex items-center justify-center">
-                            <Circle className="h-4 w-4 text-slate-300" />
+                          <div className="flex flex-col items-center gap-1">
+                            <div className="h-10 w-10 mx-auto rounded-full border-2 border-dashed border-slate-200 flex items-center justify-center">
+                              <Circle className="h-4 w-4 text-slate-300" />
+                            </div>
+                            <p className="text-[10px] text-slate-400">ממתין</p>
                           </div>
                         )}
                       </div>
