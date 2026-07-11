@@ -291,6 +291,21 @@ export interface Payment {
   createdAt: Date;
 }
 
+export interface AttendanceLocationMeta {
+  latitude?: number;
+  longitude?: number;
+  accuracy?: number;
+  deviceInfo?: string;
+  address?: string;
+  photoUrl?: string | null;
+  photoPath?: string | null;
+  fileName?: string | null;
+}
+
+export interface AttendanceCheckInMeta extends AttendanceLocationMeta {
+  wifiSsid?: string;
+}
+
 export interface AttendanceRecord {
   id: string;
   userId: string;
@@ -300,6 +315,19 @@ export interface AttendanceRecord {
   nfcTagId?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  checkInLatitude?: number | null;
+  checkInLongitude?: number | null;
+  checkInAccuracy?: number | null;
+  checkInAddress?: string | null;
+  checkOutLatitude?: number | null;
+  checkOutLongitude?: number | null;
+  checkOutAccuracy?: number | null;
+  checkOutAddress?: string | null;
+  checkInPhotoUrl?: string | null;
+  checkOutPhotoUrl?: string | null;
+  checkInPhotoPath?: string | null;
+  checkOutPhotoPath?: string | null;
+  deviceInfo?: string | null;
   notes?: string | null;
   createdAt: Date;
 }

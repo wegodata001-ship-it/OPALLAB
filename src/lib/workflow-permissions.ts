@@ -1,4 +1,4 @@
-import type { OrderStatus, User, UserRole, StageCompletion } from "@/lib/types";
+import type { OrderStatus, User, UserRole, StageCompletion, Order } from "@/lib/types";
 import { getUserRoles, isSystemAdminUser, userHasAnyRole } from "@/lib/user-roles";
 
 const ADMIN_ROLES: UserRole[] = ["ADMIN", "OWNER", "SECRETARY"];
@@ -19,7 +19,19 @@ export function isPrivilegedRole(user: Pick<User, "role" | "roles">): boolean {
 
 export function getStagesForRole(user: Pick<User, "role" | "roles">): OrderStatus[] {
   const roles = getUserRoles(user);
-  return PRODUCTION_STAGES.filter((s) => roles.some((r) => s.roles.includes(r))).map((s) => s.status);
+  const stages = PRODUCTION_STAGES.filter((s) => roles.some((r) => s.roles.includes(r))).map((s) => s.status);
+  if (roles.includes("PACKAGING") && !stages.includes("PACKAGING")) {
+    stages.push("PACKAGING");
+  }
+  return stages;
+}
+
+/** סינון הזמנות לעובדי ייצור — רק שלב נוכחי תואם להרשאות */
+export function filterOrdersForProductionUser<T extends Order>(user: User, orders: T[]): T[] {
+  if (isPrivilegedRole(user)) return orders;
+  const myStages = getStagesForRole(user);
+  if (!myStages.length) return [];
+  return orders.filter((o) => myStages.includes(o.status));
 }
 
 export function canCompleteStage(
@@ -49,12 +61,10 @@ export function canUndoStage(
 export function canViewOrderInWorkflow(
   user: User,
   orderStatus: OrderStatus,
-  completedStages: Record<string, StageCompletion>,
+  _completedStages: Record<string, StageCompletion>,
 ): boolean {
   if (isPrivilegedRole(user)) return true;
-  const myStages = getStagesForRole(user);
-  if (myStages.includes(orderStatus)) return true;
-  return myStages.some((stage) => completedStages[stage]?.completedBy === user.id);
+  return getStagesForRole(user).includes(orderStatus);
 }
 
 export function rolesSummary(roles: UserRole[]): string {

@@ -19,6 +19,12 @@ export function formatDateTime(date: Date | string | null | undefined): string {
   return format(d, "dd/MM/yyyy HH:mm", { locale: he });
 }
 
+export function formatTime(date: Date | string | null | undefined): string {
+  if (!date) return "—";
+  const d = typeof date === "string" ? new Date(date) : date;
+  return format(d, "HH:mm", { locale: he });
+}
+
 export function formatRelative(date: Date | string): string {
   const d = typeof date === "string" ? new Date(date) : date;
   return formatDistanceToNow(d, { addSuffix: true, locale: he });

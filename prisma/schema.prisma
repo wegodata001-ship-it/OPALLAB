@@ -387,16 +387,29 @@ model Payment {
 }
 
 model AttendanceRecord {
-  id        String           @id @default(cuid())
-  userId    String
-  checkIn   DateTime
-  checkOut  DateTime?
-  method    AttendanceMethod
-  nfcTagId  String?
-  latitude  Float?
-  longitude Float?
-  notes     String?
-  createdAt DateTime         @default(now())
+  id                String           @id @default(cuid())
+  userId            String
+  checkIn           DateTime
+  checkOut          DateTime?
+  method            AttendanceMethod
+  nfcTagId          String?
+  latitude          Float?
+  longitude         Float?
+  checkInLatitude   Float?
+  checkInLongitude  Float?
+  checkInAccuracy   Float?
+  checkInAddress    String?
+  checkOutLatitude  Float?
+  checkOutLongitude Float?
+  checkOutAccuracy  Float?
+  checkOutAddress   String?
+  checkInPhotoUrl   String?
+  checkOutPhotoUrl  String?
+  checkInPhotoPath  String?
+  checkOutPhotoPath String?
+  deviceInfo        String?
+  notes             String?
+  createdAt         DateTime         @default(now())
 
   user User @relation(fields: [userId], references: [id])
 

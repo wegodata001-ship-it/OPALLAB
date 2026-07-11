@@ -1,6 +1,7 @@
 import type { AppDataSnapshot } from "@/lib/services/app-data.service";
 import type { User } from "@/lib/types";
 import { canAccessModule, canViewAllOrders, isDoctorPortalUser } from "@/lib/permissions";
+import { filterOrdersForProductionUser } from "@/lib/workflow-permissions";
 import { getDoctorIdForUser, isSystemAdminUser } from "@/lib/user-roles";
 
 export function filterSnapshotForUser(snapshot: AppDataSnapshot, user: User): AppDataSnapshot {
@@ -58,7 +59,11 @@ export function filterSnapshotForUser(snapshot: AppDataSnapshot, user: User): Ap
     filtered.attendance = [];
   }
 
-  if (!canViewAllOrders(user)) {
+  if (!isSystemAdminUser(user) && !isDoctorPortalUser(user)) {
+    filtered.orders = filterOrdersForProductionUser(user, snapshot.orders);
+    const visibleOrderIds = new Set(filtered.orders.map((o) => o.id));
+    filtered.shipments = snapshot.shipments.filter((s) => visibleOrderIds.has(s.orderId));
+  } else if (!canViewAllOrders(user)) {
     filtered.orders = [];
     filtered.shipments = [];
   }

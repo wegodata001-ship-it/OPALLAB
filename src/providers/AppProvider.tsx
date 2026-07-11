@@ -38,10 +38,13 @@ import type {
   Courier,
   LabSettings,
   AttendanceMethod,
+  AttendanceCheckInMeta,
+  AttendanceLocationMeta,
   Warehouse,
   AuditLogEntry,
 } from "@/lib/types";
 import { getUserRoles } from "@/lib/user-roles";
+import { useLoading } from "@/providers/LoadingProvider";
 
 const STAGE_NEXT: Partial<Record<OrderStatus, OrderStatus>> = {
   DESIGN: "PRINTING_3D",
@@ -97,8 +100,8 @@ interface AppContextValue {
   ) => Promise<InventoryItem>;
   addInventoryMovement: (mov: Omit<InventoryMovement, "id" | "createdAt">) => Promise<void>;
   addInventoryCategory: (name: string, color: string) => Promise<InventoryCategory>;
-  checkIn: (userId: string, method?: AttendanceMethod, meta?: { wifiSsid?: string; latitude?: number; longitude?: number }) => Promise<void>;
-  checkOut: (userId: string, method?: AttendanceMethod) => Promise<void>;
+  checkIn: (userId: string, method?: AttendanceMethod, meta?: AttendanceCheckInMeta) => Promise<void>;
+  checkOut: (userId: string, method?: AttendanceMethod, meta?: AttendanceLocationMeta) => Promise<void>;
   updateAttendance: (id: string, updates: Partial<Pick<AttendanceRecord, "checkIn" | "checkOut" | "notes">>) => Promise<void>;
   addPayment: (payment: Omit<Payment, "id" | "createdAt">) => Promise<void>;
   updateDoctorBalance: (doctorId: string, amount: number, status?: PaymentStatus) => Promise<void>;
@@ -149,20 +152,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [store, setStore] = useState<AppDataSnapshot>(emptySnapshot);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const { run: withLoading } = useLoading();
 
-  const refresh = useCallback(async () => {
+  const refreshInternal = useCallback(async () => {
     const snapshot = await apiGet<AppDataSnapshot>("/api/data");
     setStore(snapshot);
   }, []);
 
+  const refresh = useCallback(
+    () => withLoading(refreshInternal, "טוען נתונים..."),
+    [withLoading, refreshInternal],
+  );
+
   useEffect(() => {
     async function bootstrap() {
       try {
-        const me = await apiGet<{ user: User | null }>("/api/auth/me");
-        if (me.user) {
-          setCurrentUser(me.user);
-          await refresh();
-        }
+        await withLoading(async () => {
+          const me = await apiGet<{ user: User | null }>("/api/auth/me");
+          if (me.user) {
+            setCurrentUser(me.user);
+            await refreshInternal();
+          }
+        }, "טוען נתונים...");
       } catch (error) {
         console.error("Bootstrap failed:", error);
       } finally {
@@ -170,20 +181,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     }
     void bootstrap();
-  }, [refresh]);
+  }, [withLoading, refreshInternal]);
 
   const login = useCallback(async (username: string, password: string): Promise<User | null> => {
-    const result = await apiPost<{ user: User }>("/api/auth/login", { username, password });
-    setCurrentUser(result.user);
-    await refresh();
-    return result.user;
-  }, [refresh]);
+    return withLoading(async () => {
+      const result = await apiPost<{ user: User }>("/api/auth/login", { username, password });
+      setCurrentUser(result.user);
+      await refreshInternal();
+      return result.user;
+    }, "מתחבר...");
+  }, [withLoading, refreshInternal]);
 
   const logout = useCallback(async () => {
-    await apiPost("/api/auth/logout");
-    setCurrentUser(null);
-    setStore(emptySnapshot);
-  }, []);
+    await withLoading(async () => {
+      await apiPost("/api/auth/logout");
+      setCurrentUser(null);
+      setStore(emptySnapshot);
+    }, "מתנתק...");
+  }, [withLoading]);
 
   const orders = store.orders;
 
@@ -202,182 +217,242 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const createOrder = useCallback(async (input: CreateOrderInput): Promise<Order> => {
     if (!currentUser) throw new Error("Not authenticated");
-    const result = await apiPost<{ order: Order }>("/api/orders", input);
-    await refresh();
-    return result.order;
-  }, [currentUser, refresh]);
+    return withLoading(async () => {
+      const result = await apiPost<{ order: Order }>("/api/orders", input);
+      await refreshInternal();
+      return result.order;
+    }, "שומר...");
+  }, [currentUser, withLoading, refreshInternal]);
 
   const updateOrder = useCallback(async (input: UpdateOrderInput) => {
     if (!currentUser) return;
-    await apiPatch("/api/orders/update", input);
-    await refresh();
-  }, [currentUser, refresh]);
+    await withLoading(async () => {
+      await apiPatch("/api/orders/update", input);
+      await refreshInternal();
+    }, "שומר...");
+  }, [currentUser, withLoading, refreshInternal]);
 
   const updateOrderStatus = useCallback(async (input: UpdateOrderStatusInput) => {
-    await apiPost("/api/orders/status", input);
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/orders/status", input);
+      await refreshInternal();
+    }, "מעדכן...");
+  }, [withLoading, refreshInternal]);
 
   const completeStage = useCallback(async (input: CompleteStageInput) => {
     if (!currentUser) return;
-    await apiPost("/api/orders/stages", { action: "complete", input });
-    await refresh();
-  }, [currentUser, refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/orders/stages", { action: "complete", input });
+      await refreshInternal();
+    }, "שומר...");
+  }, [currentUser, withLoading, refreshInternal]);
 
   const undoStage = useCallback(async (input: UndoStageInput) => {
     if (!currentUser) return;
-    await apiPost("/api/orders/stages", { action: "undo", input });
-    await refresh();
-  }, [currentUser, refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/orders/stages", { action: "undo", input });
+      await refreshInternal();
+    }, "מעדכן...");
+  }, [currentUser, withLoading, refreshInternal]);
 
   const addOrderFile = useCallback(async (orderId: string, file: File, notes?: string, folderId?: string) => {
     if (!currentUser) return;
-    const formData = new FormData();
-    formData.append("orderId", orderId);
-    formData.append("file", file);
-    if (notes) formData.append("notes", notes);
-    if (folderId) formData.append("folderId", folderId);
-    await apiPost("/api/orders/files", formData);
-    await refresh();
-  }, [currentUser, refresh]);
+    await withLoading(async () => {
+      const formData = new FormData();
+      formData.append("orderId", orderId);
+      formData.append("file", file);
+      if (notes) formData.append("notes", notes);
+      if (folderId) formData.append("folderId", folderId);
+      await apiPost("/api/orders/files", formData);
+      await refreshInternal();
+    }, "מעלה קבצים...");
+  }, [currentUser, withLoading, refreshInternal]);
 
   const previewDeliveryNote = useCallback(async () => {
-    const result = await apiGet<{ deliveryNote: string }>("/api/shipments");
-    return result.deliveryNote;
-  }, []);
+    return withLoading(async () => {
+      const result = await apiGet<{ deliveryNote: string }>("/api/shipments");
+      return result.deliveryNote;
+    }, "טוען נתונים...");
+  }, [withLoading]);
 
   const createShipment = useCallback(async (orderId: string, deliveryNote: string, courier?: { name: string; phone: string }) => {
     if (!currentUser) throw new Error("Not authenticated");
-    const result = await apiPost<{ shipment: Shipment }>("/api/shipments", { orderId, deliveryNote, courier });
-    await refresh();
-    return result.shipment;
-  }, [currentUser, refresh]);
+    return withLoading(async () => {
+      const result = await apiPost<{ shipment: Shipment }>("/api/shipments", { orderId, deliveryNote, courier });
+      await refreshInternal();
+      return result.shipment;
+    }, "שומר...");
+  }, [currentUser, withLoading, refreshInternal]);
 
   const addInventoryMovement = useCallback(async (mov: Omit<InventoryMovement, "id" | "createdAt">) => {
-    await apiPost("/api/inventory", { action: "movement", movement: mov });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/inventory", { action: "movement", movement: mov });
+      await refreshInternal();
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const addInventoryItem = useCallback(async (
     item: Omit<InventoryItem, "id" | "createdAt" | "updatedAt">,
     initialCost?: number,
     imageFile?: File,
   ) => {
-    const formData = new FormData();
-    formData.append("payload", JSON.stringify({ ...item, initialCost }));
-    if (imageFile) formData.append("image", imageFile);
-    const result = await apiPost<{ item: InventoryItem }>("/api/inventory", formData);
-    await refresh();
-    return result.item;
-  }, [refresh]);
+    return withLoading(async () => {
+      const formData = new FormData();
+      formData.append("payload", JSON.stringify({ ...item, initialCost }));
+      if (imageFile) formData.append("image", imageFile);
+      const result = await apiPost<{ item: InventoryItem }>("/api/inventory", formData);
+      await refreshInternal();
+      return result.item;
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const updateInventoryItem = useCallback(async (id: string, updates: Partial<InventoryItem>) => {
-    await apiPost("/api/inventory", { action: "update", itemId: id, updates });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/inventory", { action: "update", itemId: id, updates });
+      await refreshInternal();
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const deleteInventoryItem = useCallback(async (id: string) => {
-    await apiPost("/api/inventory", { action: "delete", itemId: id });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/inventory", { action: "delete", itemId: id });
+      await refreshInternal();
+    }, "מוחק...");
+  }, [withLoading, refreshInternal]);
 
   const transferInventoryCategory = useCallback(async (itemId: string, toCategory: string, notes?: string) => {
-    await apiPost("/api/inventory", { action: "transfer-category", itemId, toCategory, notes });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/inventory", { action: "transfer-category", itemId, toCategory, notes });
+      await refreshInternal();
+    }, "מעדכן...");
+  }, [withLoading, refreshInternal]);
 
   const transferInventoryWarehouse = useCallback(async (itemId: string, toLocation: string, notes?: string) => {
-    await apiPost("/api/inventory", { action: "transfer-warehouse", itemId, toLocation, notes });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/inventory", { action: "transfer-warehouse", itemId, toLocation, notes });
+      await refreshInternal();
+    }, "מעדכן...");
+  }, [withLoading, refreshInternal]);
 
   const stockOutInventory = useCallback(async (input: { itemId: string; quantity: number; reason: string; notes?: string }) => {
-    await apiPost("/api/inventory", { action: "stock-out", ...input });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/inventory", { action: "stock-out", ...input });
+      await refreshInternal();
+    }, "מעדכן...");
+  }, [withLoading, refreshInternal]);
 
   const stockInInventory = useCallback(async (input: { itemId: string; quantity: number; unitCost: number; supplier?: string; notes?: string }) => {
-    await apiPost("/api/inventory", { action: "stock-in", ...input });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/inventory", { action: "stock-in", ...input });
+      await refreshInternal();
+    }, "מעדכן...");
+  }, [withLoading, refreshInternal]);
 
   const getItemHistory = useCallback(async (itemId: string) => {
-    const result = await apiPost<{ history: AuditLogEntry[] }>("/api/inventory", { action: "history", itemId });
-    return result.history;
-  }, []);
+    return withLoading(async () => {
+      const result = await apiPost<{ history: AuditLogEntry[] }>("/api/inventory", { action: "history", itemId });
+      return result.history;
+    }, "טוען נתונים...");
+  }, [withLoading]);
 
   const addInventoryCategory = useCallback(async (name: string, color: string) => {
-    const result = await apiPost<{ category: InventoryCategory }>("/api/inventory", {
-      action: "category",
-      category: { name, color },
-    });
-    await refresh();
-    return result.category;
-  }, [refresh]);
+    return withLoading(async () => {
+      const result = await apiPost<{ category: InventoryCategory }>("/api/inventory", {
+        action: "category",
+        category: { name, color },
+      });
+      await refreshInternal();
+      return result.category;
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const addPayment = useCallback(async (payment: Omit<Payment, "id" | "createdAt">) => {
-    await apiPost("/api/payments", { action: "add", payment });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/payments", { action: "add", payment });
+      await refreshInternal();
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const updateDoctorBalance = useCallback(async (doctorId: string, amount: number, status?: PaymentStatus) => {
-    await apiPost("/api/payments", { action: "balance", doctorId, amount, status });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/payments", { action: "balance", doctorId, amount, status });
+      await refreshInternal();
+    }, "מעדכן...");
+  }, [withLoading, refreshInternal]);
 
   const addUser = useCallback(async (user: Omit<User, "id" | "createdAt" | "updatedAt">) => {
-    const result = await apiPost<{ user: User }>("/api/people", { entity: "user", action: "add", data: user });
-    await refresh();
-    return result.user;
-  }, [refresh]);
+    return withLoading(async () => {
+      const result = await apiPost<{ user: User }>("/api/people", { entity: "user", action: "add", data: user });
+      await refreshInternal();
+      return result.user;
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const updateUser = useCallback(async (id: string, updates: Partial<User>) => {
-    await apiPost("/api/people", { entity: "user", action: "update", id, updates });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/people", { entity: "user", action: "update", id, updates });
+      await refreshInternal();
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const addDoctor = useCallback(async (input: CreateDoctorInput) => {
-    const result = await apiPost<{ doctor: Doctor }>("/api/people", { entity: "doctor", action: "add", data: input });
-    await refresh();
-    return result.doctor;
-  }, [refresh]);
+    return withLoading(async () => {
+      const result = await apiPost<{ doctor: Doctor }>("/api/people", { entity: "doctor", action: "add", data: input });
+      await refreshInternal();
+      return result.doctor;
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const updateDoctor = useCallback(async (id: string, updates: UpdateDoctorInput) => {
-    const result = await apiPost<{ doctor: Doctor }>("/api/people", { entity: "doctor", action: "update", id, updates });
-    await refresh();
-    return result.doctor;
-  }, [refresh]);
+    return withLoading(async () => {
+      const result = await apiPost<{ doctor: Doctor }>("/api/people", { entity: "doctor", action: "update", id, updates });
+      await refreshInternal();
+      return result.doctor;
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const updateCourier = useCallback(async (id: string, updates: Partial<Courier>) => {
-    await apiPost("/api/people", { entity: "courier", action: "update", id, updates });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/people", { entity: "courier", action: "update", id, updates });
+      await refreshInternal();
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const addCourier = useCallback(async (courier: Omit<Courier, "id">) => {
-    const result = await apiPost<{ courier: Courier }>("/api/people", { entity: "courier", action: "add", data: courier });
-    await refresh();
-    return result.courier;
-  }, [refresh]);
+    return withLoading(async () => {
+      const result = await apiPost<{ courier: Courier }>("/api/people", { entity: "courier", action: "add", data: courier });
+      await refreshInternal();
+      return result.courier;
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
-  const checkIn = useCallback(async (userId: string, method: AttendanceMethod = "NFC", meta?: { wifiSsid?: string; latitude?: number; longitude?: number }) => {
-    await apiPost("/api/operations", { action: "check-in", userId, method, meta });
-    await refresh();
-  }, [refresh]);
+  const checkIn = useCallback(async (userId: string, method: AttendanceMethod = "NFC", meta?: AttendanceCheckInMeta) => {
+    await withLoading(async () => {
+      await apiPost("/api/operations", { action: "check-in", userId, method, meta });
+      await refreshInternal();
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
-  const checkOut = useCallback(async (userId: string, method: AttendanceMethod = "NFC") => {
-    await apiPost("/api/operations", { action: "check-out", userId, method });
-    await refresh();
-  }, [refresh]);
+  const checkOut = useCallback(async (userId: string, method: AttendanceMethod = "NFC", meta?: AttendanceLocationMeta) => {
+    await withLoading(async () => {
+      await apiPost("/api/operations", { action: "check-out", userId, method, meta });
+      await refreshInternal();
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const updateAttendance = useCallback(async (id: string, updates: Partial<Pick<AttendanceRecord, "checkIn" | "checkOut" | "notes">>) => {
-    await apiPost("/api/operations", { action: "update", id, updates });
-    await refresh();
-  }, [refresh]);
+    await withLoading(async () => {
+      await apiPost("/api/operations", { action: "update", id, updates });
+      await refreshInternal();
+    }, "שומר...");
+  }, [withLoading, refreshInternal]);
 
   const updateLabSettings = useCallback(async (updates: Partial<LabSettings>) => {
-    const result = await apiPost<{ labSettings: LabSettings }>("/api/operations", { action: "lab-settings", updates });
-    setStore((prev) => ({ ...prev, labSettings: result.labSettings }));
-  }, []);
+    await withLoading(async () => {
+      const result = await apiPost<{ labSettings: LabSettings }>("/api/operations", { action: "lab-settings", updates });
+      setStore((prev) => ({ ...prev, labSettings: result.labSettings }));
+    }, "שומר...");
+  }, [withLoading]);
 
   const getShipmentByDeliveryNote = useCallback((note: string) => store.shipments.find((s) => s.deliveryNote === note), [store.shipments]);
   const getUsersByRole = useCallback((role: UserRole) =>

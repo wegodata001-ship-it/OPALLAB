@@ -13,6 +13,7 @@ import { filterByDateRange } from "@/lib/date-filter";
 import { PAYMENT_STATUS_LABELS, PAYMENT_METHOD_LABELS, USER_ROLE_LABELS } from "@/lib/constants/labels";
 import { calculateEmployeePay, getSalaryLabel } from "@/lib/salary";
 import { printHtml } from "@/lib/export";
+import { AttendanceLocationDisplay } from "@/components/attendance/location-display";
 import { LAB_INFO } from "@/lib/constants/labels";
 import type { DateRange, Payment, PaymentMethod } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -274,18 +275,42 @@ export default function AccountsPage() {
                 <CardContent className="space-y-2 max-h-96 overflow-y-auto">
                   {empAttendance.map((a) => {
                     const hours = a.checkOut ? ((a.checkOut.getTime() - a.checkIn.getTime()) / 3600000).toFixed(1) : "פעיל";
+                    const inLat = a.checkInLatitude ?? a.latitude;
+                    const inLng = a.checkInLongitude ?? a.longitude;
                     return (
-                      <div key={a.id} className="p-3 rounded-lg bg-slate-50 text-sm grid sm:grid-cols-4 gap-2 items-center">
-                        <div><Label className="text-[10px]">כניסה</Label>
-                          <Input type="datetime-local" className="h-8 text-xs" defaultValue={a.checkIn.toISOString().slice(0, 16)}
-                            onChange={(e) => updateAttendance(a.id, { checkIn: new Date(e.target.value) })} />
+                      <div key={a.id} className="p-3 rounded-lg bg-slate-50 text-sm space-y-3">
+                        <div className="grid sm:grid-cols-4 gap-2 items-start">
+                          <div><Label className="text-[10px]">כניסה</Label>
+                            <Input type="datetime-local" className="h-8 text-xs" defaultValue={a.checkIn.toISOString().slice(0, 16)}
+                              onChange={(e) => updateAttendance(a.id, { checkIn: new Date(e.target.value) })} />
+                          </div>
+                          <div><Label className="text-[10px]">יציאה</Label>
+                            <Input type="datetime-local" className="h-8 text-xs" defaultValue={a.checkOut?.toISOString().slice(0, 16) ?? ""}
+                              onChange={(e) => updateAttendance(a.id, { checkOut: e.target.value ? new Date(e.target.value) : null })} />
+                          </div>
+                          <p className="font-bold text-center pt-4">{hours} שע׳</p>
+                          <p className="text-xs text-slate-400 pt-4">{formatDate(a.checkIn)}</p>
                         </div>
-                        <div><Label className="text-[10px]">יציאה</Label>
-                          <Input type="datetime-local" className="h-8 text-xs" defaultValue={a.checkOut?.toISOString().slice(0, 16) ?? ""}
-                            onChange={(e) => updateAttendance(a.id, { checkOut: e.target.value ? new Date(e.target.value) : null })} />
+                        <div className="grid sm:grid-cols-2 gap-3 border-t pt-3">
+                          <AttendanceLocationDisplay
+                            label="כניסה"
+                            time={a.checkIn}
+                            address={a.checkInAddress}
+                            lat={inLat}
+                            lng={inLng}
+                          />
+                          {a.checkOut ? (
+                            <AttendanceLocationDisplay
+                              label="יציאה"
+                              time={a.checkOut}
+                              address={a.checkOutAddress}
+                              lat={a.checkOutLatitude}
+                              lng={a.checkOutLongitude}
+                            />
+                          ) : (
+                            <p className="text-xs text-slate-400 pt-4">יציאה: עדיין פעיל</p>
+                          )}
                         </div>
-                        <p className="font-bold text-center">{hours} שע׳</p>
-                        <p className="text-xs text-slate-400">{formatDate(a.checkIn)}</p>
                       </div>
                     );
                   })}

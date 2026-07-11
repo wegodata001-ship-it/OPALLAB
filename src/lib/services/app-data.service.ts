@@ -1138,33 +1138,73 @@ export class AppDataService {
   async checkIn(
     userId: string,
     method: AttendanceMethod = "NFC",
-    meta?: { wifiSsid?: string; latitude?: number; longitude?: number },
+    meta?: import("@/lib/types").AttendanceCheckInMeta,
   ): Promise<void> {
+    const { reverseGeocode } = await import("@/lib/geocode");
     const user = await prisma.user.findUnique({ where: { id: userId } });
     const now = new Date();
+
+    let checkInAddress: string | null = null;
+    if (meta?.latitude != null && meta?.longitude != null) {
+      checkInAddress = meta.address ?? (await reverseGeocode(meta.latitude, meta.longitude));
+    } else if (meta !== undefined) {
+      checkInAddress = "מיקום לא התקבל";
+    }
+
     await prisma.attendanceRecord.create({
       data: {
         userId,
         checkIn: now,
         method,
         nfcTagId: user?.nfcTagId ?? null,
-        latitude: meta?.latitude ?? 32.8644,
-        longitude: meta?.longitude ?? 35.2978,
-        notes: meta?.wifiSsid ? `WiFi: ${meta.wifiSsid}` : null,
+        latitude: meta?.latitude ?? null,
+        longitude: meta?.longitude ?? null,
+        checkInLatitude: meta?.latitude ?? null,
+        checkInLongitude: meta?.longitude ?? null,
+        checkInAccuracy: meta?.accuracy ?? null,
+        checkInAddress,
+        checkInPhotoUrl: meta?.photoUrl ?? null,
+        checkInPhotoPath: meta?.photoPath ?? null,
+        deviceInfo: meta?.deviceInfo ?? null,
+        notes: [meta?.wifiSsid ? `WiFi: ${meta.wifiSsid}` : null, meta?.fileName ? `Фото: ${meta.fileName}` : null].filter(Boolean).join(" | ") || null,
       },
     });
   }
 
-  async checkOut(userId: string, method: AttendanceMethod = "NFC"): Promise<void> {
+  async checkOut(
+    userId: string,
+    method: AttendanceMethod = "NFC",
+    meta?: import("@/lib/types").AttendanceLocationMeta,
+  ): Promise<void> {
+    const { reverseGeocode } = await import("@/lib/geocode");
     const now = new Date();
     const active = await prisma.attendanceRecord.findFirst({
       where: { userId, checkOut: null },
       orderBy: { checkIn: "desc" },
     });
     if (!active) return;
+
+    let checkOutAddress: string | null = null;
+    if (meta?.latitude != null && meta?.longitude != null) {
+      checkOutAddress = meta.address ?? (await reverseGeocode(meta.latitude, meta.longitude));
+    } else if (meta !== undefined) {
+      checkOutAddress = "מיקום לא התקבל";
+    }
+
     await prisma.attendanceRecord.update({
       where: { id: active.id },
-      data: { checkOut: now, method },
+      data: {
+        checkOut: now,
+        method,
+        checkOutLatitude: meta?.latitude ?? null,
+        checkOutLongitude: meta?.longitude ?? null,
+        checkOutAccuracy: meta?.accuracy ?? null,
+        checkOutAddress,
+        checkOutPhotoUrl: meta?.photoUrl ?? null,
+        checkOutPhotoPath: meta?.photoPath ?? null,
+        deviceInfo: meta?.deviceInfo ?? active.deviceInfo,
+        notes: active.notes ?? (meta?.fileName ? `Фото: ${meta.fileName}` : null),
+      },
     });
   }
 

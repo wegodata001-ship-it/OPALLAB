@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useApp } from "@/providers/AppProvider";
 import { canAccessUser, getDefaultRoute, type AppModule } from "@/lib/permissions";
+import { LoadingOverlay } from "@/components/ui/loading-overlay";
 
 const PATH_MODULE: Record<string, AppModule> = {
   "/dashboard": "dashboard",
@@ -40,8 +41,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
   if (isLoading || !isAuthenticated || !currentUser) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-opal-gold border-t-transparent" />
+      <div className="min-h-screen relative">
+        <LoadingOverlay message="טוען נתונים..." fullscreen />
       </div>
     );
   }

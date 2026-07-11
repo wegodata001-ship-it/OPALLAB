@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Heebo } from "next/font/google";
 import "./globals.css";
+import { LoadingProvider } from "@/providers/LoadingProvider";
 import { AppProvider } from "@/providers/AppProvider";
 
 const heebo = Heebo({
@@ -21,7 +22,9 @@ export default function RootLayout({
   return (
     <html lang="he" dir="rtl" className={`${heebo.variable} h-full`}>
       <body className="min-h-full bg-slate-50 font-sans antialiased">
-        <AppProvider>{children}</AppProvider>
+        <LoadingProvider>
+          <AppProvider>{children}</AppProvider>
+        </LoadingProvider>
       </body>
     </html>
   );
