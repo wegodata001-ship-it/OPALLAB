@@ -19,8 +19,8 @@ import {
   PRODUCTION_STAGES,
   canCompleteStage,
   canUndoStage,
-  canViewOrderInWorkflow,
-  isPrivilegedRole,
+  hasStageCompletionRole,
+  isStageCompletionAdmin,
 } from "@/lib/workflow-permissions";
 
 export default function WorkflowPage() {
@@ -30,10 +30,7 @@ export default function WorkflowPage() {
   if (!currentUser) return null;
 
   const activeOrders = filterByDateRange(
-    orders.filter((o) =>
-      !["DELIVERED", "CANCELLED", "SHIPPED"].includes(o.status) &&
-      canViewOrderInWorkflow(currentUser, o.status, o.completedStages)
-    ),
+    orders.filter((o) => !["DELIVERED", "CANCELLED", "SHIPPED"].includes(o.status)),
     (o) => o.entryDate,
     dateRange
   );
@@ -47,7 +44,7 @@ export default function WorkflowPage() {
       <Header
         title="מעקב ייצור"
         description={
-          isPrivilegedRole(currentUser)
+          isStageCompletionAdmin(currentUser)
             ? "סמן ✓ בסיום כל שלב — ניהול מלא"
             : "ניתן לסמן ולבטל רק את השלבים השייכים לתפקידך"
         }
@@ -77,13 +74,15 @@ export default function WorkflowPage() {
               </div>
 
               <CardContent className="flex-1 p-4">
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                   {PRODUCTION_STAGES.map((stage) => {
                     const done = !!order.completedStages[stage.status];
                     const completion = order.completedStages[stage.status];
                     const completer = done ? users.find((u) => u.id === completion?.completedBy) : null;
+                    const hasRole = hasStageCompletionRole(currentUser, stage.status);
                     const canDo = canCompleteStage(currentUser, stage.status, order.status, order.completedStages);
                     const canUndo = done && canUndoStage(currentUser, stage.status, order.completedStages);
+                    const noPermission = !done && !hasRole;
 
                     return (
                       <div
@@ -124,6 +123,21 @@ export default function WorkflowPage() {
                             <Check className="h-4 w-4" />
                             סיימתי
                           </Button>
+                        ) : noPermission ? (
+                          <span
+                            title="אין לך הרשאה לסמן שלב זה"
+                            className="inline-flex w-full cursor-not-allowed"
+                          >
+                            <Button
+                              size="sm"
+                              className="w-full h-10 pointer-events-none"
+                              disabled
+                              aria-label="אין לך הרשאה לסמן שלב זה"
+                            >
+                              <Check className="h-4 w-4" />
+                              סיימתי
+                            </Button>
+                          </span>
                         ) : (
                           <div className="h-10 w-10 mx-auto rounded-full border-2 border-dashed border-slate-200 flex items-center justify-center">
                             <Circle className="h-4 w-4 text-slate-300" />

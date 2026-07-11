@@ -45,7 +45,7 @@ import type {
   UserRole,
 } from "@/lib/types";
 import { generateDeliveryNote, generateSerialNumber } from "@/lib/utils";
-import { canCompleteStage, canUndoStage } from "@/lib/workflow-permissions";
+import { canCompleteStage, canUndoStage, STAGE_COMPLETION_FORBIDDEN_MESSAGE } from "@/lib/workflow-permissions";
 import {
   buildInventoryImagePath,
   buildOrderFilePath,
@@ -55,8 +55,9 @@ import {
 import { defaultLabSettings } from "@/lib/constants/lab-settings";
 import { filterSnapshotForUser, buildOrderWhereForUser } from "@/lib/access-control";
 import { writeAuditLog } from "@/lib/audit-log";
-import { createAuthUser, updateAuthUser } from "@/lib/supabase/auth-admin";
-import { normalizeUserRoles, primaryRole } from "@/lib/user-roles";
+import { createAuthUser, deleteAuthUser, updateAuthUser } from "@/lib/supabase/auth-admin";
+import { normalizeUserRoles, primaryRole, isSystemAdminUser } from "@/lib/user-roles";
+import { assertUserCanBeDeleted } from "@/lib/people/protected-users";
 import type { AuditLogEntry, Warehouse } from "@/lib/types";
 
 function toPrismaAttendanceMethod(method: AttendanceMethod): $Enums.AttendanceMethod {
@@ -341,14 +342,14 @@ export class AppDataService {
 
     const completedStages = mapOrder(order).completedStages;
     if (!canCompleteStage(currentUser, input.stage, order.status, completedStages)) {
-      throw new AppError("FORBIDDEN", "אין הרשאה להשלים שלב זה", 403);
+      throw new AppError("FORBIDDEN", STAGE_COMPLETION_FORBIDDEN_MESSAGE, 403);
     }
 
     const now = new Date();
     const nextStatus = STAGE_NEXT[input.stage];
     const updatedStages = {
       ...serializeCompletedStages(completedStages),
-      [input.stage]: { completedBy: input.completedBy, completedAt: now },
+      [input.stage]: { completedBy: currentUser.id, completedAt: now },
     };
 
     await prisma.$transaction(async (tx) => {
@@ -365,7 +366,7 @@ export class AppDataService {
           data: {
             orderId: input.orderId,
             status: nextStatus,
-            changedBy: input.completedBy,
+            changedBy: currentUser.id,
             notes: "שלב הושלם ✓",
           },
         });
@@ -399,7 +400,7 @@ export class AppDataService {
         data: {
           orderId: input.orderId,
           status: input.stage,
-          changedBy: input.undoneBy,
+          changedBy: currentUser.id,
           notes: "ביטול סימון שלב",
         },
       }),
@@ -953,6 +954,135 @@ export class AppDataService {
         details: updates as Record<string, unknown>,
       });
     }
+  }
+
+  async deleteUser(id: string, actorId: string): Promise<void> {
+    const actor = await prisma.user.findUnique({ where: { id: actorId } });
+    if (!actor || !isSystemAdminUser(mapUser(actor))) {
+      throw new AppError("FORBIDDEN", "אין הרשאה למחוק משתמשים", 403);
+    }
+
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) throw new AppError("NOT_FOUND", "משתמש לא נמצא", 404);
+
+    try {
+      assertUserCanBeDeleted(mapUser(existing), actorId);
+    } catch (error) {
+      throw new AppError("FORBIDDEN", error instanceof Error ? error.message : "מחיקה אסורה", 403);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.attendanceRecord.deleteMany({ where: { userId: id } });
+      await tx.auditLog.deleteMany({ where: { userId: id } });
+      await tx.payment.deleteMany({ where: { employeeId: id } });
+      await tx.orderStatusHistory.updateMany({ where: { changedBy: id }, data: { changedBy: actorId } });
+      await tx.inventoryMovement.updateMany({ where: { performedBy: id }, data: { performedBy: actorId } });
+      await tx.order.updateMany({
+        where: {
+          OR: [
+            { assignedDesignerId: id },
+            { processingEmployeeId: id },
+            { finishEmployeeId: id },
+          ],
+        },
+        data: {
+          assignedDesignerId: null,
+          processingEmployeeId: null,
+          finishEmployeeId: null,
+        },
+      });
+      await tx.doctor.updateMany({ where: { userId: id }, data: { userId: null } });
+      await tx.user.delete({ where: { id } });
+    });
+
+    if (existing.authUserId) {
+      try {
+        await deleteAuthUser(existing.authUserId);
+      } catch (error) {
+        console.warn("[deleteUser] auth delete failed:", error);
+      }
+    }
+
+    await writeAuditLog({
+      userId: actorId,
+      action: "USER_DELETE",
+      entityType: "User",
+      entityId: id,
+      details: { username: existing.username, name: existing.name },
+    });
+  }
+
+  async deleteDoctor(id: string, actorId: string): Promise<void> {
+    const actor = await prisma.user.findUnique({ where: { id: actorId } });
+    if (!actor || !isSystemAdminUser(mapUser(actor))) {
+      throw new AppError("FORBIDDEN", "אין הרשאה למחוק רופאים", 403);
+    }
+
+    const doctor = await prisma.doctor.findUnique({ where: { id } });
+    if (!doctor) throw new AppError("NOT_FOUND", "רופא לא נמצא", 404);
+
+    const orderCount = await prisma.order.count({ where: { doctorId: id } });
+    if (orderCount > 0) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        `לא ניתן למחוק רופא עם ${orderCount} הזמנות קיימות`,
+        409,
+      );
+    }
+
+    const linkedUserId = doctor.userId;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.payment.deleteMany({ where: { doctorId: id } });
+      await tx.doctor.delete({ where: { id } });
+    });
+
+    if (linkedUserId) {
+      const linked = await prisma.user.findUnique({ where: { id: linkedUserId } });
+      if (linked) {
+        try {
+          assertUserCanBeDeleted(mapUser(linked), actorId);
+          await this.deleteUser(linkedUserId, actorId);
+        } catch {
+          await prisma.user.delete({ where: { id: linkedUserId } }).catch(() => undefined);
+          if (linked.authUserId) {
+            try {
+              await deleteAuthUser(linked.authUserId);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      }
+    }
+
+    await writeAuditLog({
+      userId: actorId,
+      action: "DOCTOR_DELETE",
+      entityType: "Doctor",
+      entityId: id,
+      details: { name: doctor.name },
+    });
+  }
+
+  async deleteCourier(id: string, actorId: string): Promise<void> {
+    const actor = await prisma.user.findUnique({ where: { id: actorId } });
+    if (!actor || !isSystemAdminUser(mapUser(actor))) {
+      throw new AppError("FORBIDDEN", "אין הרשאה למחוק שליחים", 403);
+    }
+
+    const courier = await prisma.courier.findUnique({ where: { id } });
+    if (!courier) throw new AppError("NOT_FOUND", "שליח לא נמצא", 404);
+
+    await prisma.courier.delete({ where: { id } });
+
+    await writeAuditLog({
+      userId: actorId,
+      action: "COURIER_DELETE",
+      entityType: "Courier",
+      entityId: id,
+      details: { name: courier.name },
+    });
   }
 
   async deleteInventoryItem(itemId: string, performedBy: string): Promise<void> {

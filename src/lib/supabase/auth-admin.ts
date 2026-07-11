@@ -37,6 +37,14 @@ export async function updateAuthUser(
   }
 }
 
+export async function deleteAuthUser(authUserId: string): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase.auth.admin.deleteUser(authUserId);
+  if (error) {
+    throw new AppError("INTERNAL_ERROR", `מחיקת Auth נכשלה: ${error.message}`, 500);
+  }
+}
+
 export async function ensureAuthUser(email: string, password: string): Promise<string> {
   try {
     return await createAuthUser(email, password);

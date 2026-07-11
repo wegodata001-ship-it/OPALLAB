@@ -7,19 +7,26 @@ import { Button } from "@/components/ui/button";
 import { Input, Label, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useApp } from "@/providers/AppProvider";
+import { isPrimarySystemUser } from "@/lib/people/protected-users";
 import { USER_ROLE_LABELS, SALARY_TYPE_LABELS } from "@/lib/constants/labels";
 import type { Courier, Doctor, SalaryType, User, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { rolesSummary } from "@/lib/workflow-permissions";
 import { RoleMultiSelect } from "@/components/settings/role-multi-select";
 import { DoctorFormModal } from "@/components/settings/doctor-form-modal";
 import { getUserRoles, primaryRole } from "@/lib/user-roles";
-import { UserPlus, Stethoscope, Truck, Pencil } from "lucide-react";
+import { UserPlus, Stethoscope, Truck, Pencil, Trash2 } from "lucide-react";
+
+type DeleteTarget =
+  | { kind: "employee"; id: string; name: string }
+  | { kind: "doctor"; id: string; name: string }
+  | { kind: "courier"; id: string; name: string };
 
 export default function SettingsPage() {
   const {
-    users, doctors, couriers,
-    addUser, updateUser, addCourier, updateCourier,
+    users, doctors, couriers, currentUser,
+    addUser, updateUser, deleteUser,
+    addCourier, updateCourier, deleteCourier,
+    deleteDoctor,
   } = useApp();
 
   const [tab, setTab] = useState<"employees" | "doctors" | "couriers">("employees");
@@ -42,8 +49,29 @@ export default function SettingsPage() {
   const [newCourier, setNewCourier] = useState({ name: "", phone: "", address: "" });
   const [editCourier, setEditCourier] = useState<Courier | null>(null);
   const [editCourierForm, setEditCourierForm] = useState({ name: "", phone: "", address: "", isActive: true });
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const employees = users.filter((u) => !getUserRoles(u).includes("DOCTOR"));
+
+  const canDeleteUser = (user: User) => {
+    if (!currentUser) return false;
+    if (user.id === currentUser.id) return false;
+    return !isPrimarySystemUser(user);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteError(null);
+    try {
+      if (deleteTarget.kind === "employee") await deleteUser(deleteTarget.id);
+      if (deleteTarget.kind === "doctor") await deleteDoctor(deleteTarget.id);
+      if (deleteTarget.kind === "courier") await deleteCourier(deleteTarget.id);
+      setDeleteTarget(null);
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "מחיקה נכשלה");
+    }
+  };
 
   const openEditEmployee = (user: User) => {
     setEditEmp(user);
@@ -173,23 +201,52 @@ export default function SettingsPage() {
           </Card>
           <Card>
             <CardHeader><CardTitle>עובדים ({employees.length})</CardTitle></CardHeader>
-            <CardContent className="space-y-2 max-h-[32rem] overflow-y-auto">
-              {employees.map((u) => (
-                <div key={u.id} className="p-3 rounded-xl border flex items-start gap-3">
-                  <div className="h-4 w-4 rounded-full shrink-0 mt-1" style={{ backgroundColor: u.color ?? "#94a3b8" }} />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-sm">{u.name}</p>
-                    <p className="text-xs text-slate-500">
-                      {getUserRoles(u).map((r) => USER_ROLE_LABELS[r]).join(" · ")} · {u.username}
-                    </p>
-                    <p className="text-[10px] text-slate-400 mt-1 leading-snug">{rolesSummary(getUserRoles(u))}</p>
-                    {!u.isActive && <span className="text-xs text-red-500">לא פעיל</span>}
-                  </div>
-                  <Button size="sm" variant="outline" onClick={() => openEditEmployee(u)}>
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
+            <CardContent className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-slate-500 text-right">
+                    <th className="p-2 font-medium">עובד</th>
+                    <th className="p-2 font-medium hidden sm:table-cell">תפקידים</th>
+                    <th className="p-2 font-medium w-28">פעולות</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {employees.map((u) => (
+                    <tr key={u.id} className="border-b last:border-0">
+                      <td className="p-2">
+                        <div className="flex items-start gap-2">
+                          <div className="h-3 w-3 rounded-full shrink-0 mt-1" style={{ backgroundColor: u.color ?? "#94a3b8" }} />
+                          <div>
+                            <p className="font-medium">{u.name}</p>
+                            <p className="text-xs text-slate-500">{u.username}{!u.isActive && " · לא פעיל"}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="p-2 text-xs text-slate-600 hidden sm:table-cell">
+                        {getUserRoles(u).map((r) => USER_ROLE_LABELS[r]).join(" · ")}
+                      </td>
+                      <td className="p-2">
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="outline" onClick={() => openEditEmployee(u)} title="עריכה">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          {canDeleteUser(u) && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-red-600 hover:text-red-700 hover:border-red-300"
+                              onClick={() => { setDeleteError(null); setDeleteTarget({ kind: "employee", id: u.id, name: u.name }); }}
+                              title="מחיקה"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </CardContent>
           </Card>
         </div>
@@ -204,25 +261,50 @@ export default function SettingsPage() {
               הוספת רופא
             </Button>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {doctors.map((d) => {
-              const linkedUser = d.userId ? users.find((u) => u.id === d.userId) : undefined;
-              return (
-                <div key={d.id} className="p-3 rounded-xl border text-sm flex justify-between gap-2">
-                  <div>
-                    <p className="font-medium">{d.name}</p>
-                    <p className="text-slate-500">{d.clinic} · {d.phone}</p>
-                    <p className="text-xs text-slate-400">{d.email} · {d.address}</p>
-                    <p className="text-xs text-opal-gold-dark mt-1">
-                      {linkedUser ? `משתמש: ${linkedUser.username}` : "ללא משתמש התחברות"}
-                    </p>
-                  </div>
-                  <Button size="sm" variant="outline" onClick={() => setDoctorModal({ mode: "edit", doctor: d })}>
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              );
-            })}
+          <CardContent className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-slate-500 text-right">
+                  <th className="p-2 font-medium">רופא</th>
+                  <th className="p-2 font-medium hidden md:table-cell">פרטים</th>
+                  <th className="p-2 font-medium w-28">פעולות</th>
+                </tr>
+              </thead>
+              <tbody>
+                {doctors.map((d) => {
+                  const linkedUser = d.userId ? users.find((u) => u.id === d.userId) : undefined;
+                  return (
+                    <tr key={d.id} className="border-b last:border-0">
+                      <td className="p-2">
+                        <p className="font-medium">{d.name}</p>
+                        <p className="text-xs text-opal-gold-dark">
+                          {linkedUser ? `משתמש: ${linkedUser.username}` : "ללא משתמש התחברות"}
+                        </p>
+                      </td>
+                      <td className="p-2 text-xs text-slate-500 hidden md:table-cell">
+                        {d.clinic} · {d.phone} · {d.email}
+                      </td>
+                      <td className="p-2">
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="outline" onClick={() => setDoctorModal({ mode: "edit", doctor: d })} title="עריכה">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-red-600 hover:text-red-700 hover:border-red-300"
+                            onClick={() => { setDeleteError(null); setDeleteTarget({ kind: "doctor", id: d.id, name: d.name }); }}
+                            title="מחיקה"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </CardContent>
         </Card>
       )}
@@ -240,17 +322,64 @@ export default function SettingsPage() {
           </Card>
           <Card>
             <CardHeader><CardTitle>שליחים ({couriers.length})</CardTitle></CardHeader>
-            <CardContent className="space-y-2">
-              {couriers.map((c) => (
-                <div key={c.id} className="p-3 rounded-xl border text-sm flex justify-between gap-2">
-                  <div><p className="font-medium">{c.name}</p><p className="text-slate-500">{c.phone} · {c.address}</p></div>
-                  <Button size="sm" variant="outline" onClick={() => openEditCourier(c)}><Pencil className="h-3.5 w-3.5" /></Button>
-                </div>
-              ))}
+            <CardContent className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-slate-500 text-right">
+                    <th className="p-2 font-medium">שליח</th>
+                    <th className="p-2 font-medium hidden sm:table-cell">פרטים</th>
+                    <th className="p-2 font-medium w-28">פעולות</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {couriers.map((c) => (
+                    <tr key={c.id} className="border-b last:border-0">
+                      <td className="p-2 font-medium">{c.name}</td>
+                      <td className="p-2 text-slate-500 hidden sm:table-cell">{c.phone} · {c.address}</td>
+                      <td className="p-2">
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="outline" onClick={() => openEditCourier(c)} title="עריכה">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-red-600 hover:text-red-700 hover:border-red-300"
+                            onClick={() => { setDeleteError(null); setDeleteTarget({ kind: "courier", id: c.id, name: c.name }); }}
+                            title="מחיקה"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </CardContent>
           </Card>
         </div>
       )}
+
+      <Modal
+        open={!!deleteTarget}
+        onClose={() => { setDeleteTarget(null); setDeleteError(null); }}
+        title="אישור מחיקה"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-700">
+            האם למחוק את {deleteTarget?.kind === "employee" ? "העובד" : deleteTarget?.kind === "doctor" ? "הרופא" : "השליח"}
+            {" "}
+            <strong>{deleteTarget?.name}</strong>?
+          </p>
+          <p className="text-sm text-red-600">פעולה זו אינה ניתנת לשחזור.</p>
+          {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => { setDeleteTarget(null); setDeleteError(null); }}>ביטול</Button>
+            <Button className="bg-red-600 hover:bg-red-700" onClick={() => void confirmDelete()}>מחק</Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={!!editEmp} onClose={() => setEditEmp(null)} title="עריכת עובד" className="max-w-2xl">
         <div className="space-y-4">

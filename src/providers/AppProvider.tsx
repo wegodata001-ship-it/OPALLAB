@@ -107,9 +107,12 @@ interface AppContextValue {
   updateDoctorBalance: (doctorId: string, amount: number, status?: PaymentStatus) => Promise<void>;
   addUser: (user: Omit<User, "id" | "createdAt" | "updatedAt">) => Promise<User>;
   updateUser: (id: string, updates: Partial<User> & { password?: string }) => Promise<void>;
+  deleteUser: (id: string) => Promise<void>;
   addDoctor: (input: CreateDoctorInput) => Promise<Doctor>;
   updateDoctor: (id: string, updates: UpdateDoctorInput) => Promise<Doctor>;
+  deleteDoctor: (id: string) => Promise<void>;
   updateCourier: (id: string, updates: Partial<Courier>) => Promise<void>;
+  deleteCourier: (id: string) => Promise<void>;
   addCourier: (courier: Omit<Courier, "id">) => Promise<Courier>;
   labSettings: LabSettings;
   updateLabSettings: (updates: Partial<LabSettings>) => Promise<void>;
@@ -395,6 +398,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, "שומר...");
   }, [withLoading, refreshInternal]);
 
+  const deleteUser = useCallback(async (id: string) => {
+    await withLoading(async () => {
+      await apiPost("/api/people", { entity: "user", action: "delete", id });
+      await refreshInternal();
+    }, "מוחק...");
+  }, [withLoading, refreshInternal]);
+
   const addDoctor = useCallback(async (input: CreateDoctorInput) => {
     return withLoading(async () => {
       const result = await apiPost<{ doctor: Doctor }>("/api/people", { entity: "doctor", action: "add", data: input });
@@ -411,11 +421,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, "שומר...");
   }, [withLoading, refreshInternal]);
 
+  const deleteDoctor = useCallback(async (id: string) => {
+    await withLoading(async () => {
+      await apiPost("/api/people", { entity: "doctor", action: "delete", id });
+      await refreshInternal();
+    }, "מוחק...");
+  }, [withLoading, refreshInternal]);
+
   const updateCourier = useCallback(async (id: string, updates: Partial<Courier>) => {
     await withLoading(async () => {
       await apiPost("/api/people", { entity: "courier", action: "update", id, updates });
       await refreshInternal();
     }, "שומר...");
+  }, [withLoading, refreshInternal]);
+
+  const deleteCourier = useCallback(async (id: string) => {
+    await withLoading(async () => {
+      await apiPost("/api/people", { entity: "courier", action: "delete", id });
+      await refreshInternal();
+    }, "מוחק...");
   }, [withLoading, refreshInternal]);
 
   const addCourier = useCallback(async (courier: Omit<Courier, "id">) => {
@@ -536,9 +560,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     updateDoctorBalance,
     addUser,
     updateUser,
+    deleteUser,
     addDoctor,
     updateDoctor,
+    deleteDoctor,
     updateCourier,
+    deleteCourier,
     addCourier,
     labSettings: store.labSettings ?? defaultLabSettings,
     updateLabSettings,

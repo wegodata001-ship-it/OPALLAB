@@ -11,7 +11,9 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "db:reset-base": "tsx scripts/reset-to-base.ts",
+    "icons:generate": "tsx scripts/generate-icons.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",
@@ -41,7 +43,9 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "prisma": "^7.8.0",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4",
+    "to-ico": "^1.1.5",
     "tsx": "^4.23.0",
     "typescript": "^5"
   }

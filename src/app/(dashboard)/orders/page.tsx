@@ -9,10 +9,15 @@ import { Input, Label, Textarea, Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DentalChart } from "@/components/orders/dental-chart";
 import { StatusBadge } from "@/components/orders/status-badge";
+import { OrderStageIndicator } from "@/components/orders/order-stage-indicator";
 import { ExportActions } from "@/components/shared/export-actions";
 import { useApp } from "@/providers/AppProvider";
 import { LAB_INFO, MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS, ORDER_STATUS_LABELS } from "@/lib/constants/labels";
-import { getStagesForRole, isPrivilegedRole } from "@/lib/workflow-permissions";
+import {
+  getOrderStageRelevance,
+  isPrivilegedRole,
+  STAGE_RELEVANCE_CARD_CLASS,
+} from "@/lib/workflow-permissions";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { MaterialType, WorkType, Gender, OrderStatus, DateRange } from "@/lib/types";
 import { Search, Plus, Upload, List, UserPlus } from "lucide-react";
@@ -49,11 +54,20 @@ function OrdersContent() {
   const isAdmin = currentUser ? isPrivilegedRole(currentUser) : false;
   const tab = !isAdmin && tabParam === "new" ? "list" : tabParam;
   const savedSerial = searchParams.get("saved");
-  const employeeStageLabels = currentUser && !isAdmin
-    ? getStagesForRole(currentUser).map((s) => ORDER_STATUS_LABELS[s]).join(" · ")
-    : "";
+  const sortedForEmployee = isAdmin || !currentUser
+    ? orders
+    : [...orders].sort((a, b) => {
+        const rank = (s: typeof a.status) => {
+          const r = getOrderStageRelevance(currentUser, s);
+          if (r === "mine") return 0;
+          if (r === "future") return 1;
+          if (r === "past") return 2;
+          return 3;
+        };
+        return rank(a.status) - rank(b.status) || b.entryDate.getTime() - a.entryDate.getTime();
+      });
 
-  const filtered = orders.filter((o) => {
+  const filtered = sortedForEmployee.filter((o) => {
     const matchSearch = !search || o.serialNumber.includes(search) || o.doctor.name.includes(search) || o.patient.name.includes(search);
     const matchStatus = statusFilter === "ALL" || o.status === statusFilter;
     const inRange = (!dateRange.from && !dateRange.to) || (
@@ -113,9 +127,7 @@ function OrdersContent() {
         description={
           isAdmin
             ? "ניהול הזמנות, קליטה חדשה ושיוך קבצים"
-            : employeeStageLabels
-              ? `הזמנות בשלבי הייצור שלך: ${employeeStageLabels}`
-              : "הזמנות לפי שלבי הייצור המותרים לתפקידך"
+            : "כל הזמנות המעבדה — שלב נוכחי מסומן; «בטיפול שלי» = דורש את התפקיד שלך כעת"
         }
         actions={
           <ExportActions
@@ -204,14 +216,27 @@ function OrdersContent() {
                   )}
                 </CardContent>
               </Card>
-            ) : filtered.map((order) => (
+            ) : filtered.map((order) => {
+              const relevance = currentUser && !isAdmin
+                ? getOrderStageRelevance(currentUser, order.status)
+                : null;
+              return (
               <Link key={order.id} href={`/orders/${order.id}`}>
-                <Card className="hover:shadow-md hover:border-opal-gold/20 transition-all cursor-pointer">
+                <Card
+                  className={cn(
+                    "hover:shadow-md transition-all cursor-pointer",
+                    relevance ? STAGE_RELEVANCE_CARD_CLASS[relevance] : "hover:border-opal-gold/20",
+                  )}
+                >
                   <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-slate-900">{order.serialNumber}</span>
-                        <StatusBadge status={order.status} />
+                        {currentUser && !isAdmin ? (
+                          <OrderStageIndicator user={currentUser} status={order.status} />
+                        ) : (
+                          <StatusBadge status={order.status} />
+                        )}
                       </div>
                       <p className="text-sm text-slate-600 mt-0.5">{order.doctor.name} · {order.patient.name}</p>
                       <p className="text-xs text-slate-400">
@@ -226,7 +251,8 @@ function OrdersContent() {
                   </CardContent>
                 </Card>
               </Link>
-            ))}
+            );
+            })}
           </div>
         </>
       ) : (
