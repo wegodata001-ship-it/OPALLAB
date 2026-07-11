@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Loader2, Camera, CheckCircle2, MapPin, X } from "lucide-react";
@@ -19,16 +19,17 @@ type ModalStep = "gps" | "camera" | "preview" | "uploading" | "done" | "error";
 
 export function AttendanceCameraModal({ open, onClose, mode, userId, onVerified }: AttendanceCameraModalProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [step, setStep] = useState<ModalStep>("gps");
   const [message, setMessage] = useState("בודק מיקום...");
   const [error, setError] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [blob, setBlob] = useState<Blob | null>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
 
   useEffect(() => {
     if (!open) {
-      stopMediaStream(stream);
+      stopMediaStream(streamRef.current);
+      streamRef.current = null;
       setStep("gps");
       setMessage("בודק מיקום...");
       setError(null);
@@ -63,34 +64,47 @@ export function AttendanceCameraModal({ open, onClose, mode, userId, onVerified 
           stopMediaStream(cameraStream);
           return;
         }
-        setStream(cameraStream);
+
+        stopMediaStream(streamRef.current);
+        streamRef.current = cameraStream;
         if (videoRef.current) {
           videoRef.current.srcObject = cameraStream;
-          await videoRef.current.play().catch(() => undefined);
+          try {
+            await videoRef.current.play();
+          } catch {
+            // The browser may block autoplay; the preview will still render once the stream is attached.
+          }
         }
-        setStep("preview");
+        setStep("camera");
         setMessage("הסר/הוספת צילום");
       } catch (err) {
         if (cancelled) return;
         setStep("error");
-        setError(err instanceof Error ? err.message : "לא ניתן לבצע רישום ללא צילום.");
+        setError(err instanceof Error ? err.message : "לא ניתן לבצע רישום נוכחות ללא הרשאת מצלמה.");
       }
     };
 
     void runFlow();
     return () => {
       cancelled = true;
-      stopMediaStream(stream);
+      stopMediaStream(streamRef.current);
+      streamRef.current = null;
     };
-  }, [open, stream]);
+  }, [open]);
 
   const closeModal = () => {
-    stopMediaStream(stream);
+    stopMediaStream(streamRef.current);
+    streamRef.current = null;
     onClose();
   };
 
   const handleCapture = async () => {
-    if (!videoRef.current) return;
+    if (!videoRef.current) {
+      setError("לא ניתן לבצע רישום נוכחות ללא מצלמה.");
+      setStep("error");
+      return;
+    }
+
     try {
       const result = await captureStillFromVideo(videoRef.current);
       setBlob(result.blob);
@@ -98,14 +112,14 @@ export function AttendanceCameraModal({ open, onClose, mode, userId, onVerified 
       setStep("preview");
       setMessage("צילום מוכן לאישור");
     } catch {
-      setError("לא ניתן לבצע רישום ללא צילום.");
+      setError("לא ניתן לבצע רישום נוכחות ללא צילום.");
       setStep("error");
     }
   };
 
   const handleConfirm = async () => {
     if (!blob) {
-      setError("לא ניתן לבצע רישום ללא צילום.");
+      setError("יש לצלם תמונת אימות לפני רישום הנוכחות.");
       setStep("error");
       return;
     }
@@ -119,19 +133,18 @@ export function AttendanceCameraModal({ open, onClose, mode, userId, onVerified 
       setMessage("✔ הנוכחות נרשמה בהצלחה");
     } catch (err) {
       setStep("error");
-      setError(err instanceof Error ? err.message : "שגיאה בהעלאת התמונה.");
+      setError(err instanceof Error ? err.message : "העלאת התמונה נכשלה.\n\nאנא נסה שוב.");
     }
   };
 
   const title = mode === "check-in" ? "צילום כניסה" : "צילום יציאה";
-  const canCapture = step === "preview" || step === "camera";
 
   return (
     <Modal open={open} onClose={closeModal} title={title} className="max-w-xl">
       <div className="space-y-4">
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
           <div className="flex items-center gap-2 font-medium text-slate-700"><MapPin className="h-4 w-4" />{message}</div>
-          {error && <p className="mt-2 text-red-600">{error}</p>}
+          {error && <p className="mt-2 text-red-600 whitespace-pre-line">{error}</p>}
         </div>
 
         {step === "camera" || step === "preview" ? (
@@ -164,13 +177,7 @@ export function AttendanceCameraModal({ open, onClose, mode, userId, onVerified 
             </>
           )}
 
-          {(step === "camera" || step === "preview") && !previewUrl && (
-            <Button type="button" onClick={handleCapture}>
-              <Camera className="mr-2 h-4 w-4" />צילום
-            </Button>
-          )}
-
-          {step === "camera" && previewUrl && (
+          {step === "camera" && (
             <Button type="button" onClick={handleCapture}>
               <Camera className="mr-2 h-4 w-4" />צילום
             </Button>
