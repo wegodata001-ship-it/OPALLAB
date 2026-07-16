@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Textarea, Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DentalChart } from "@/components/orders/dental-chart";
+import { ShadePicker } from "@/components/orders/shade-picker";
 import { MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS } from "@/lib/constants/labels";
 import { useApp } from "@/providers/AppProvider";
 import { cn } from "@/lib/utils";
@@ -79,7 +80,7 @@ export function OrderEditForm({ order, onDone }: OrderEditFormProps) {
               ))}
             </div>
           </div>
-          <div><Label>צבע Shade</Label><Input value={shade} onChange={(e) => setShade(e.target.value)} /></div>
+          <div><Label>צבע Shade</Label><ShadePicker value={shade} onChange={setShade} /></div>
           <div><Label>תאריך סיום</Label><Input type="date" value={completionDate} onChange={(e) => setCompletionDate(e.target.value)} /></div>
           <div><Label>מחיר ₪</Label><Input type="number" value={totalPrice} onChange={(e) => setTotalPrice(e.target.value)} /></div>
         </div>

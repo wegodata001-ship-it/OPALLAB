@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input, Label, Textarea, Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DentalChart } from "@/components/orders/dental-chart";
+import { ShadePicker } from "@/components/orders/shade-picker";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { OrderStageIndicator } from "@/components/orders/order-stage-indicator";
 import { ExportActions } from "@/components/shared/export-actions";
@@ -289,7 +290,7 @@ function OrdersContent() {
                   </div>
                 </div>
                 <div><Label>שם המטופל</Label><Input value={patientName} onChange={(e) => setPatientName(e.target.value)} placeholder="אופציונלי" /></div>
-                <div><Label>צבע Shade</Label><Input value={shade} onChange={(e) => setShade(e.target.value)} placeholder="A2" /></div>
+                <div><Label>צבע Shade</Label><ShadePicker value={shade} onChange={setShade} /></div>
               </div>
               <div className="grid sm:grid-cols-4 gap-4">
                 <div><Label>גיל</Label><Input type="number" value={patientAge} onChange={(e) => setPatientAge(e.target.value)} /></div>
