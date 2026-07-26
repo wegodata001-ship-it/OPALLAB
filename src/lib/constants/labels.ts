@@ -26,7 +26,7 @@ export const USER_ROLE_LABELS: Record<UserRole, string> = {
 };
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
-  RECEIVED: "התקבלה",
+  RECEIVED: "חדשה",
   FILES_ATTACHED: "קבצים צורפו",
   DESIGN: "עיצוב",
   PRINTING_3D: "הדפסה תלת-ממד",
@@ -34,7 +34,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   PROCESSING: "עיבוד",
   FINISH: "גימור",
   PACKAGING: "אריזה",
-  SHIPPED: "נשלחה",
+  SHIPPED: "מוכנה למשלוח",
   DELIVERED: "נמסרה",
   CANCELLED: "בוטלה",
 };

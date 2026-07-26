@@ -4,13 +4,16 @@ import { requireAttendanceManager } from "@/lib/attendance/management/auth";
 import {
   getActiveAttendanceRecords,
   getAttendanceKpis,
+  getAttendancePhotoSignedUrl,
   getAttendanceRecordById,
   getAttendanceRecords,
   getAttendanceRecordsForExport,
+  type AttendancePhotoKind,
 } from "@/lib/attendance/management/service";
 import type { AttendanceManagementQuery } from "@/lib/attendance/management/types";
 import { jsonError, jsonOk } from "@/lib/api/response";
 import { buildAttendanceExport } from "@/lib/attendance/management/export";
+import { AppError } from "@/lib/errors/app-error";
 import type { UserRole } from "@/lib/types";
 
 function parseQuery(searchParams: URLSearchParams): AttendanceManagementQuery {
@@ -55,6 +58,18 @@ export async function GET(request: NextRequest) {
       const record = await getAttendanceRecordById(id);
       if (!record) return jsonError(new Error("רשומה לא נמצאה"));
       return jsonOk(record);
+    }
+
+    if (view === "photo") {
+      const id = searchParams.get("id");
+      const kind = searchParams.get("kind") as AttendancePhotoKind | null;
+      if (!id) return jsonError(new AppError("VALIDATION_ERROR", "חסר מזהה רשומה", 400));
+      if (kind !== "check-in" && kind !== "check-out") {
+        return jsonError(new AppError("VALIDATION_ERROR", "סוג תמונה לא תקין", 400));
+      }
+      const photo = await getAttendancePhotoSignedUrl(id, kind);
+      if (!photo) return jsonError(new AppError("NOT_FOUND", "אין תמונה זמינה", 404));
+      return jsonOk(photo);
     }
 
     const format = searchParams.get("format");

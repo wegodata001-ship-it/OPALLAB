@@ -76,14 +76,16 @@ function defaultDateRange() {
 
 function PhotoThumb({
   url,
+  hasPhoto,
   label,
   onClick,
 }: {
   url?: string | null;
+  hasPhoto?: boolean;
   label: string;
   onClick: () => void;
 }) {
-  if (!url) {
+  if (!url && !hasPhoto) {
     return <span className="inline-block min-w-[44px] text-center text-xs text-slate-400">—</span>;
   }
   return (
@@ -95,9 +97,21 @@ function PhotoThumb({
         e.stopPropagation();
         onClick();
       }}
-      className="rounded-md border overflow-hidden hover:ring-2 ring-opal-gold/60 shrink-0"
+      className="rounded-md border overflow-hidden hover:ring-2 ring-opal-gold/60 shrink-0 bg-slate-50"
     >
-      <img src={url} alt={label} className="h-11 w-11 object-cover block" referrerPolicy="no-referrer" />
+      {url ? (
+        <img
+          src={url}
+          alt={label}
+          className="h-11 w-11 object-cover block"
+          referrerPolicy="no-referrer"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      ) : (
+        <span className="h-11 w-11 flex items-center justify-center text-[10px] text-slate-500">תמונה</span>
+      )}
     </button>
   );
 }
@@ -192,10 +206,27 @@ export default function AttendanceManagementPage() {
     return () => window.clearInterval(id);
   }, [tab, loadActive]);
 
-  const openSinglePhoto = (url: string | null | undefined, label: string) => {
-    if (!url?.trim()) return;
-    setPhotoModal({ photos: [{ url, label }], index: 0 });
+  const openPhoto = (
+    record: AttendanceManagementRecord,
+    kind: "check-in" | "check-out",
+  ) => {
+    const url = kind === "check-in" ? record.checkInPhotoUrl : record.checkOutPhotoUrl;
+    const path = kind === "check-in" ? record.checkInPhotoPath : record.checkOutPhotoPath;
+    if (!url?.trim() && !path?.trim()) return;
+    setPhotoModal({
+      photos: [
+        {
+          url,
+          label: kind === "check-in" ? "צילום כניסה" : "צילום יציאה",
+          recordId: record.id,
+          kind,
+        },
+      ],
+      index: 0,
+    });
   };
+
+  const isOwner = Boolean(currentUser && (currentUser.role === "OWNER" || currentUser.roles?.includes("OWNER")));
 
   const handleExport = async (format: "csv" | "pdf") => {
     if (format === "csv") {
@@ -396,8 +427,9 @@ export default function AttendanceManagementPage() {
                     <td className="p-3">
                       <PhotoThumb
                         url={r.checkInPhotoUrl}
+                        hasPhoto={Boolean(r.checkInPhotoUrl || r.checkInPhotoPath)}
                         label="צילום כניסה"
-                        onClick={() => openSinglePhoto(r.checkInPhotoUrl, "צילום כניסה")}
+                        onClick={() => openPhoto(r, "check-in")}
                       />
                     </td>
                     <td className="p-3">
@@ -430,8 +462,9 @@ export default function AttendanceManagementPage() {
                   <div className="flex flex-wrap gap-2 items-center">
                     <PhotoThumb
                       url={r.checkInPhotoUrl}
+                      hasPhoto={Boolean(r.checkInPhotoUrl || r.checkInPhotoPath)}
                       label="צילום כניסה"
-                      onClick={() => openSinglePhoto(r.checkInPhotoUrl, "צילום כניסה")}
+                      onClick={() => openPhoto(r, "check-in")}
                     />
                     <Button type="button" size="sm" variant="outline" onClick={() => setDrawerRecord(r)}>פרטי הרשומה</Button>
                   </div>
@@ -508,15 +541,17 @@ export default function AttendanceManagementPage() {
                         <td className="p-2">
                           <PhotoThumb
                             url={r.checkInPhotoUrl}
+                            hasPhoto={Boolean(r.checkInPhotoUrl || r.checkInPhotoPath)}
                             label="צילום כניסה"
-                            onClick={() => openSinglePhoto(r.checkInPhotoUrl, "צילום כניסה")}
+                            onClick={() => openPhoto(r, "check-in")}
                           />
                         </td>
                         <td className="p-2">
                           <PhotoThumb
                             url={r.checkOutPhotoUrl}
+                            hasPhoto={Boolean(r.checkOutPhotoUrl || r.checkOutPhotoPath)}
                             label="צילום יציאה"
-                            onClick={() => openSinglePhoto(r.checkOutPhotoUrl, "צילום יציאה")}
+                            onClick={() => openPhoto(r, "check-out")}
                           />
                         </td>
                         <td className="p-2">
@@ -541,13 +576,15 @@ export default function AttendanceManagementPage() {
                       <div className="flex flex-wrap gap-2 items-center">
                         <PhotoThumb
                           url={r.checkInPhotoUrl}
+                          hasPhoto={Boolean(r.checkInPhotoUrl || r.checkInPhotoPath)}
                           label="צילום כניסה"
-                          onClick={() => openSinglePhoto(r.checkInPhotoUrl, "צילום כניסה")}
+                          onClick={() => openPhoto(r, "check-in")}
                         />
                         <PhotoThumb
                           url={r.checkOutPhotoUrl}
+                          hasPhoto={Boolean(r.checkOutPhotoUrl || r.checkOutPhotoPath)}
                           label="צילום יציאה"
-                          onClick={() => openSinglePhoto(r.checkOutPhotoUrl, "צילום יציאה")}
+                          onClick={() => openPhoto(r, "check-out")}
                         />
                         <Button size="sm" variant="outline" onClick={() => setDrawerRecord(r)}>פרטים</Button>
                       </div>
@@ -587,13 +624,16 @@ export default function AttendanceManagementPage() {
         open={Boolean(drawerRecord)}
         onClose={() => setDrawerRecord(null)}
         record={drawerRecord}
-        onOpenPhoto={(url, label) => openSinglePhoto(url, label)}
+        onOpenPhoto={(kind) => {
+          if (drawerRecord) openPhoto(drawerRecord, kind);
+        }}
       />
       <AttendancePhotoModal
         open={Boolean(photoModal)}
         onClose={() => setPhotoModal(null)}
         photos={photoModal?.photos ?? []}
         startIndex={photoModal?.index}
+        allowDownload={isOwner}
       />
     </>
   );

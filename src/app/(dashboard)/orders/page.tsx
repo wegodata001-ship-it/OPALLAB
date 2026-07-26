@@ -7,7 +7,8 @@ import { Header } from "@/components/layout/sidebar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input, Label, Textarea, Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { DentalChart } from "@/components/orders/dental-chart";
+import { DentalChart } from "@/components/DentalChart";
+import { OrderHistoryButton } from "@/components/orders/order-history-modal";
 import { ShadePicker } from "@/components/orders/shade-picker";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { OrderStageIndicator } from "@/components/orders/order-stage-indicator";
@@ -222,36 +223,41 @@ function OrdersContent() {
                 ? getOrderStageRelevance(currentUser, order.status)
                 : null;
               return (
-              <Link key={order.id} href={`/orders/${order.id}`}>
-                <Card
-                  className={cn(
-                    "hover:shadow-md transition-all cursor-pointer",
-                    relevance ? STAGE_RELEVANCE_CARD_CLASS[relevance] : "hover:border-opal-gold/20",
-                  )}
-                >
-                  <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-slate-900">{order.serialNumber}</span>
-                        {currentUser && !isAdmin ? (
-                          <OrderStageIndicator user={currentUser} status={order.status} />
-                        ) : (
-                          <StatusBadge status={order.status} />
-                        )}
+              <div key={order.id} className="relative">
+                <div className="absolute left-3 top-3 z-10" onClick={(e) => e.stopPropagation()}>
+                  <OrderHistoryButton order={order} />
+                </div>
+                <Link href={`/orders/${order.id}`}>
+                  <Card
+                    className={cn(
+                      "hover:shadow-md transition-all cursor-pointer",
+                      relevance ? STAGE_RELEVANCE_CARD_CLASS[relevance] : "hover:border-opal-gold/20",
+                    )}
+                  >
+                    <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 pl-12">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-slate-900">{order.serialNumber}</span>
+                          {currentUser && !isAdmin ? (
+                            <OrderStageIndicator user={currentUser} status={order.status} />
+                          ) : (
+                            <StatusBadge status={order.status} />
+                          )}
+                        </div>
+                        <p className="text-sm text-slate-600 mt-0.5">{order.doctor.name} · {order.patient.name}</p>
+                        <p className="text-xs text-slate-400">
+                          {order.materials.map((m) => MATERIAL_TYPE_LABELS[m]).join(", ")}
+                          {order.selectedTeeth.length > 0 && ` · שיניים ${order.selectedTeeth.join(",")}`}
+                        </p>
                       </div>
-                      <p className="text-sm text-slate-600 mt-0.5">{order.doctor.name} · {order.patient.name}</p>
-                      <p className="text-xs text-slate-400">
-                        {order.materials.map((m) => MATERIAL_TYPE_LABELS[m]).join(", ")}
-                        {order.selectedTeeth.length > 0 && ` · שיניים ${order.selectedTeeth.join(",")}`}
-                      </p>
-                    </div>
-                    <div className="text-left text-sm text-slate-500">
-                      <p>יעד: {formatDate(order.completionDate)}</p>
-                      {order.totalPrice && <p className="font-semibold text-opal-gold-dark">{formatCurrency(order.totalPrice)}</p>}
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
+                      <div className="text-left text-sm text-slate-500">
+                        <p>יעד: {formatDate(order.completionDate)}</p>
+                        {order.totalPrice && <p className="font-semibold text-opal-gold-dark">{formatCurrency(order.totalPrice)}</p>}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </Link>
+              </div>
             );
             })}
           </div>

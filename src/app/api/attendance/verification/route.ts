@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireSessionUserId } from "@/lib/auth/session";
 import { buildAttendancePhotoPath } from "@/lib/attendance/verification/storage";
-import { uploadFile } from "@/lib/supabase/storage";
+import { getSignedUrl, uploadFile } from "@/lib/supabase/storage";
 import { STORAGE_BUCKETS } from "@/lib/supabase/admin";
 import { AppError } from "@/lib/errors/app-error";
 
@@ -32,12 +32,16 @@ export async function POST(req: Request) {
     );
 
     await uploadFile(STORAGE_BUCKETS.USERS, storagePath, bytes, file.type || "image/jpeg");
-    const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKETS.USERS}/${storagePath}`;
+    // Bucket `users` is private — never return a public object URL.
+    const photoUrl = await getSignedUrl(STORAGE_BUCKETS.USERS, storagePath, 60 * 60);
+    if (!photoUrl) {
+      throw new AppError("STORAGE_ERROR", "יצירת קישור מאובטח לתמונה נכשלה", 500);
+    }
 
     return NextResponse.json({
       success: true,
       data: {
-        photoUrl: publicUrl,
+        photoUrl,
         photoPath: storagePath,
         fileName,
       },

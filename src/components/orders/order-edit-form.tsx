@@ -5,7 +5,7 @@ import type { OrderWithRelations, MaterialType, WorkType, Gender } from "@/lib/t
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Textarea, Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { DentalChart } from "@/components/orders/dental-chart";
+import { DentalChart } from "@/components/DentalChart";
 import { ShadePicker } from "@/components/orders/shade-picker";
 import { MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS } from "@/lib/constants/labels";
 import { useApp } from "@/providers/AppProvider";

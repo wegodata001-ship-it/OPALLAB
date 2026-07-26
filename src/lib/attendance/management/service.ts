@@ -1,6 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { mapAttendance } from "@/lib/mappers/prisma-to-app";
+import {
+  extractAttendanceStoragePath,
+  resolveAttendancePhotoUrl,
+  withSignedAttendancePhotos,
+} from "@/lib/attendance/verification/photo-url";
 import type { UserRole } from "@/lib/types";
 import type {
   AttendanceActiveRecord,
@@ -78,21 +83,27 @@ function mapEmployee(user: {
   };
 }
 
-function enrichRecord(
+async function enrichRecord(
   record: ReturnType<typeof mapAttendance>,
   user: Parameters<typeof mapEmployee>[0],
-): AttendanceManagementRecord {
-  const end = record.checkOut ?? new Date();
-  const durationHours = (end.getTime() - record.checkIn.getTime()) / 3_600_000;
-  const lat = record.checkInLatitude ?? record.latitude;
-  const lng = record.checkInLongitude ?? record.longitude;
+): Promise<AttendanceManagementRecord> {
+  const signed = await withSignedAttendancePhotos(record);
+  const end = signed.checkOut ?? new Date();
+  const durationHours = (end.getTime() - signed.checkIn.getTime()) / 3_600_000;
+  const lat = signed.checkInLatitude ?? signed.latitude;
+  const lng = signed.checkInLongitude ?? signed.longitude;
   return {
-    ...record,
+    ...signed,
     employee: mapEmployee(user),
-    durationHours: record.checkOut ? durationHours : null,
-    isLate: isLateCheckIn(record.checkIn),
-    gpsValid: isGpsValid(lat, lng, record.checkInAccuracy),
-    hasPhoto: Boolean(record.checkInPhotoUrl || record.checkOutPhotoUrl),
+    durationHours: signed.checkOut ? durationHours : null,
+    isLate: isLateCheckIn(signed.checkIn),
+    gpsValid: isGpsValid(lat, lng, signed.checkInAccuracy),
+    hasPhoto: Boolean(
+      signed.checkInPhotoUrl ||
+        signed.checkOutPhotoUrl ||
+        signed.checkInPhotoPath ||
+        signed.checkOutPhotoPath,
+    ),
   };
 }
 
@@ -198,6 +209,8 @@ function buildRecordWhere(query: AttendanceManagementQuery, lateIds: string[] | 
     where.OR = [
       { checkInPhotoUrl: { not: null } },
       { checkOutPhotoUrl: { not: null } },
+      { checkInPhotoPath: { not: null } },
+      { checkOutPhotoPath: { not: null } },
     ];
   }
   if (query.photo === "none") {
@@ -205,6 +218,8 @@ function buildRecordWhere(query: AttendanceManagementQuery, lateIds: string[] | 
       ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
       { checkInPhotoUrl: null },
       { checkOutPhotoUrl: null },
+      { checkInPhotoPath: null },
+      { checkOutPhotoPath: null },
     ];
   }
 
@@ -313,13 +328,15 @@ export async function getActiveAttendanceRecords(
   });
 
   const now = Date.now();
-  return rows.map((row) => {
-    const base = enrichRecord(mapAttendance(row), row.user);
-    return {
-      ...base,
-      liveDurationMs: now - base.checkIn.getTime(),
-    };
-  });
+  return Promise.all(
+    rows.map(async (row) => {
+      const base = await enrichRecord(mapAttendance(row), row.user);
+      return {
+        ...base,
+        liveDurationMs: now - base.checkIn.getTime(),
+      };
+    }),
+  );
 }
 
 export async function getNotCheckedInEmployees(
@@ -373,7 +390,7 @@ export async function getAttendanceRecords(
   ]);
 
   return {
-    records: rows.map((row) => enrichRecord(mapAttendance(row), row.user)),
+    records: await Promise.all(rows.map((row) => enrichRecord(mapAttendance(row), row.user))),
     total,
     page,
     limit,
@@ -412,7 +429,7 @@ export async function getAttendanceRecordsForExport(
     take: MAX_EXPORT,
   });
 
-  return rows.map((row) => enrichRecord(mapAttendance(row), row.user));
+  return Promise.all(rows.map((row) => enrichRecord(mapAttendance(row), row.user)));
 }
 
 export async function getAttendanceRecordById(id: string): Promise<AttendanceManagementRecord | null> {
@@ -424,4 +441,34 @@ export async function getAttendanceRecordById(id: string): Promise<AttendanceMan
   });
   if (!row) return null;
   return enrichRecord(mapAttendance(row), row.user);
+}
+
+export type AttendancePhotoKind = "check-in" | "check-out";
+
+/** Fresh Signed URL for attendance photo (private `users` bucket). */
+export async function getAttendancePhotoSignedUrl(
+  recordId: string,
+  kind: AttendancePhotoKind,
+): Promise<{ url: string; path: string } | null> {
+  const row = await prisma.attendanceRecord.findUnique({
+    where: { id: recordId },
+    select: {
+      checkInPhotoPath: true,
+      checkOutPhotoPath: true,
+      checkInPhotoUrl: true,
+      checkOutPhotoUrl: true,
+    },
+  });
+  if (!row) return null;
+
+  const photoPath = kind === "check-in" ? row.checkInPhotoPath : row.checkOutPhotoPath;
+  const photoUrl = kind === "check-in" ? row.checkInPhotoUrl : row.checkOutPhotoUrl;
+  const url = await resolveAttendancePhotoUrl(photoPath, photoUrl);
+  if (!url) return null;
+
+  const path =
+    photoPath?.trim() ||
+    extractAttendanceStoragePath(photoUrl) ||
+    "";
+  return { url, path };
 }

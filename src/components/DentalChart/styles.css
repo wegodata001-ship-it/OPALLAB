@@ -1,0 +1,153 @@
+/* DentalChart — reference-matched clinical SVG */
+
+.dc-root {
+  --dc-stroke: #cfcfcf;
+  --dc-stroke-hover: #9ca3af;
+  --dc-number: #111827;
+  --dc-selected: #7c3aed;
+  --dc-selected-stroke: #5b21b6;
+  --dc-hover: 150ms ease-out;
+  --dc-select: 200ms ease-out;
+}
+
+.dc-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 40rem;
+  margin-inline: auto;
+  overflow: visible;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.dc-tooth {
+  cursor: pointer;
+  outline: none;
+  transition: transform var(--dc-hover), filter var(--dc-hover);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.dc-tooth--disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.dc-tooth--interactive:hover:not(.dc-tooth--disabled) {
+  transform: scale(1.04);
+  filter: url(#dc-hover);
+}
+
+.dc-tooth--interactive:hover:not(.dc-tooth--disabled) .dc-tooth-body {
+  stroke: var(--dc-stroke-hover);
+}
+
+.dc-tooth:focus-visible .dc-tooth-body {
+  stroke: var(--dc-selected);
+  stroke-width: 2.4;
+}
+
+.dc-tooth-body {
+  /* fill comes from SVG gradient (url(#dc-fill)) */
+  stroke: var(--dc-stroke);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  pointer-events: all;
+  filter: url(#dc-glow);
+  transition:
+    fill var(--dc-select),
+    stroke var(--dc-select),
+    filter var(--dc-select);
+}
+
+.dc-tooth-shade {
+  fill: rgba(255, 255, 255, 0.55);
+  stroke: none;
+  pointer-events: none;
+  transition: opacity var(--dc-select);
+}
+
+.dc-tooth-depth {
+  fill: rgba(15, 23, 42, 0.06);
+  stroke: none;
+  pointer-events: none;
+  transition: opacity var(--dc-select);
+}
+
+.dc-tooth-anatomy {
+  fill: none;
+  stroke: #b0b0b0;
+  stroke-width: 1.05;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+  pointer-events: none;
+  transition: stroke var(--dc-select), opacity var(--dc-select);
+}
+
+.dc-tooth-number {
+  fill: var(--dc-number);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+  transition: fill var(--dc-select);
+}
+
+/* Selected */
+.dc-tooth--selected .dc-tooth-body {
+  fill: var(--dc-selected) !important;
+  stroke: var(--dc-selected-stroke);
+  filter: url(#dc-selected-glow);
+}
+
+.dc-tooth--selected .dc-tooth-shade {
+  fill: rgba(255, 255, 255, 0.18);
+}
+
+.dc-tooth--selected .dc-tooth-depth {
+  fill: rgba(0, 0, 0, 0.14);
+}
+
+.dc-tooth--selected .dc-tooth-anatomy {
+  stroke: rgba(255, 255, 255, 0.75);
+}
+
+.dc-tooth--selected .dc-tooth-number {
+  fill: #ffffff;
+}
+
+.dc-tooth--selected.dc-tooth--interactive:hover:not(.dc-tooth--disabled) .dc-tooth-body {
+  fill: #6d28d9 !important;
+}
+
+/* Status colors — shape unchanged */
+.dc-tooth--completed .dc-tooth-body {
+  fill: #86efac !important;
+  stroke: #15803d;
+}
+
+.dc-tooth--processing .dc-tooth-body {
+  fill: #fde68a !important;
+  stroke: #b45309;
+}
+
+.dc-tooth--problem .dc-tooth-body {
+  fill: #fca5a5 !important;
+  stroke: #b91c1c;
+}
+
+.dc-tooth--completed .dc-tooth-anatomy,
+.dc-tooth--processing .dc-tooth-anatomy,
+.dc-tooth--problem .dc-tooth-anatomy {
+  stroke: rgba(31, 41, 55, 0.45);
+}
+
+@media (max-width: 640px) {
+  .dc-tooth-number {
+    font-size: 18px;
+  }
+}

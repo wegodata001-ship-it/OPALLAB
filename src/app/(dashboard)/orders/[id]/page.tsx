@@ -8,11 +8,12 @@ import { Button } from "@/components/ui/button";
 import { useApp } from "@/providers/AppProvider";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { WorkflowTracker } from "@/components/orders/workflow-tracker";
-import { DentalChart } from "@/components/orders/dental-chart";
+import { DentalChart } from "@/components/DentalChart";
 import { OrderEditForm } from "@/components/orders/order-edit-form";
 import { OrderFilesSection } from "@/components/orders/order-files-section";
 import { ExportActions } from "@/components/shared/export-actions";
-import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
+import { OrderHistoryButton } from "@/components/orders/order-history-modal";
+import { formatDate, formatCurrency } from "@/lib/utils";
 import { canEditOrders } from "@/lib/permissions";
 import {
   MATERIAL_TYPE_LABELS,
@@ -63,6 +64,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         description={`${order.doctor.name} · ${order.patient.name}`}
         actions={
           <div className="flex gap-2">
+            <OrderHistoryButton order={order} showLabel />
             {canEdit && !editing && (
               <Button variant="outline" onClick={() => setEditing(true)}>
                 <Pencil className="h-4 w-4" />עריכה
@@ -120,14 +122,14 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>היסטוריה</CardTitle></CardHeader>
-          <CardContent className="space-y-2">
-            {order.statusHistory.map((h) => (
-              <div key={h.id} className="flex justify-between text-sm border-r-2 border-opal-gold pr-3">
-                <div><p className="font-medium">{ORDER_STATUS_LABELS[h.status]}</p>{h.notes && <p className="text-xs text-slate-400">{h.notes}</p>}</div>
-                <span className="text-xs text-slate-400">{formatDateTime(h.createdAt)}</span>
-              </div>
-            ))}
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>היסטוריית תנועות</CardTitle>
+            <OrderHistoryButton order={order} showLabel />
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-slate-500">
+              {order.statusHistory.length} תנועות · לחץ על היסטוריה לצפייה מלאה
+            </p>
           </CardContent>
         </Card>
       </div>

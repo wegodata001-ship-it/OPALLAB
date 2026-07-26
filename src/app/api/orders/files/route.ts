@@ -1,14 +1,16 @@
-import { requireSessionUserId } from "@/lib/auth/session";
 import { AppError } from "@/lib/errors/app-error";
 import { appDataService } from "@/lib/services/app-data.service";
 import { jsonError, jsonOk } from "@/lib/api/response";
 import { detectFileType } from "@/lib/file-utils";
+import { assertCanUploadOrderFile, requireSessionUser } from "@/lib/rbac";
 
 const MAX_UPLOAD_BYTES = (Number(process.env.MAX_UPLOAD_SIZE_MB) || 100) * 1024 * 1024;
 
 export async function POST(request: Request) {
   try {
-    const userId = await requireSessionUserId();
+    const user = await requireSessionUser();
+    await assertCanUploadOrderFile(user);
+    const userId = user.id;
     const formData = await request.formData();
     const orderId = formData.get("orderId");
     const file = formData.get("file");

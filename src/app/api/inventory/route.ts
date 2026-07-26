@@ -1,12 +1,14 @@
-import { requireSessionUserId } from "@/lib/auth/session";
 import { AppError } from "@/lib/errors/app-error";
 import { appDataService } from "@/lib/services/app-data.service";
 import { jsonError, jsonOk, parseJsonBody } from "@/lib/api/response";
+import { assertCanManageInventory, requireSessionUser } from "@/lib/rbac";
 import type { InventoryItem, InventoryMovement } from "@/lib/types";
 
 export async function POST(request: Request) {
   try {
-    const userId = await requireSessionUserId();
+    const user = await requireSessionUser();
+    await assertCanManageInventory(user);
+    const userId = user.id;
     const contentType = request.headers.get("content-type") ?? "";
 
     if (contentType.includes("multipart/form-data")) {

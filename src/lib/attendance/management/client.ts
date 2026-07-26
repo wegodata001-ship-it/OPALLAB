@@ -90,6 +90,15 @@ export async function fetchAttendanceRecord(id: string): Promise<AttendanceManag
   return reviveRecord(row) as AttendanceManagementRecord;
 }
 
+export async function fetchAttendancePhotoUrl(
+  recordId: string,
+  kind: "check-in" | "check-out",
+): Promise<{ url: string; path: string }> {
+  return getJson(
+    `/api/attendance/management?view=photo&id=${encodeURIComponent(recordId)}&kind=${kind}`,
+  );
+}
+
 export function attendanceExportUrl(query: AttendanceManagementQuery, format: "csv" | "pdf"): string {
   const qs = toQueryString({ ...query, view: "records", format: format === "pdf" ? "pdf" : "csv" });
   return `/api/attendance/management?${qs}`;

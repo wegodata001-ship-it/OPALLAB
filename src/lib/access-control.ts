@@ -6,11 +6,8 @@ import { getDoctorIdForUser, isLabEmployee, isSystemAdminUser } from "@/lib/user
 
 /**
  * Prisma filter for orders visible to a user.
- * - Admin / secretary: null (all orders)
- * - Doctor portal: orders for linked doctor
- * - Lab employee: null (all orders — single-tenant; no businessId on Order)
- *
- * Status is never used for filtering. Stage relevance is UI-only.
+ * - Admin / secretary / owner / lab employees: all orders (actions are gated separately)
+ * - Doctor portal: linked doctor only
  */
 export function buildOrderWhereForUser(
   user: User,
@@ -84,10 +81,14 @@ export function filterSnapshotForUser(snapshot: AppDataSnapshot, user: User): Ap
     filtered.attendance = [];
   }
 
-  if (!isSystemAdminUser(user) && !isDoctorPortalUser(user)) {
+  // Lab staff see all orders; shipments follow visible orders
+  if (canViewAllOrders(user)) {
     const visibleOrderIds = new Set(filtered.orders.map((o) => o.id));
-    filtered.shipments = snapshot.shipments.filter((s) => visibleOrderIds.has(s.orderId));
-  } else if (!canViewAllOrders(user)) {
+    if (!canAccessModule(user, "shipping") && !isSystemAdminUser(user)) {
+      // Keep shipment refs for order context, but packaging module still owns the shipping desk
+      filtered.shipments = snapshot.shipments.filter((s) => visibleOrderIds.has(s.orderId));
+    }
+  } else {
     filtered.orders = [];
     filtered.shipments = [];
   }

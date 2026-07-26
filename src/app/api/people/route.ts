@@ -1,11 +1,14 @@
-import { requireSessionUserId } from "@/lib/auth/session";
 import { appDataService } from "@/lib/services/app-data.service";
 import { jsonError, jsonOk, parseJsonBody } from "@/lib/api/response";
-import type { CreateDoctorInput, Doctor, UpdateDoctorInput, User, UserRole } from "@/lib/types";
+import { assertCanManagePeople, requireSessionUser } from "@/lib/rbac";
+import type { CreateDoctorInput, UpdateDoctorInput, User } from "@/lib/types";
 
 export async function POST(request: Request) {
   try {
-    const actorId = await requireSessionUserId();
+    const actor = await requireSessionUser();
+    await assertCanManagePeople(actor);
+    const actorId = actor.id;
+
     const body = await parseJsonBody<
       | { entity: "user"; action: "add"; data: Omit<User, "id" | "createdAt" | "updatedAt"> }
       | { entity: "user"; action: "update"; id: string; updates: Partial<User> & { password?: string } }

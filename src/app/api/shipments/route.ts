@@ -1,10 +1,12 @@
-import { requireSessionUserId } from "@/lib/auth/session";
 import { appDataService } from "@/lib/services/app-data.service";
 import { jsonError, jsonOk, parseJsonBody } from "@/lib/api/response";
+import { assertCanManageShipments, assertModuleAccess, requireSessionUser } from "@/lib/rbac";
 
 export async function POST(request: Request) {
   try {
-    const userId = await requireSessionUserId();
+    const user = await requireSessionUser();
+    await assertModuleAccess(user, "shipping", "SHIPPING_MODULE");
+    await assertCanManageShipments(user);
     const body = await parseJsonBody<{
       orderId: string;
       deliveryNote: string;
@@ -13,7 +15,7 @@ export async function POST(request: Request) {
     const shipment = await appDataService.createShipment(
       body.orderId,
       body.deliveryNote,
-      userId,
+      user.id,
       body.courier,
     );
     return jsonOk({ shipment });
@@ -24,7 +26,9 @@ export async function POST(request: Request) {
 
 export async function GET() {
   try {
-    await requireSessionUserId();
+    const user = await requireSessionUser();
+    await assertModuleAccess(user, "shipping", "SHIPPING_MODULE");
+    await assertCanManageShipments(user);
     return jsonOk({ deliveryNote: appDataService.previewDeliveryNote() });
   } catch (error) {
     return jsonError(error);

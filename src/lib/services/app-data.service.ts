@@ -45,7 +45,13 @@ import type {
   UserRole,
 } from "@/lib/types";
 import { generateDeliveryNote, generateSerialNumber } from "@/lib/utils";
-import { canCompleteStage, canUndoStage, STAGE_COMPLETION_FORBIDDEN_MESSAGE } from "@/lib/workflow-permissions";
+import {
+  canCompleteStage,
+  canUndoStage,
+  isStageCompletionAdmin,
+  PRODUCTION_STAGES,
+  STAGE_COMPLETION_FORBIDDEN_MESSAGE,
+} from "@/lib/workflow-permissions";
 import {
   buildInventoryImagePath,
   buildOrderFilePath,
@@ -56,7 +62,7 @@ import { defaultLabSettings } from "@/lib/constants/lab-settings";
 import { filterSnapshotForUser, buildOrderWhereForUser } from "@/lib/access-control";
 import { writeAuditLog } from "@/lib/audit-log";
 import { createAuthUser, deleteAuthUser, updateAuthUser } from "@/lib/supabase/auth-admin";
-import { normalizeUserRoles, primaryRole, isSystemAdminUser } from "@/lib/user-roles";
+import { normalizeUserRoles, primaryRole, isSystemAdminUser, isDoctorUser } from "@/lib/user-roles";
 import { assertUserCanBeDeleted } from "@/lib/people/protected-users";
 import type { AuditLogEntry, Warehouse } from "@/lib/types";
 
@@ -175,9 +181,18 @@ export class AppDataService {
     const now = new Date();
     const patientName = input.patientName?.trim() || "לא צוין";
     const doctorName = input.doctorName?.trim() || "לא צוין";
+    const actor = await this.getUserById(userId);
 
     return prisma.$transaction(async (tx) => {
       let doctorId = input.doctorId;
+
+      // Doctors may only create orders for their own clinic profile
+      if (actor && isDoctorUser(actor) && !isSystemAdminUser(actor)) {
+        const linked = await tx.doctor.findFirst({ where: { userId } });
+        if (!linked) throw new AppError("FORBIDDEN", "לא נמצא פרופיל רופא מקושר", 403);
+        doctorId = linked.id;
+      }
+
       if (doctorId) {
         const exists = await tx.doctor.findUnique({ where: { id: doctorId } });
         if (!exists) doctorId = undefined;
@@ -347,10 +362,21 @@ export class AppDataService {
 
     const now = new Date();
     const nextStatus = STAGE_NEXT[input.stage];
-    const updatedStages = {
-      ...serializeCompletedStages(completedStages),
-      [input.stage]: { completedBy: currentUser.id, completedAt: now },
-    };
+    const updatedStages = { ...serializeCompletedStages(completedStages) };
+    const isAdmin = isStageCompletionAdmin(currentUser);
+
+    if (isAdmin) {
+      // Override: mark all stages up to and including the selected one
+      const targetIdx = PRODUCTION_STAGES.findIndex((s) => s.status === input.stage);
+      for (let i = 0; i <= targetIdx; i++) {
+        const s = PRODUCTION_STAGES[i].status;
+        if (!updatedStages[s]) {
+          updatedStages[s] = { completedBy: currentUser.id, completedAt: now.toISOString() };
+        }
+      }
+    } else {
+      updatedStages[input.stage] = { completedBy: currentUser.id, completedAt: now.toISOString() };
+    }
 
     await prisma.$transaction(async (tx) => {
       await tx.order.update({
@@ -367,7 +393,7 @@ export class AppDataService {
             orderId: input.orderId,
             status: nextStatus,
             changedBy: currentUser.id,
-            notes: "שלב הושלם ✓",
+            notes: isAdmin ? `Override: שלב ${input.stage} הושלם ע״י ניהול` : "שלב הושלם ✓",
           },
         });
       }
@@ -379,13 +405,23 @@ export class AppDataService {
     if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
 
     const completedStages = mapOrder(order).completedStages;
-    if (!canUndoStage(currentUser, input.stage, completedStages)) {
+    if (!canUndoStage(currentUser, input.stage, completedStages, order.status)) {
       throw new AppError("FORBIDDEN", "אין הרשאה לבטל שלב זה", 403);
     }
 
     const now = new Date();
     const rest = { ...serializeCompletedStages(completedStages) };
-    delete rest[input.stage];
+    const isAdmin = isStageCompletionAdmin(currentUser);
+    const targetIdx = PRODUCTION_STAGES.findIndex((s) => s.status === input.stage);
+
+    if (isAdmin && targetIdx >= 0) {
+      // Reopen: clear this stage and all subsequent completions
+      for (let i = targetIdx; i < PRODUCTION_STAGES.length; i++) {
+        delete rest[PRODUCTION_STAGES[i].status];
+      }
+    } else {
+      delete rest[input.stage];
+    }
 
     await prisma.$transaction([
       prisma.order.update({
@@ -401,7 +437,7 @@ export class AppDataService {
           orderId: input.orderId,
           status: input.stage,
           changedBy: currentUser.id,
-          notes: "ביטול סימון שלב",
+          notes: isAdmin ? `Override: פתיחה מחדש של שלב ${input.stage}` : "ביטול סימון שלב",
         },
       }),
     ]);
@@ -1300,6 +1336,32 @@ export class AppDataService {
       where: { userId, checkOut: null },
       orderBy: { checkIn: "desc" },
     });
+  }
+
+  async getUserByNfcTag(nfcTagId: string) {
+    const tag = nfcTagId.trim();
+    if (!tag) return null;
+    const user = await prisma.user.findFirst({
+      where: { nfcTagId: tag, isActive: true },
+    });
+    return user ? mapUser(user) : null;
+  }
+
+  async toggleAttendanceByNfc(
+    nfcTagId: string,
+    meta?: import("@/lib/types").AttendanceCheckInMeta,
+  ): Promise<{ action: "check-in" | "check-out"; userId: string; userName: string }> {
+    const user = await this.getUserByNfcTag(nfcTagId);
+    if (!user) throw new AppError("NOT_FOUND", "כרטיס NFC לא משויך לעובד פעיל", 404);
+
+    const open = await this.getOpenAttendanceRecord(user.id);
+    if (open) {
+      await this.checkOut(user.id, "NFC", meta);
+      return { action: "check-out", userId: user.id, userName: user.name };
+    }
+    await this.checkIn(user.id, "NFC", meta);
+    // Persist the scanned tag on the record if user's tag matches
+    return { action: "check-in", userId: user.id, userName: user.name };
   }
 
   async checkIn(

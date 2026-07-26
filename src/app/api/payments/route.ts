@@ -1,11 +1,12 @@
-import { requireSessionUserId } from "@/lib/auth/session";
 import { appDataService } from "@/lib/services/app-data.service";
 import { jsonError, jsonOk, parseJsonBody } from "@/lib/api/response";
+import { assertCanManagePayments, requireSessionUser } from "@/lib/rbac";
 import type { Payment, PaymentStatus } from "@/lib/types";
 
 export async function POST(request: Request) {
   try {
-    await requireSessionUserId();
+    const user = await requireSessionUser();
+    await assertCanManagePayments(user);
     const body = await parseJsonBody<
       | { action: "add"; payment: Omit<Payment, "id" | "createdAt"> }
       | { action: "balance"; doctorId: string; amount: number; status?: PaymentStatus }

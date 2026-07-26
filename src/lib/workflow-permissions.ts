@@ -1,8 +1,8 @@
 import type { OrderStatus, User, UserRole, StageCompletion, Order } from "@/lib/types";
 import { getUserRoles, isSystemAdminUser, userHasAnyRole, userHasRole } from "@/lib/user-roles";
 
-/** OWNER / ADMIN may complete any production stage without role restrictions. */
-export const STAGE_COMPLETION_ADMIN_ROLES: UserRole[] = ["ADMIN", "OWNER"];
+/** OWNER / ADMIN / SECRETARY may complete any production stage without role restrictions. */
+export const STAGE_COMPLETION_ADMIN_ROLES: UserRole[] = ["ADMIN", "OWNER", "SECRETARY"];
 
 /** Maps each production stage to the employee role required to mark it complete. */
 export const STAGE_REQUIRED_ROLE: Partial<Record<OrderStatus, UserRole>> = {
@@ -130,27 +130,61 @@ export function filterOrdersForProductionUser<T extends Order>(user: User, order
   return orders.filter((o) => myStages.includes(o.status));
 }
 
+/**
+ * Production staff: only the current stage.
+ * Owner / Admin / Secretary: override — any incomplete production stage.
+ */
 export function canCompleteStage(
   user: User,
   stage: OrderStatus,
   orderStatus: OrderStatus,
   completedStages: Record<string, StageCompletion>,
 ): boolean {
-  if (completedStages[stage]) return false;
-  if (orderStatus !== stage) return false;
   if (!STAGE_REQUIRED_ROLE[stage]) return false;
+  if (completedStages[stage]) return false;
+
+  // Full-lab managers: complete / jump any stage
+  if (isStageCompletionAdmin(user)) return true;
+
+  // Entry: design queue may still be RECEIVED / FILES_ATTACHED
+  if (
+    stage === "DESIGN" &&
+    (orderStatus === "RECEIVED" || orderStatus === "FILES_ATTACHED" || orderStatus === "DESIGN")
+  ) {
+    return userHasRole(user, "DESIGNER");
+  }
+
+  if (orderStatus !== stage) return false;
   return hasStageCompletionRole(user, stage);
 }
 
-/** עובד יכול לבטל רק שלב שסימן בעצמו; מנהל/מזכירות — כל שלב */
+/**
+ * Production staff: undo only stages they themselves completed.
+ * Owner / Admin / Secretary: reopen any stage that is done (explicit or implied by pipeline).
+ */
 export function canUndoStage(
   user: User,
   stage: OrderStatus,
   completedStages: Record<string, StageCompletion>,
+  orderStatus?: OrderStatus,
 ): boolean {
+  if (!STAGE_REQUIRED_ROLE[stage]) return false;
+
+  if (isStageCompletionAdmin(user)) {
+    if (completedStages[stage]) return true;
+    if (!orderStatus) return false;
+    const stageIndex = PRODUCTION_STAGES.findIndex((s) => s.status === stage);
+    const currentIndex = PRODUCTION_STAGES.findIndex((s) => s.status === orderStatus);
+    // Past this stage in the pipeline (including SHIPPED after packaging)
+    if (stageIndex >= 0 && currentIndex > stageIndex) return true;
+    if (stageIndex >= 0 && ["SHIPPED", "DELIVERED"].includes(orderStatus) && stageIndex <= PRODUCTION_STAGES.length - 1) {
+      return true;
+    }
+    return false;
+  }
+
   const completion = completedStages[stage];
   if (!completion) return false;
-  if (isPrivilegedRole(user)) return true;
   return completion.completedBy === user.id;
 }
 
@@ -170,12 +204,12 @@ export function rolesSummary(roles: UserRole[]): string {
 export const ROLE_PERMISSIONS_SUMMARY: Record<UserRole, string> = {
   OWNER: "גישה מלאה — כל המודולים, ביטול כל שלב",
   ADMIN: "גישה מלאה — כל המודולים, ביטול כל שלב",
-  SECRETARY: "הרשאות זהות למנהל — גישה מלאה לכל המערכת",
+  SECRETARY: "גישה מלאה — כל המודולים, סימון וביטול כל שלב",
   DESIGNER: "עיצוב — סימון/ביטול שלב עיצוב בלבד",
-  PRINTER: "הדפסה 3D — סימון/ביטול שלב ההדפסה בלבד",
-  MILLING: "חריטה — סימון/ביטול שלב החריטה בלבד",
-  PROCESSING: "עיבוד — סימון/ביטול שלב העיבוד בלבד",
-  FINISH: "גימור — סימון/ביטול שלב הגימור בלבד",
-  PACKAGING: "אריזה — סימון/ביטול שלב האריזה בלבד",
+  PRINTER: "הדפסה 3D — סימון/ביטול שלב ההדפסה",
+  MILLING: "חריטה — סימון/ביטול שלב החריטה",
+  PROCESSING: "עיבוד — סימון/ביטול שלב העיבוד",
+  FINISH: "גימור — סימון/ביטול שלב הגימור",
+  PACKAGING: "אריזה — סימון/ביטול שלב האריזה",
   DOCTOR: "פורטל רופא — מעקב הזמנות וכרטסת בלבד",
 };

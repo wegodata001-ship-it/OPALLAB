@@ -13,6 +13,7 @@ import type { Courier, Doctor, SalaryType, User, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { RoleMultiSelect } from "@/components/settings/role-multi-select";
 import { DoctorFormModal } from "@/components/settings/doctor-form-modal";
+import { SystemResetPanel } from "@/components/settings/system-reset-panel";
 import { getUserRoles, primaryRole } from "@/lib/user-roles";
 import { UserPlus, Stethoscope, Truck, Pencil, Trash2 } from "lucide-react";
 
@@ -443,6 +444,8 @@ export default function SettingsPage() {
           <Button onClick={() => { if (editCourier) void updateCourier(editCourier.id, editCourierForm).then(() => setEditCourier(null)); }} className="w-full">שמירה</Button>
         </div>
       </Modal>
+
+      <SystemResetPanel />
     </>
   );
 

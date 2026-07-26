@@ -13,7 +13,10 @@
     "db:push": "prisma db push",
     "db:seed": "prisma db seed",
     "db:reset-base": "tsx scripts/reset-to-base.ts",
-    "icons:generate": "tsx scripts/generate-icons.ts"
+    "db:reset-operational": "tsx scripts/reset-operational.ts",
+    "db:upsert-staff": "tsx scripts/upsert-lab-staff.ts",
+    "icons:generate": "tsx scripts/generate-icons.ts",
+    "dental:generate": "node scripts/generate-tooth-paths.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",

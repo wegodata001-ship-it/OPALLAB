@@ -10,8 +10,8 @@ import { useApp } from "@/providers/AppProvider";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { ORDER_STATUS_LABELS } from "@/lib/constants/labels";
 import { formatDate, formatDateTime } from "@/lib/utils";
-import { Check, Circle } from "lucide-react";
-import type { OrderStatus, DateRange } from "@/lib/types";
+import { Check, Circle, RotateCcw } from "lucide-react";
+import type { DateRange } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { filterByDateRange } from "@/lib/date-filter";
@@ -23,12 +23,17 @@ import {
   hasStageCompletionRole,
   isStageCompletionAdmin,
 } from "@/lib/workflow-permissions";
+import { OrderHistoryButton } from "@/components/orders/order-history-modal";
 
 export default function WorkflowPage() {
   const { orders, currentUser, completeStage, undoStage, users } = useApp();
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
 
   if (!currentUser) return null;
+
+  const isAdmin = isStageCompletionAdmin(currentUser);
+  // Everyone sees the full pipeline; only actions are role-gated
+  const visibleStages = PRODUCTION_STAGES;
 
   const activeOrders = filterByDateRange(
     orders.filter((o) => !["DELIVERED", "CANCELLED", "SHIPPED"].includes(o.status)),
@@ -45,9 +50,9 @@ export default function WorkflowPage() {
       <Header
         title="מעקב ייצור"
         description={
-          isStageCompletionAdmin(currentUser)
-            ? "סמן ✓ בסיום כל שלב — ניהול מלא"
-            : "ניתן לסמן ולבטל רק את השלבים השייכים לתפקידך"
+          isAdmin
+            ? "ניהול מלא — ניתן לסמן, להחזיר ולדלג לכל שלב"
+            : "כל ההזמנות גלויות — ניתן לבצע פעולה רק בשלב שלך"
         }
         actions={
           <ExportActions
@@ -64,9 +69,15 @@ export default function WorkflowPage() {
         {activeOrders.map((order) => (
           <Card key={order.id} className="overflow-hidden">
             <div className="flex flex-col lg:flex-row">
-              <div className="lg:w-56 bg-slate-900 text-white p-4 shrink-0">
+              <div className="relative lg:w-56 bg-slate-900 text-white p-4 shrink-0">
+                <div className="absolute left-3 top-3">
+                  <OrderHistoryButton
+                    order={order}
+                    className="border-slate-600 bg-slate-800 text-slate-200 hover:border-violet-400 hover:bg-slate-700 hover:text-white"
+                  />
+                </div>
                 <Link href={`/orders/${order.id}`} className="hover:text-opal-gold transition-colors">
-                  <p className="text-xl font-bold">{order.serialNumber}</p>
+                  <p className="text-xl font-bold pl-8 lg:pl-0">{order.serialNumber}</p>
                 </Link>
                 <p className="text-sm text-slate-300 mt-1">{order.patient.name}</p>
                 <p className="text-xs text-slate-400">{order.doctor.name}</p>
@@ -75,17 +86,33 @@ export default function WorkflowPage() {
               </div>
 
               <CardContent className="flex-1 p-4">
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                  {PRODUCTION_STAGES.map((stage) => {
-                    const stageState = getProductionStageState(stage.status, order.status, order.completedStages);
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                  {visibleStages.map((stage) => {
+                    const stageState = getProductionStageState(
+                      stage.status,
+                      order.status,
+                      order.completedStages,
+                    );
                     const done = stageState === "COMPLETED";
                     const isCurrent = stageState === "CURRENT";
                     const completion = order.completedStages[stage.status];
-                    const completer = completion ? users.find((u) => u.id === completion.completedBy) : null;
+                    const completer = completion
+                      ? users.find((u) => u.id === completion.completedBy)
+                      : null;
                     const hasRole = hasStageCompletionRole(currentUser, stage.status);
-                    const canDo = canCompleteStage(currentUser, stage.status, order.status, order.completedStages);
-                    const canUndo = !!completion && canUndoStage(currentUser, stage.status, order.completedStages);
-                    const noPermission = isCurrent && !hasRole;
+                    const canDo = canCompleteStage(
+                      currentUser,
+                      stage.status,
+                      order.status,
+                      order.completedStages,
+                    );
+                    const canUndo = canUndoStage(
+                      currentUser,
+                      stage.status,
+                      order.completedStages,
+                      order.status,
+                    );
+                    const noPermission = !isAdmin && isCurrent && !hasRole;
 
                     return (
                       <div
@@ -94,7 +121,8 @@ export default function WorkflowPage() {
                           "rounded-xl border-2 p-3 text-center transition-all",
                           done && "border-emerald-300 bg-emerald-50",
                           isCurrent && "border-opal-gold bg-opal-gold/5 ring-2 ring-opal-gold/20",
-                          stageState === "WAITING" && "border-slate-100 bg-slate-50"
+                          stageState === "WAITING" && "border-slate-100 bg-slate-50",
+                          isAdmin && stageState === "WAITING" && "border-slate-200 bg-white",
                         )}
                       >
                         <p className="text-xs font-medium text-slate-600 mb-2">{stage.label}</p>
@@ -107,30 +135,45 @@ export default function WorkflowPage() {
                               {completer?.name?.split(" ")[0] ?? "הושלם"}
                             </p>
                             {completion?.completedAt ? (
-                              <p className="text-[9px] text-slate-400">{formatDateTime(completion.completedAt)}</p>
+                              <p className="text-[9px] text-slate-400">
+                                {formatDateTime(completion.completedAt)}
+                              </p>
                             ) : (
                               <p className="text-[9px] text-slate-400">שלב קודם</p>
                             )}
                             {canUndo ? (
                               <button
                                 type="button"
-                                onClick={() => undoStage({ orderId: order.id, stage: stage.status, undoneBy: currentUser.id })}
-                                className="text-[10px] text-red-500 hover:underline mt-1"
+                                onClick={() =>
+                                  undoStage({
+                                    orderId: order.id,
+                                    stage: stage.status,
+                                    undoneBy: currentUser.id,
+                                  })
+                                }
+                                className="mt-1 inline-flex items-center gap-0.5 text-[10px] text-red-500 hover:underline"
                               >
-                                ביטול שלי
+                                <RotateCcw className="h-3 w-3" />
+                                {isAdmin ? "החזר שלב" : "ביטול שלי"}
                               </button>
                             ) : (
-                              <p className="text-[9px] text-slate-300 mt-1">נחתם</p>
+                              <p className="mt-1 text-[9px] text-slate-300">נחתם</p>
                             )}
                           </div>
                         ) : canDo ? (
                           <Button
                             size="sm"
-                            className="w-full h-10"
-                            onClick={() => completeStage({ orderId: order.id, stage: stage.status, completedBy: currentUser.id })}
+                            className="h-10 w-full"
+                            onClick={() =>
+                              completeStage({
+                                orderId: order.id,
+                                stage: stage.status,
+                                completedBy: currentUser.id,
+                              })
+                            }
                           >
                             <Check className="h-4 w-4" />
-                            סיימתי
+                            {isAdmin && !isCurrent ? "השלם עד כאן" : "סיימתי"}
                           </Button>
                         ) : noPermission ? (
                           <span
@@ -139,7 +182,7 @@ export default function WorkflowPage() {
                           >
                             <Button
                               size="sm"
-                              className="w-full h-10 pointer-events-none"
+                              className="pointer-events-none h-10 w-full"
                               disabled
                               aria-label="אין לך הרשאה לסמן שלב זה"
                             >
@@ -149,7 +192,7 @@ export default function WorkflowPage() {
                           </span>
                         ) : (
                           <div className="flex flex-col items-center gap-1">
-                            <div className="h-10 w-10 mx-auto rounded-full border-2 border-dashed border-slate-200 flex items-center justify-center">
+                            <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full border-2 border-dashed border-slate-200">
                               <Circle className="h-4 w-4 text-slate-300" />
                             </div>
                             <p className="text-[10px] text-slate-400">ממתין</p>
@@ -165,9 +208,9 @@ export default function WorkflowPage() {
         ))}
 
         {activeOrders.length === 0 && (
-          <div className="text-center py-16 text-slate-400">
-            <Check className="h-12 w-12 mx-auto mb-3 opacity-30" />
-            <p>אין עבודות פעילות בתפקידך כרגע</p>
+          <div className="py-16 text-center text-slate-400">
+            <Check className="mx-auto mb-3 h-12 w-12 opacity-30" />
+            <p>אין עבודות פעילות כרגע</p>
           </div>
         )}
       </div>

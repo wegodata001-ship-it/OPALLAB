@@ -44,11 +44,32 @@ export default function ShippingPage() {
 
   const deliveryHtml = (note: string, order = selected) => {
     if (!order) return "";
-    return `<h2>תעודת משלוח ${note}</h2><table>
-      <tr><td>עבודה</td><td>${order.serialNumber}</td></tr>
-      <tr><td>רופא</td><td>${order.doctor.name}</td></tr>
-      <tr><td>מטופל</td><td>${order.patient.name}</td></tr>
-      <tr><td>תאריך</td><td>${formatDate(new Date())}</td></tr></table>`;
+    const teeth = order.selectedTeeth?.length ? order.selectedTeeth.join(", ") : "—";
+    const work = order.workTypes?.length
+      ? order.workTypes.join(", ")
+      : "—";
+    return `
+      <div style="font-family:Arial,sans-serif;direction:rtl;max-width:720px;margin:0 auto">
+        <h1 style="text-align:center;color:#0f172a">${LAB_INFO.name}</h1>
+        <h2 style="text-align:center">תעודת משלוח ${note}</h2>
+        <p style="text-align:center;color:#64748b">תאריך: ${formatDate(new Date())}</p>
+        <table style="width:100%;border-collapse:collapse;margin-top:16px" border="1" cellpadding="8">
+          <tr><td><b>מספר תעודה</b></td><td>${note}</td></tr>
+          <tr><td><b>מספר הזמנה</b></td><td>${order.serialNumber}</td></tr>
+          <tr><td><b>רופא</b></td><td>${order.doctor.name}</td></tr>
+          <tr><td><b>מרפאה</b></td><td>${order.doctor.clinic ?? order.doctor.address ?? "—"}</td></tr>
+          <tr><td><b>מטופל</b></td><td>${order.patient.name}</td></tr>
+          <tr><td><b>שיניים</b></td><td>${teeth}</td></tr>
+          <tr><td><b>סוג עבודה</b></td><td>${work}</td></tr>
+          <tr><td><b>כמות</b></td><td>1</td></tr>
+          <tr><td><b>הערות</b></td><td>${order.description ?? order.notes ?? "—"}</td></tr>
+          <tr><td><b>שליח</b></td><td>${courier?.name ?? "—"} ${courier?.phone ? `(${courier.phone})` : ""}</td></tr>
+        </table>
+        <div style="margin-top:48px;display:flex;justify-content:space-between">
+          <div style="width:45%;border-top:1px solid #94a3b8;padding-top:8px;text-align:center">חתימת מקבל</div>
+          <div style="width:45%;border-top:1px solid #94a3b8;padding-top:8px;text-align:center">חתימת מעבדה</div>
+        </div>
+      </div>`;
   };
 
   const confirmShip = async () => {

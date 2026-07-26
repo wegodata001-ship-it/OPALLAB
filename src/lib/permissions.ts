@@ -44,8 +44,8 @@ const LAB_EMPLOYEE_MODULES: AppModule[] = [
 
 const ROLE_MODULES: Record<UserRole, AppModule[]> = {
   ADMIN: ADMIN_MODULES,
-  OWNER: ADMIN_MODULES.filter((m) => m !== "attendance-management"),
-  SECRETARY: ADMIN_MODULES.filter((m) => m !== "attendance-management"),
+  OWNER: ADMIN_MODULES,
+  SECRETARY: ADMIN_MODULES,
   DESIGNER: LAB_EMPLOYEE_MODULES,
   PRINTER: LAB_EMPLOYEE_MODULES,
   MILLING: LAB_EMPLOYEE_MODULES,
@@ -84,13 +84,19 @@ export function isDoctorPortalUser(user: Pick<User, "role" | "roles">): boolean 
 export function canViewAllOrders(user: Pick<User, "role" | "roles">): boolean {
   if (isDoctorPortalUser(user)) return false;
   if (isSystemAdminUser(user)) return true;
+  // Production staff see all orders; actions remain stage-gated on the server
   return getUserRoles(user).some((role) =>
-    [...PRODUCTION_ROLES, "SECRETARY", "ADMIN", "OWNER", "PACKAGING"].includes(role),
+    [...PRODUCTION_ROLES, "PACKAGING"].includes(role),
   );
 }
 
 export function canEditOrders(user: Pick<User, "role" | "roles">): boolean {
   return isSystemAdminUser(user);
+}
+
+/** Doctors may create orders for themselves; admins create for any doctor. */
+export function canCreateOrders(user: Pick<User, "role" | "roles">): boolean {
+  return isSystemAdminUser(user) || isDoctorUser(user);
 }
 
 export function canManageSettings(user: Pick<User, "role" | "roles">): boolean {
