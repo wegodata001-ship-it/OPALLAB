@@ -11,6 +11,8 @@ export async function POST(request: Request) {
       latitude?: number;
       longitude?: number;
       accuracy?: number;
+      intendedAction?: "check-in" | "check-out";
+      photoPath?: string | null;
       device?: {
         browser?: string;
         os?: string;
@@ -23,6 +25,11 @@ export async function POST(request: Request) {
 
     if (!body.deviceKey) {
       throw new AppError("VALIDATION_ERROR", "מזהה מכשיר חסר", 400);
+    }
+    if (body.intendedAction !== "check-in" && body.intendedAction !== "check-out") {
+      throw new AppError("VALIDATION_ERROR", "יש לבחור כניסה או יציאה", 400, {
+        code: "ACTION_REQUIRED",
+      });
     }
     if (body.latitude == null || body.longitude == null) {
       throw new AppError("VALIDATION_ERROR", "נדרש GPS לרישום נוכחות", 400, {
@@ -45,6 +52,8 @@ export async function POST(request: Request) {
         screenSize: body.device?.screenSize ?? "",
         timezone: body.device?.timezone ?? "",
       },
+      intendedAction: body.intendedAction,
+      photoPath: body.photoPath,
       headers: request.headers,
     });
 
@@ -57,8 +66,8 @@ export async function POST(request: Request) {
       ...result,
       message:
         result.action === "check-in"
-          ? `שלום ${result.userName} — כניסה נרשמה בהצלחה`
-          : `${result.userName} — יציאה נרשמה בהצלחה${durationLabel}`,
+          ? `כניסה נרשמה בהצלחה`
+          : `יציאה נרשמה בהצלחה${durationLabel}`,
     });
   } catch (error) {
     return jsonError(error);

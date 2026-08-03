@@ -83,8 +83,15 @@ export function mapPayment(payment: PrismaPayment): Payment {
   return { ...payment };
 }
 
-export function mapShipment(shipment: PrismaShipment): Shipment {
-  return { ...shipment };
+export async function mapShipment(shipment: PrismaShipment): Promise<Shipment> {
+  const recipientSignatureUrl = shipment.recipientSignaturePath
+    ? await getSignedUrl(STORAGE_BUCKETS.ORDER_FILES, shipment.recipientSignaturePath)
+    : null;
+
+  return {
+    ...shipment,
+    recipientSignatureUrl,
+  };
 }
 
 export function mapStatusHistory(history: PrismaOrderStatusHistory): OrderStatusHistory {
@@ -150,6 +157,15 @@ export async function mapOrderFile(
     ? await getSignedUrl(STORAGE_BUCKETS.ORDER_FILES, file.storagePath)
     : null;
 
+  const thumbnailUrl = file.thumbnailPath
+    ? await getSignedUrl(STORAGE_BUCKETS.ORDER_FILES, file.thumbnailPath)
+    : null;
+
+  const modelMeta =
+    file.modelMeta && typeof file.modelMeta === "object" && !Array.isArray(file.modelMeta)
+      ? (file.modelMeta as unknown as NonNullable<OrderFile["modelMeta"]>)
+      : null;
+
   return {
     id: file.id,
     orderId: file.orderId,
@@ -169,6 +185,10 @@ export async function mapOrderFile(
     isCurrent: file.isCurrent,
     replacesId: file.replacesId,
     uploadedByName: uploaderName ?? null,
+    modelMeta,
+    thumbnailPath: file.thumbnailPath,
+    thumbnailUrl,
+    parsedAt: file.parsedAt,
   };
 }
 
@@ -207,7 +227,7 @@ export async function mapOrderWithRelations(order: OrderWithIncludes): Promise<O
     finishEmployee: order.finishEmployee ? mapUser(order.finishEmployee) : null,
     files,
     statusHistory: order.statusHistory.map(mapStatusHistory),
-    shipment: order.shipment ? mapShipment(order.shipment) : null,
+    shipment: order.shipment ? await mapShipment(order.shipment) : null,
   };
 }
 

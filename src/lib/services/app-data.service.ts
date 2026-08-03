@@ -1,6 +1,5 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma, $Enums } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { $Enums } from "@prisma/client";
 import { AppError } from "@/lib/errors/app-error";
 import {
   hashPassword,
@@ -98,7 +97,7 @@ export interface AppDataSnapshot {
   inventory: InventoryItem[];
   inventoryCategories: InventoryCategory[];
   movements: InventoryMovement[];
-  shipments: ReturnType<typeof mapShipment>[];
+  shipments: Awaited<ReturnType<typeof mapShipment>>[];
   attendance: ReturnType<typeof mapAttendance>[];
   labSettings: LabSettings;
   warehouses: Warehouse[];
@@ -165,7 +164,7 @@ export class AppDataService {
       inventory: await Promise.all(inventory.map(mapInventoryItem)),
       inventoryCategories: inventoryCategories.map(mapInventoryCategory),
       movements: movements.map(mapInventoryMovement),
-      shipments: shipments.map(mapShipment),
+      shipments: await Promise.all(shipments.map(mapShipment)),
       attendance: attendance.map(mapAttendance),
       labSettings: mapLabSettings(labSettingsRows),
       warehouses,
@@ -606,39 +605,258 @@ export class AppDataService {
     deliveryNote: string,
     userId: string,
     courier?: { name: string; phone: string },
+    signature?: {
+      dataUrl: string;
+      signerName?: string | null;
+      deviceId?: string | null;
+      ip?: string | null;
+    },
   ): Promise<Shipment> {
+    const note = deliveryNote.trim();
+    if (!orderId) throw new AppError("VALIDATION_ERROR", "חסר מזהה הזמנה", 400);
+    if (!note) throw new AppError("VALIDATION_ERROR", "חסר מספר תעודת משלוח", 400);
+    if (!courier?.name?.trim()) {
+      throw new AppError("VALIDATION_ERROR", "יש לבחור שליח לפני אישור המשלוח", 400);
+    }
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, status: true, serialNumber: true, shipment: { select: { id: true } } },
+    });
+    if (!order) throw new AppError("NOT_FOUND", "ההזמנה לא נמצאה", 404);
+    if (order.shipment) {
+      throw new AppError("VALIDATION_ERROR", "להזמנה זו כבר קיים משלוח", 409);
+    }
+    if (order.status === "CANCELLED") {
+      throw new AppError("VALIDATION_ERROR", "לא ניתן לשלוח הזמנה מבוטלת", 400);
+    }
+
+    console.info("[shipment] create:start", {
+      orderId,
+      deliveryNote: note,
+      userId,
+      courier: courier.name,
+      hasSignature: Boolean(signature?.dataUrl),
+    });
+
     const now = new Date();
-    return prisma.$transaction(async (tx) => {
-      const shipment = await tx.shipment.create({
-        data: {
-          orderId,
-          deliveryNote,
-          packagedBy: userId,
-          packagedAt: now,
-          shippedAt: now,
-          courierName: courier?.name ?? null,
-          courierPhone: courier?.phone ?? null,
-        },
-      });
+    let created;
+    try {
+      created = await prisma.$transaction(async (tx) => {
+        const shipment = await tx.shipment.create({
+          data: {
+            orderId,
+            deliveryNote: note,
+            packagedBy: userId,
+            packagedAt: now,
+            shippedAt: now,
+            courierName: courier.name.trim(),
+            courierPhone: courier.phone?.trim() || null,
+          },
+        });
 
-      await tx.order.update({
-        where: { id: orderId },
-        data: { status: "SHIPPED", updatedAt: now },
-      });
-      await tx.payment.updateMany({
-        where: { orderId },
-        data: { deliveryNote },
-      });
-      await tx.orderStatusHistory.create({
-        data: {
-          orderId,
-          status: "SHIPPED",
-          changedBy: userId,
-          notes: `משלוח: ${deliveryNote}`,
-        },
-      });
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: "SHIPPED", updatedAt: now },
+        });
+        await tx.payment.updateMany({
+          where: { orderId },
+          data: { deliveryNote: note },
+        });
+        await tx.orderStatusHistory.create({
+          data: {
+            orderId,
+            status: "SHIPPED",
+            changedBy: userId,
+            notes: `משלוח: ${note}`,
+          },
+        });
 
-      return mapShipment(shipment);
+        return shipment;
+      });
+    } catch (error) {
+      console.error("[shipment] create:db-failed", { orderId, deliveryNote: note, error });
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const target = Array.isArray(error.meta?.target)
+          ? error.meta.target.join(",")
+          : String(error.meta?.target ?? "");
+        if (target.includes("orderId")) {
+          throw new AppError("VALIDATION_ERROR", "להזמנה זו כבר קיים משלוח", 409, error.meta);
+        }
+        if (target.includes("deliveryNote")) {
+          throw new AppError(
+            "VALIDATION_ERROR",
+            "מספר תעודת המשלוח כבר בשימוש — הפקו תעודה מחדש",
+            409,
+            error.meta,
+          );
+        }
+        throw new AppError("VALIDATION_ERROR", "הרשומה כבר קיימת במערכת", 409, error.meta);
+      }
+      throw error;
+    }
+
+    console.info("[shipment] create:db-ok", { shipmentId: created.id, orderId, status: "SHIPPED" });
+
+    await writeAuditLog({
+      userId,
+      action: "SHIPMENT_CREATE",
+      entityType: "Shipment",
+      entityId: created.id,
+      details: {
+        orderId,
+        serialNumber: order.serialNumber,
+        deliveryNote: note,
+        courierName: courier.name,
+        hasSignature: Boolean(signature?.dataUrl),
+      },
+    });
+    console.info("[shipment] create:audit-ok", { shipmentId: created.id });
+
+    if (signature?.dataUrl) {
+      try {
+        console.info("[shipment] create:signature-start", { shipmentId: created.id });
+        const withSig = await this.setShipmentSignature(created.id, userId, signature, "add");
+        console.info("[shipment] create:signature-ok", { shipmentId: created.id });
+        return withSig;
+      } catch (sigError) {
+        // Signature is optional — never block a successful shipment confirmation.
+        console.error("[shipment] create:signature-failed", {
+          shipmentId: created.id,
+          error: sigError instanceof Error ? sigError.message : sigError,
+        });
+        return await mapShipment(created);
+      }
+    }
+
+    const mapped = await mapShipment(created);
+    console.info("[shipment] create:done", { shipmentId: mapped.id });
+    return mapped;
+  }
+
+  async setShipmentSignature(
+    shipmentId: string,
+    userId: string,
+    signature: {
+      dataUrl: string;
+      signerName?: string | null;
+      deviceId?: string | null;
+      ip?: string | null;
+    },
+    mode: "add" | "replace" = "add",
+  ): Promise<Shipment> {
+    const existing = await prisma.shipment.findUnique({ where: { id: shipmentId } });
+    if (!existing) throw new AppError("NOT_FOUND", "משלוח לא נמצא", 404);
+    if (existing.lockedAt) {
+      throw new AppError("FORBIDDEN", "המשלוח נעול — לא ניתן לשנות חתימה", 403);
+    }
+
+    const { storeShipmentSignaturePng, removeShipmentSignaturePng } = await import(
+      "@/lib/shipping/signature-storage"
+    );
+    const { writeAuditLog } = await import("@/lib/audit-log");
+
+    if (existing.recipientSignaturePath) {
+      await removeShipmentSignaturePng(existing.recipientSignaturePath);
+    }
+
+    const path = await storeShipmentSignaturePng(shipmentId, signature.dataUrl);
+    const signer = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true },
+    });
+    const now = new Date();
+    const updated = await prisma.shipment.update({
+      where: { id: shipmentId },
+      data: {
+        recipientSignaturePath: path,
+        recipientSignedAt: now,
+        recipientSignerName: signature.signerName?.trim() || signer?.name || null,
+        recipientSignerUserId: userId,
+        recipientSignatureIp: signature.ip ?? null,
+        recipientSignatureDeviceId: signature.deviceId ?? null,
+      },
+    });
+
+    await writeAuditLog({
+      userId,
+      action: mode === "replace" || existing.recipientSignaturePath
+        ? "SHIPMENT_SIGNATURE_REPLACE"
+        : "SHIPMENT_SIGNATURE_ADD",
+      entityType: "Shipment",
+      entityId: shipmentId,
+      details: {
+        deliveryNote: updated.deliveryNote,
+        signerName: updated.recipientSignerName,
+        ip: signature.ip,
+        deviceId: signature.deviceId,
+      },
+    });
+
+    return await mapShipment(updated);
+  }
+
+  async deleteShipmentSignature(shipmentId: string, userId: string): Promise<Shipment> {
+    const existing = await prisma.shipment.findUnique({ where: { id: shipmentId } });
+    if (!existing) throw new AppError("NOT_FOUND", "משלוח לא נמצא", 404);
+    if (existing.lockedAt) {
+      throw new AppError("FORBIDDEN", "המשלוח נעול — לא ניתן למחוק חתימה", 403);
+    }
+
+    const { removeShipmentSignaturePng } = await import("@/lib/shipping/signature-storage");
+    const { writeAuditLog } = await import("@/lib/audit-log");
+
+    await removeShipmentSignaturePng(existing.recipientSignaturePath);
+    const updated = await prisma.shipment.update({
+      where: { id: shipmentId },
+      data: {
+        recipientSignaturePath: null,
+        recipientSignedAt: null,
+        recipientSignerName: null,
+        recipientSignerUserId: null,
+        recipientSignatureIp: null,
+        recipientSignatureDeviceId: null,
+      },
+    });
+
+    await writeAuditLog({
+      userId,
+      action: "SHIPMENT_SIGNATURE_DELETE",
+      entityType: "Shipment",
+      entityId: shipmentId,
+      details: { deliveryNote: updated.deliveryNote },
+    });
+
+    return await mapShipment(updated);
+  }
+
+  async lockShipment(shipmentId: string, userId: string): Promise<Shipment> {
+    const existing = await prisma.shipment.findUnique({ where: { id: shipmentId } });
+    if (!existing) throw new AppError("NOT_FOUND", "משלוח לא נמצא", 404);
+    if (existing.lockedAt) return await mapShipment(existing);
+
+    const { writeAuditLog } = await import("@/lib/audit-log");
+    const updated = await prisma.shipment.update({
+      where: { id: shipmentId },
+      data: { lockedAt: new Date() },
+    });
+    await writeAuditLog({
+      userId,
+      action: "SHIPMENT_LOCK",
+      entityType: "Shipment",
+      entityId: shipmentId,
+      details: { deliveryNote: updated.deliveryNote },
+    });
+    return await mapShipment(updated);
+  }
+
+  async logShipmentSignatureView(shipmentId: string, userId: string): Promise<void> {
+    const { writeAuditLog } = await import("@/lib/audit-log");
+    await writeAuditLog({
+      userId,
+      action: "SHIPMENT_SIGNATURE_VIEW",
+      entityType: "Shipment",
+      entityId: shipmentId,
     });
   }
 
@@ -1432,7 +1650,11 @@ export class AppDataService {
     userId: string,
     method: AttendanceMethod,
     meta?: import("@/lib/types").AttendanceCheckInMeta,
-    opts?: { duplicateWindowMs?: number },
+    opts?: {
+      duplicateWindowMs?: number;
+      /** When set, do not auto-toggle — enforce the employee-selected action. */
+      intendedAction?: "check-in" | "check-out";
+    },
   ): Promise<{
     action: "check-in" | "check-out";
     userId: string;
@@ -1445,6 +1667,7 @@ export class AppDataService {
     // Only collapses near-simultaneous duplicate requests (remount / retry),
     // not a normal second QR scan a few seconds later.
     const duplicateWindowMs = opts?.duplicateWindowMs ?? 3_500;
+    const intendedAction = opts?.intendedAction;
     const { reverseGeocodeDetailed } = await import("@/lib/geocode");
     const prismaMethod = toPrismaAttendanceMethod(method);
     const device = meta?.device;
@@ -1477,8 +1700,55 @@ export class AppDataService {
         select: { id: true, checkIn: true, checkOut: true },
       });
 
-      // Duplicate punch right after check-out → return check-out, do not open again.
+      if (intendedAction === "check-in" && openRecords.length > 0) {
+        const active = openRecords[0]!;
+        if (now.getTime() - active.checkIn.getTime() < duplicateWindowMs) {
+          return {
+            action: "check-in" as const,
+            userId,
+            recordId: active.id,
+            checkIn: active.checkIn,
+            checkOut: null,
+            durationHours: null,
+            duplicate: true,
+          };
+        }
+        throw new AppError(
+          "VALIDATION_ERROR",
+          "כבר קיימת כניסה פתוחה — יש לבצע יציאה מהעבודה",
+          409,
+          { code: "ALREADY_CHECKED_IN" },
+        );
+      }
+
+      if (intendedAction === "check-out" && openRecords.length === 0) {
+        if (
+          latest?.checkOut &&
+          now.getTime() - latest.checkOut.getTime() < duplicateWindowMs
+        ) {
+          const durationHours =
+            (latest.checkOut.getTime() - latest.checkIn.getTime()) / 3_600_000;
+          return {
+            action: "check-out" as const,
+            userId,
+            recordId: latest.id,
+            checkIn: latest.checkIn,
+            checkOut: latest.checkOut,
+            durationHours,
+            duplicate: true,
+          };
+        }
+        throw new AppError(
+          "VALIDATION_ERROR",
+          "אין כניסה פתוחה — יש לבצע כניסה לעבודה תחילה",
+          409,
+          { code: "NO_OPEN_CHECK_IN" },
+        );
+      }
+
+      // Legacy auto-toggle: duplicate punch right after check-out → return check-out.
       if (
+        !intendedAction &&
         openRecords.length === 0 &&
         latest?.checkOut &&
         now.getTime() - latest.checkOut.getTime() < duplicateWindowMs

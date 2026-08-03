@@ -1,14 +1,20 @@
 import { reviveDates } from "@/lib/api/revive-dates";
+import { humanizeUploadHttpError, readResponsePayload } from "@/lib/api/parse-response";
 
 type ApiSuccess<T> = { success: true; data: T };
 type ApiFailure = { success: false; error: { code: string; message: string } };
 
 async function parseResponse<T>(response: Response): Promise<T> {
-  const json = (await response.json()) as ApiSuccess<T> | ApiFailure;
-  if (!json.success) {
-    throw new Error(json.error?.message ?? "שגיאת שרת");
+  const { json, text, isJson } = await readResponsePayload(response);
+  if (!isJson || !json || typeof json !== "object") {
+    throw new Error(humanizeUploadHttpError(response.status, text));
   }
-  return reviveDates(json.data);
+  const body = json as ApiSuccess<T> | ApiFailure;
+  if (!("success" in body) || !body.success) {
+    const fail = body as ApiFailure;
+    throw new Error(fail.error?.message ?? humanizeUploadHttpError(response.status, text));
+  }
+  return reviveDates(body.data);
 }
 
 export async function apiGet<T>(path: string): Promise<T> {

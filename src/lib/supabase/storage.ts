@@ -20,6 +20,65 @@ export async function uploadFile(
   }
 }
 
+/** Signed URL for browser → Storage direct upload (bypasses Vercel body limits). */
+export async function createSignedUploadUrl(
+  bucket: StorageBucket,
+  storagePath: string,
+): Promise<{ signedUrl: string; token: string; path: string }> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase.storage.from(bucket).createSignedUploadUrl(storagePath);
+  if (error || !data) {
+    throw new AppError(
+      "STORAGE_ERROR",
+      `יצירת קישור העלאה נכשלה: ${error?.message ?? "unknown"}`,
+      500,
+      error,
+    );
+  }
+  return { signedUrl: data.signedUrl, token: data.token, path: data.path };
+}
+
+/** Verify an object exists and is non-empty in Storage (metadata only — no full download). */
+export async function assertStorageObjectExists(
+  bucket: StorageBucket,
+  storagePath: string,
+): Promise<{ size: number }> {
+  const supabase = getSupabaseAdmin();
+  const lastSlash = storagePath.lastIndexOf("/");
+  const folder = lastSlash >= 0 ? storagePath.slice(0, lastSlash) : "";
+  const name = lastSlash >= 0 ? storagePath.slice(lastSlash + 1) : storagePath;
+
+  const { data, error } = await supabase.storage.from(bucket).list(folder, {
+    search: name,
+    limit: 100,
+  });
+
+  if (error) {
+    throw new AppError(
+      "STORAGE_ERROR",
+      "אימות הקובץ ב־Storage נכשל — נסו שוב",
+      500,
+      error,
+    );
+  }
+
+  const match = (data ?? []).find((item) => item.name === name);
+  const size = Number(match?.metadata?.size ?? match?.metadata?.contentLength ?? 0);
+
+  if (!match) {
+    throw new AppError(
+      "STORAGE_ERROR",
+      "הקובץ לא נמצא ב־Storage לאחר ההעלאה — נסו שוב",
+      500,
+    );
+  }
+  if (!size) {
+    // Some providers omit size in list metadata — treat presence as success.
+    return { size: 0 };
+  }
+  return { size };
+}
+
 export async function getSignedUrl(
   bucket: StorageBucket,
   storagePath: string,

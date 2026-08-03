@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { apiGet, apiPatch, apiPost } from "@/lib/api/client";
+import { uploadOrderFileWithProgress } from "@/lib/orders/upload-with-progress";
 import { defaultLabSettings } from "@/lib/constants/lab-settings";
 import type { AppDataSnapshot } from "@/lib/services/app-data.service";
 import type {
@@ -98,9 +99,15 @@ interface AppContextValue {
       versionMode?: "new_version" | "replace";
       uploadSlotId?: string;
     },
+    onProgress?: (pct: number, meta?: { loaded: number; total: number; fileName: string }) => void,
   ) => Promise<void>;
   previewDeliveryNote: () => Promise<string>;
-  createShipment: (orderId: string, deliveryNote: string, courier?: { name: string; phone: string }) => Promise<Shipment>;
+  createShipment: (
+    orderId: string,
+    deliveryNote: string,
+    courier?: { name: string; phone: string },
+    signature?: { dataUrl: string; signerName?: string | null; deviceId?: string | null } | null,
+  ) => Promise<Shipment>;
   updateInventoryItem: (id: string, updates: Partial<InventoryItem>) => Promise<void>;
   deleteInventoryItem: (id: string) => Promise<void>;
   transferInventoryCategory: (itemId: string, toCategory: string, notes?: string) => Promise<void>;
@@ -288,22 +295,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
       versionMode?: "new_version" | "replace";
       uploadSlotId?: string;
     },
+    onProgress?: (pct: number, meta?: { loaded: number; total: number; fileName: string }) => void,
   ) => {
     if (!currentUser) throw new Error("Not authenticated");
-    await withLoading(async () => {
-      const formData = new FormData();
-      formData.append("orderId", orderId);
-      formData.append("file", file);
-      if (notes) formData.append("notes", notes);
-      if (folderId) formData.append("folderId", folderId);
-      if (meta?.category) formData.append("category", meta.category);
-      if (meta?.slotKey) formData.append("slotKey", meta.slotKey);
-      if (meta?.versionMode) formData.append("versionMode", meta.versionMode);
-      if (meta?.uploadSlotId) formData.append("uploadSlotId", meta.uploadSlotId);
-      console.info("[addOrderFile] posting", { orderId, fileName: file.name, size: file.size });
-      await apiPost("/api/orders/files", formData);
+    // Skip global loading overlay when caller tracks progress (avoids blocking UI).
+    const run = async () => {
+      console.info("[addOrderFile] direct storage upload", {
+        orderId,
+        fileName: file.name,
+        size: file.size,
+      });
+      await uploadOrderFileWithProgress({
+        orderId,
+        file,
+        notes,
+        folderId,
+        category: meta?.category,
+        slotKey: meta?.slotKey,
+        versionMode: meta?.versionMode,
+        uploadSlotId: meta?.uploadSlotId,
+        onProgress,
+      });
       await refreshInternal();
-    }, "מעלה קבצים...");
+    };
+    if (onProgress) {
+      await run();
+      return;
+    }
+    await withLoading(run, "מעלה קבצים...");
   }, [currentUser, withLoading, refreshInternal]);
 
   const previewDeliveryNote = useCallback(async () => {
@@ -313,13 +332,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, "טוען נתונים...");
   }, [withLoading]);
 
-  const createShipment = useCallback(async (orderId: string, deliveryNote: string, courier?: { name: string; phone: string }) => {
-    if (!currentUser) throw new Error("Not authenticated");
+  const createShipment = useCallback(async (
+    orderId: string,
+    deliveryNote: string,
+    courier?: { name: string; phone: string },
+    signature?: { dataUrl: string; signerName?: string | null; deviceId?: string | null } | null,
+  ) => {
+    if (!currentUser) throw new Error("נדרשת התחברות");
+    console.info("[shipment:ui] api:start", {
+      orderId,
+      deliveryNote,
+      courier: courier?.name,
+      hasSignature: Boolean(signature?.dataUrl),
+    });
     return withLoading(async () => {
-      const result = await apiPost<{ shipment: Shipment }>("/api/shipments", { orderId, deliveryNote, courier });
-      await refreshInternal();
+      const result = await apiPost<{ shipment: Shipment }>("/api/shipments", {
+        orderId,
+        deliveryNote,
+        courier,
+        signature: signature ?? null,
+      });
+      console.info("[shipment:ui] api:ok", { shipmentId: result.shipment?.id });
+      try {
+        await refreshInternal();
+        console.info("[shipment:ui] refresh:ok");
+      } catch (refreshError) {
+        // Shipment already created — don't fail the whole confirm on refresh.
+        console.error("[shipment:ui] refresh:failed", refreshError);
+      }
       return result.shipment;
-    }, "שומר...");
+    }, "מאשר משלוח...");
   }, [currentUser, withLoading, refreshInternal]);
 
   const addInventoryMovement = useCallback(async (mov: Omit<InventoryMovement, "id" | "createdAt">) => {

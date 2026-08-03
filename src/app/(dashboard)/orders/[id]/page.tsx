@@ -1,11 +1,12 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { Header } from "@/components/layout/sidebar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/providers/AppProvider";
+import { prefetchOrderModels } from "@/lib/orders/load-model-fast";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { WorkflowTracker } from "@/components/orders/workflow-tracker";
 import { DentalChart } from "@/components/DentalChart";
@@ -29,6 +30,11 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   const { getOrderById, currentUser, addOrderFile } = useApp();
   const [editing, setEditing] = useState(false);
   const order = getOrderById(id);
+
+  useEffect(() => {
+    if (!order?.files?.length) return;
+    void prefetchOrderModels(order.files);
+  }, [order?.id, order?.files]);
 
   if (!order) {
     return (
@@ -124,11 +130,18 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
               orderId={order.id}
               files={order.files}
               canUpload={!!canEdit}
-              onUpload={async (f, folderId, meta) => {
-                await addOrderFile(order.id, f, undefined, folderId, {
-                  category: meta?.category,
-                  slotKey: meta?.slotKey,
-                });
+              onUpload={async (f, folderId, meta, onProgress) => {
+                await addOrderFile(
+                  order.id,
+                  f,
+                  undefined,
+                  folderId,
+                  {
+                    category: meta?.category,
+                    slotKey: meta?.slotKey,
+                  },
+                  onProgress,
+                );
               }}
             />
           </CardContent>

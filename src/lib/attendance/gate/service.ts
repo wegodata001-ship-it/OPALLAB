@@ -3,6 +3,7 @@ import { AppError } from "@/lib/errors/app-error";
 import { appDataService } from "@/lib/services/app-data.service";
 import { getLabGateSettings } from "@/lib/attendance/gate/lab-location";
 import { isWithinGeofence } from "@/lib/attendance/gate/geofence";
+import { writeAuditLog } from "@/lib/audit-log";
 import type { DeviceCaptureResult } from "@/lib/attendance/verification/types";
 
 export type GateDeviceInfo = DeviceCaptureResult;
@@ -137,6 +138,8 @@ export async function punchViaTrustedDevice(input: {
   gps: GateGps;
   device: GateDeviceInfo;
   headers: Headers;
+  intendedAction: "check-in" | "check-out";
+  photoPath?: string | null;
 }): Promise<{
   action: "check-in" | "check-out";
   userName: string;
@@ -196,17 +199,38 @@ export async function punchViaTrustedDevice(input: {
     device: input.device,
     trustedDeviceId: device.id,
     ipAddress: ip ?? undefined,
+    photoPath: input.photoPath ?? null,
   };
 
   const result = await appDataService.toggleAttendanceForUser(
     device.userId,
     "TRUSTED_DEVICE",
     meta,
+    { intendedAction: input.intendedAction },
   );
 
   await prisma.trustedDevice.update({
     where: { id: device.id },
     data: { lastUsedAt: new Date(), lastIp: ip },
+  });
+
+  await writeAuditLog({
+    userId: device.userId,
+    action: result.action === "check-in" ? "ATTENDANCE_CHECK_IN" : "ATTENDANCE_CHECK_OUT",
+    entityType: "AttendanceRecord",
+    entityId: result.recordId,
+    details: {
+      method: "TRUSTED_DEVICE",
+      deviceId: device.id,
+      ip,
+      latitude: input.gps.latitude,
+      longitude: input.gps.longitude,
+      photoPath: input.photoPath ?? null,
+      duplicate: result.duplicate,
+      deviceLabel: device.label,
+      os: input.device.os,
+      browser: input.device.browser,
+    },
   });
 
   return {

@@ -10,6 +10,7 @@ import type { UserRole } from "@/lib/types";
 import type {
   AttendanceActiveRecord,
   AttendanceEmployeeRosterRow,
+  AttendanceEmployeeStats,
   AttendanceEmployeeSummary,
   AttendanceLabGeo,
   AttendanceManagementKpis,
@@ -19,6 +20,10 @@ import type {
   AttendanceNotCheckedInRow,
 } from "@/lib/attendance/management/types";
 import { getLabGateSettings } from "@/lib/attendance/gate/lab-location";
+import {
+  detectAttendanceAnomalies,
+  methodChannelLabel,
+} from "@/lib/attendance/management/status";
 
 const LATE_HOUR = 9;
 const GPS_MAX_ACCURACY = 100;
@@ -89,17 +94,35 @@ function mapEmployee(user: {
 async function enrichRecord(
   record: ReturnType<typeof mapAttendance>,
   user: Parameters<typeof mapEmployee>[0],
+  labGeo?: AttendanceLabGeo | null,
 ): Promise<AttendanceManagementRecord> {
   const signed = await withSignedAttendancePhotos(record);
   const end = signed.checkOut ?? new Date();
   const durationHours = (end.getTime() - signed.checkIn.getTime()) / 3_600_000;
+  const closedHours = signed.checkOut ? durationHours : null;
   const lat = signed.checkInLatitude ?? signed.latitude;
   const lng = signed.checkInLongitude ?? signed.longitude;
+  const isLate = isLateCheckIn(signed.checkIn);
+  const flags = detectAttendanceAnomalies({
+    checkOut: signed.checkOut,
+    checkInLatitude: lat,
+    checkInLongitude: lng,
+    checkOutLatitude: signed.checkOutLatitude,
+    checkOutLongitude: signed.checkOutLongitude,
+    checkInAccuracy: signed.checkInAccuracy,
+    checkInPhotoPath: signed.checkInPhotoPath,
+    checkInPhotoUrl: signed.checkInPhotoUrl,
+    checkOutPhotoPath: signed.checkOutPhotoPath,
+    checkOutPhotoUrl: signed.checkOutPhotoUrl,
+    isLate,
+    durationHours: closedHours,
+    labGeo,
+  });
   return {
     ...signed,
     employee: mapEmployee(user),
-    durationHours: signed.checkOut ? durationHours : null,
-    isLate: isLateCheckIn(signed.checkIn),
+    durationHours: closedHours,
+    isLate,
     gpsValid: isGpsValid(lat, lng, signed.checkInAccuracy),
     hasPhoto: Boolean(
       signed.checkInPhotoUrl ||
@@ -107,6 +130,12 @@ async function enrichRecord(
         signed.checkInPhotoPath ||
         signed.checkOutPhotoPath,
     ),
+    anomalies: flags.anomalies,
+    complianceStatus: flags.complianceStatus,
+    outOfGeofence: flags.outOfGeofence,
+    isEarlyLeave: flags.isEarlyLeave,
+    isOvertime: flags.isOvertime,
+    channelLabel: methodChannelLabel(signed.method, signed.nfcTagId),
   };
 }
 
@@ -124,6 +153,8 @@ function employeeWhere(query: AttendanceManagementQuery): Prisma.UserWhereInput 
           OR: [
             { name: { contains: search, mode: "insensitive" } },
             { phone: { contains: search, mode: "insensitive" } },
+            { username: { contains: search, mode: "insensitive" } },
+            { id: { contains: search, mode: "insensitive" } },
           ],
         }
       : {}),
@@ -149,7 +180,7 @@ async function lateRecordIds(
   query: AttendanceManagementQuery,
   extra?: Prisma.AttendanceRecordWhereInput,
 ): Promise<string[] | null> {
-  if (query.status !== "late") return null;
+  if (query.status !== "late" && !query.lateOnly) return null;
 
   const from = query.from ? startOfDay(new Date(query.from)) : new Date(0);
   const to = query.to ? endOfDay(new Date(query.to)) : new Date();
@@ -181,7 +212,9 @@ function buildRecordWhere(query: AttendanceManagementQuery, lateIds: string[] | 
 
   if (query.status === "present") where.checkOut = null;
   if (query.status === "left") where.checkOut = { not: null };
-  if (query.status === "late" && lateIds) where.id = { in: lateIds.length ? lateIds : ["__none__"] };
+  if ((query.status === "late" || query.lateOnly) && lateIds) {
+    where.id = { in: lateIds.length ? lateIds : ["__none__"] };
+  }
 
   if (query.gps === "valid") {
     where.AND = [
@@ -411,9 +444,10 @@ export async function getActiveAttendanceRecords(
   });
 
   const now = Date.now();
+  const labGeo = await getAttendanceLabGeo();
   return Promise.all(
     rows.map(async (row) => {
-      const base = await enrichRecord(mapAttendance(row), row.user);
+      const base = await enrichRecord(mapAttendance(row), row.user, labGeo);
       return {
         ...base,
         liveDurationMs: now - base.checkIn.getTime(),
@@ -458,26 +492,105 @@ export async function getAttendanceRecords(
   const limit = Math.min(100, Math.max(1, query.limit ?? DEFAULT_LIMIT));
   const lateIds = await lateRecordIds(query);
   const where = buildRecordWhere(query, lateIds);
+  const labGeo = await getAttendanceLabGeo();
+  const needsPostFilter = Boolean(query.overtimeOnly || query.anomaliesOnly || query.compliance);
 
-  const [total, rows] = await Promise.all([
-    prisma.attendanceRecord.count({ where }),
-    prisma.attendanceRecord.findMany({
-      where,
-      include: {
-        user: { select: { id: true, name: true, phone: true, role: true, roles: true, color: true } },
-      },
-      orderBy: buildOrderBy(query),
-      skip: (page - 1) * limit,
-      take: limit,
-    }),
-  ]);
+  if (!needsPostFilter) {
+    const [total, rows] = await Promise.all([
+      prisma.attendanceRecord.count({ where }),
+      prisma.attendanceRecord.findMany({
+        where,
+        include: {
+          user: { select: { id: true, name: true, phone: true, role: true, roles: true, color: true } },
+        },
+        orderBy: buildOrderBy(query),
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
 
+    return {
+      records: await Promise.all(
+        rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo)),
+      ),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+    };
+  }
+
+  const rows = await prisma.attendanceRecord.findMany({
+    where,
+    include: {
+      user: { select: { id: true, name: true, phone: true, role: true, roles: true, color: true } },
+    },
+    orderBy: buildOrderBy(query),
+    take: MAX_EXPORT,
+  });
+
+  let records = await Promise.all(
+    rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo)),
+  );
+  if (query.overtimeOnly) records = records.filter((r) => r.isOvertime);
+  if (query.anomaliesOnly) records = records.filter((r) => r.complianceStatus !== "ok");
+  if (query.compliance) {
+    records = records.filter((r) => r.complianceStatus === query.compliance);
+  }
+
+  const total = records.length;
+  const start = (page - 1) * limit;
   return {
-    records: await Promise.all(rows.map((row) => enrichRecord(mapAttendance(row), row.user))),
+    records: records.slice(start, start + limit),
     total,
     page,
     limit,
     totalPages: Math.ceil(total / limit) || 1,
+  };
+}
+
+export async function getEmployeeAttendanceStats(
+  userId: string,
+  query: Pick<AttendanceManagementQuery, "from" | "to"> = {},
+): Promise<AttendanceEmployeeStats> {
+  const labGeo = await getAttendanceLabGeo();
+  const rows = await prisma.attendanceRecord.findMany({
+    where: {
+      userId,
+      ...recordDateWhere(query),
+    },
+    include: {
+      user: { select: { id: true, name: true, phone: true, role: true, roles: true, color: true } },
+    },
+    orderBy: { checkIn: "desc" },
+    take: MAX_EXPORT,
+  });
+
+  const records = await Promise.all(
+    rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo)),
+  );
+
+  const workDayKeys = new Set(
+    records.map((r) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jerusalem" }).format(r.checkIn),
+    ),
+  );
+
+  const totalHours = records.reduce((sum, r) => sum + (r.durationHours ?? 0), 0);
+  const overtimeHours = records
+    .filter((r) => r.isOvertime)
+    .reduce((sum, r) => sum + Math.max(0, (r.durationHours ?? 0) - 9), 0);
+
+  return {
+    workDays: workDayKeys.size,
+    totalHours: Math.round(totalHours * 10) / 10,
+    overtimeHours: Math.round(overtimeHours * 10) / 10,
+    lateCount: records.filter((r) => r.isLate).length,
+    earlyLeaveCount: records.filter((r) => r.isEarlyLeave).length,
+    openWithoutCheckout: records.filter((r) => !r.checkOut).length,
+    missingGpsCount: records.filter((r) => r.anomalies.includes("missing_gps")).length,
+    missingPhotoCount: records.filter((r) => r.anomalies.includes("missing_photo")).length,
+    outOfGeofenceCount: records.filter((r) => r.outOfGeofence).length,
   };
 }
 
@@ -491,18 +604,27 @@ export async function getAttendanceRecordsForExport(
       id: r.id,
       userId: r.employee.id,
       checkIn: new Date(),
-      method: "MANUAL",
+      method: "MANUAL" as const,
       employee: r.employee,
       durationHours: null,
       isLate: false,
       gpsValid: false,
       hasPhoto: false,
+      anomalies: ["missing_checkout" as const],
+      complianceStatus: "missing" as const,
+      outOfGeofence: false,
+      isEarlyLeave: false,
+      isOvertime: false,
+      channelLabel: "—",
       createdAt: new Date(),
     }));
   }
 
+  const result = await getAttendanceRecords(exportQuery);
+  // Re-fetch full export set without page limit quirks
   const lateIds = await lateRecordIds(exportQuery);
   const where = buildRecordWhere(exportQuery, lateIds);
+  const labGeo = await getAttendanceLabGeo();
   const rows = await prisma.attendanceRecord.findMany({
     where,
     include: {
@@ -512,10 +634,20 @@ export async function getAttendanceRecordsForExport(
     take: MAX_EXPORT,
   });
 
-  return Promise.all(rows.map((row) => enrichRecord(mapAttendance(row), row.user)));
+  let records = await Promise.all(
+    rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo)),
+  );
+  if (exportQuery.overtimeOnly) records = records.filter((r) => r.isOvertime);
+  if (exportQuery.anomaliesOnly) records = records.filter((r) => r.complianceStatus !== "ok");
+  if (exportQuery.compliance) {
+    records = records.filter((r) => r.complianceStatus === exportQuery.compliance);
+  }
+  void result;
+  return records;
 }
 
 export async function getAttendanceRecordById(id: string): Promise<AttendanceManagementRecord | null> {
+  const labGeo = await getAttendanceLabGeo();
   const row = await prisma.attendanceRecord.findUnique({
     where: { id },
     include: {
@@ -523,7 +655,7 @@ export async function getAttendanceRecordById(id: string): Promise<AttendanceMan
     },
   });
   if (!row) return null;
-  return enrichRecord(mapAttendance(row), row.user);
+  return enrichRecord(mapAttendance(row), row.user, labGeo);
 }
 
 export type AttendancePhotoKind = "check-in" | "check-out";

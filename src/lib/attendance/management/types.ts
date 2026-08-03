@@ -4,6 +4,15 @@ export type AttendanceRecordStatus = "present" | "left" | "late" | "not_checked_
 export type AttendanceGpsFilter = "all" | "valid" | "invalid";
 export type AttendancePhotoFilter = "all" | "has" | "none";
 export type AttendanceSortField = "name" | "checkIn" | "checkOut" | "duration" | "date";
+export type AttendanceComplianceStatus = "ok" | "missing" | "anomaly";
+export type AttendanceAnomalyCode =
+  | "missing_checkout"
+  | "missing_gps"
+  | "missing_photo"
+  | "out_of_geofence"
+  | "late"
+  | "unusual_hours"
+  | "early_leave";
 
 export interface AttendanceManagementQuery {
   from?: string;
@@ -18,6 +27,11 @@ export interface AttendanceManagementQuery {
   sortDir?: "asc" | "desc";
   page?: number;
   limit?: number;
+  /** Filter flags */
+  lateOnly?: boolean;
+  overtimeOnly?: boolean;
+  anomaliesOnly?: boolean;
+  compliance?: AttendanceComplianceStatus;
 }
 
 export interface AttendanceEmployeeSummary {
@@ -35,6 +49,24 @@ export interface AttendanceManagementRecord extends AttendanceRecord {
   isLate: boolean;
   gpsValid: boolean;
   hasPhoto: boolean;
+  anomalies: AttendanceAnomalyCode[];
+  complianceStatus: AttendanceComplianceStatus;
+  outOfGeofence: boolean;
+  isEarlyLeave: boolean;
+  isOvertime: boolean;
+  channelLabel: string;
+}
+
+export interface AttendanceEmployeeStats {
+  workDays: number;
+  totalHours: number;
+  overtimeHours: number;
+  lateCount: number;
+  earlyLeaveCount: number;
+  openWithoutCheckout: number;
+  missingGpsCount: number;
+  missingPhotoCount: number;
+  outOfGeofenceCount: number;
 }
 
 export interface AttendanceActiveRecord extends AttendanceManagementRecord {

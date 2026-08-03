@@ -10,8 +10,10 @@ import { LiveDuration } from "@/components/attendance/management/LiveDuration";
 import { fetchMyAttendance } from "@/lib/attendance/employee/client";
 import { formatEmployeeDuration } from "@/lib/attendance/employee/format";
 import type { EmployeeAttendanceQuery, EmployeeAttendanceResult } from "@/lib/attendance/employee/types";
+import { myAttendancePdfUrl } from "@/lib/attendance/pdf/client";
+import { AttendancePdfPreview } from "@/components/attendance/pdf/AttendancePdfPreview";
 import { formatDate, formatTime } from "@/lib/utils";
-import { Calendar, Clock, TrendingUp, Briefcase, Loader2, ChevronRight, ChevronLeft } from "lucide-react";
+import { Calendar, Clock, TrendingUp, Briefcase, Loader2, ChevronRight, ChevronLeft, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function defaultFilters(): EmployeeAttendanceQuery {
@@ -49,6 +51,7 @@ export default function MyAttendancePage() {
   const [data, setData] = useState<EmployeeAttendanceResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
 
   const load = useCallback(async (query: EmployeeAttendanceQuery) => {
     setLoading(true);
@@ -99,9 +102,19 @@ export default function MyAttendancePage() {
         title="הנוכחות שלי"
         description="היסטוריית הנוכחות האישית — לצפייה בלבד"
         actions={
-          <Link href="/my-work">
-            <Button variant="outline" size="sm">רישום כניסה / יציאה</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPdfPreviewUrl(myAttendancePdfUrl(filters))}
+            >
+              <FileText className="h-4 w-4 ml-1" />
+              PDF
+            </Button>
+            <Link href="/my-work">
+              <Button variant="outline" size="sm">רישום כניסה / יציאה</Button>
+            </Link>
+          </div>
         }
       />
 
@@ -304,6 +317,13 @@ export default function MyAttendancePage() {
           )}
         </CardContent>
       </Card>
+
+      <AttendancePdfPreview
+        open={Boolean(pdfPreviewUrl)}
+        title="PDF – הנוכחות שלי"
+        url={pdfPreviewUrl}
+        onClose={() => setPdfPreviewUrl(null)}
+      />
     </>
   );
 }

@@ -1,12 +1,16 @@
 import {
-  resolveModelSource,
   THUMBNAIL_MAX_BYTES,
   canOpenInModelViewer,
 } from "@/lib/orders/scan-file";
+import {
+  bundleFromFile,
+  createThreeObjectFromBundle,
+} from "@/lib/orders/load-model3d";
 
 /**
  * Render a lightweight offscreen Three.js snapshot of a 3D scan for tile thumbnails.
  * Returns a data URL (PNG) or null if unsupported / too large / failed.
+ * Preserves PLY vertex colors when present.
  */
 export async function generateModelThumbnail(file: File): Promise<string | null> {
   if (typeof window === "undefined") return null;
@@ -14,8 +18,8 @@ export async function generateModelThumbnail(file: File): Promise<string | null>
   if (file.size > THUMBNAIL_MAX_BYTES) return null;
 
   try {
-    const source = await resolveModelSource(file);
-    if (!source) return null;
+    const bundle = await bundleFromFile(file);
+    if (!bundle) return null;
 
     const THREE = await import("three");
     const size = 256;
@@ -37,37 +41,7 @@ export async function generateModelThumbnail(file: File): Promise<string | null>
     dir.position.set(2, 3, 4);
     scene.add(dir);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let object: any;
-    if (source.ext === "stl") {
-      const { STLLoader } = await import("three/examples/jsm/loaders/STLLoader.js");
-      const geometry = new STLLoader().parse(source.buffer);
-      geometry.computeVertexNormals();
-      object = new THREE.Mesh(
-        geometry,
-        new THREE.MeshStandardMaterial({ color: 0xc9a227, metalness: 0.15, roughness: 0.55 }),
-      );
-    } else if (source.ext === "ply") {
-      const { PLYLoader } = await import("three/examples/jsm/loaders/PLYLoader.js");
-      const geometry = new PLYLoader().parse(source.buffer);
-      geometry.computeVertexNormals();
-      object = new THREE.Mesh(
-        geometry,
-        new THREE.MeshStandardMaterial({ color: 0xc9a227, metalness: 0.15, roughness: 0.55 }),
-      );
-    } else {
-      const { OBJLoader } = await import("three/examples/jsm/loaders/OBJLoader.js");
-      object = new OBJLoader().parse(new TextDecoder().decode(source.buffer));
-      object.traverse((child: { isMesh?: boolean; material?: unknown }) => {
-        if (child.isMesh) {
-          child.material = new THREE.MeshStandardMaterial({
-            color: 0xc9a227,
-            metalness: 0.15,
-            roughness: 0.55,
-          });
-        }
-      });
-    }
+    const object = await createThreeObjectFromBundle(THREE, bundle);
 
     const box = new THREE.Box3().setFromObject(object);
     const center = box.getCenter(new THREE.Vector3());
@@ -94,9 +68,14 @@ export async function generateModelThumbnail(file: File): Promise<string | null>
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function geometryDispose(object: any) {
-  object?.traverse?.((child: { geometry?: { dispose?: () => void }; material?: { dispose?: () => void } | Array<{ dispose?: () => void }> }) => {
-    child.geometry?.dispose?.();
-    if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose?.());
-    else child.material?.dispose?.();
-  });
+  object?.traverse?.(
+    (child: {
+      geometry?: { dispose?: () => void };
+      material?: { dispose?: () => void } | Array<{ dispose?: () => void }>;
+    }) => {
+      child.geometry?.dispose?.();
+      if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose?.());
+      else child.material?.dispose?.();
+    },
+  );
 }

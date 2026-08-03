@@ -25,10 +25,12 @@ import { cn } from "@/lib/utils";
 
 interface FilePreviewModalProps {
   file: OrderFile | null;
+  /** Related scan files (Upper/Lower/Bite) shown together in the 3D viewer. */
+  relatedFiles?: OrderFile[];
   onClose: () => void;
 }
 
-export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
+export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePreviewModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -40,7 +42,8 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
   const folderId = file ? getOrderFileFolderId(file) : "";
   const viewUrl = useMemo(() => {
     if (!file || previewKind === "none" || previewKind === "plx" || previewKind === "dcm") return null;
-    return buildFileViewUrl(file.orderId, folderId, file.fileName);
+    // Prefer file id key without trailing name — works with structured Orders/… paths.
+    return buildFileViewUrl(file.orderId, folderId);
   }, [file, folderId, previewKind]);
 
   const downloadUrl = file?.dataUrl ?? viewUrl;
@@ -215,11 +218,22 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
             />
           )}
 
-          {(previewKind === "model3d" || previewKind === "zip") && viewUrl && !error && (
+          {(previewKind === "model3d" || previewKind === "zip") && !error && (
             <ModelViewer3D
               key={refreshKey}
-              url={viewUrl}
+              fileId={file.id}
+              fileSize={file.fileSize ?? undefined}
+              url={viewUrl ?? undefined}
               fileName={file.fileName}
+              companions={relatedFiles
+                .filter((f) => f.id !== file.id)
+                .map((f) => ({
+                  fileId: f.id,
+                  fileSize: f.fileSize ?? undefined,
+                  url: buildFileViewUrl(f.orderId, getOrderFileFolderId(f)),
+                  fileName: f.fileName,
+                  role: inferJawRole(f.fileName, f.slotKey),
+                }))}
               onLoaded={() => setLoading(false)}
               onError={() => {
                 setLoading(false);
@@ -274,4 +288,18 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
       </div>
     </div>
   );
+}
+
+function inferJawRole(
+  fileName: string,
+  slotKey?: string | null,
+): "upper" | "lower" | "bite" | "other" {
+  if (slotKey === "UpperScan") return "upper";
+  if (slotKey === "LowerScan") return "lower";
+  if (slotKey === "BiteScan") return "bite";
+  const lower = fileName.toLowerCase().replace(/[\s_-]+/g, "");
+  if (lower.includes("upper") || lower.includes("maxilla") || lower.includes("עליון")) return "upper";
+  if (lower.includes("lower") || lower.includes("mandible") || lower.includes("תחתון")) return "lower";
+  if (lower.includes("bite") || lower.includes("סגר")) return "bite";
+  return "other";
 }

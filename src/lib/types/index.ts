@@ -199,6 +199,18 @@ export interface Order {
   updatedAt: Date;
 }
 
+export interface OrderFileModelMeta {
+  ext: string;
+  vertexCount: number;
+  triangleCount: number;
+  bbox: { min: [number, number, number]; max: [number, number, number] };
+  center: [number, number, number];
+  maxDim: number;
+  hasVertexColors: boolean;
+  hasNormals: boolean;
+  parseMs?: number;
+}
+
 export interface OrderFile {
   id: string;
   orderId: string;
@@ -218,6 +230,12 @@ export interface OrderFile {
   isCurrent?: boolean;
   replacesId?: string | null;
   uploadedByName?: string | null;
+  /** Parsed once at upload — bbox/center/counts for fast camera setup. */
+  modelMeta?: OrderFileModelMeta | null;
+  thumbnailPath?: string | null;
+  /** Signed URL for stored PNG thumbnail (not Base64). */
+  thumbnailUrl?: string | null;
+  parsedAt?: Date | null;
 }
 
 export interface OrderStatusHistory {
@@ -296,7 +314,23 @@ export interface Shipment {
   courierPhone?: string | null;
   notes?: string | null;
   createdAt: Date;
+  recipientSignaturePath?: string | null;
+  /** Signed URL for viewing the PNG (runtime). */
+  recipientSignatureUrl?: string | null;
+  recipientSignedAt?: Date | null;
+  recipientSignerName?: string | null;
+  recipientSignerUserId?: string | null;
+  recipientSignatureIp?: string | null;
+  recipientSignatureDeviceId?: string | null;
+  lockedAt?: Date | null;
 }
+
+export type ShipmentSignatureInput = {
+  /** PNG data URL from canvas */
+  dataUrl: string;
+  signerName?: string | null;
+  deviceId?: string | null;
+};
 
 export type TransactionType = "PAYMENT" | "CHARGE" | "SALARY";
 

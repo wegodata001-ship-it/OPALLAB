@@ -5,10 +5,17 @@ import QRCode from "qrcode";
 import { Button } from "@/components/ui/button";
 import { LAB_INFO } from "@/lib/constants/labels";
 import { OFFICIAL_ATTENDANCE_CHECKIN_URL } from "@/lib/attendance/gate/checkin-url";
-import { Copy, Download, Printer, Nfc } from "lucide-react";
+import { Copy, Download, Printer } from "lucide-react";
 
 /** Large QR + actions for the official attendance check-in URL. */
-export function AttendanceQrPanel({ className }: { className?: string }) {
+export function AttendanceQrPanel({
+  className,
+  showUrl = false,
+}: {
+  className?: string;
+  /** Hide raw URL on daily ops screens (copy button still available). */
+  showUrl?: boolean;
+}) {
   const [dataUrl, setDataUrl] = useState("");
   const [copied, setCopied] = useState(false);
   const url = OFFICIAL_ATTENDANCE_CHECKIN_URL;
@@ -69,10 +76,7 @@ export function AttendanceQrPanel({ className }: { className?: string }) {
   <h1>${LAB_INFO.name}</h1>
   <p>שער נוכחות — QR קבוע לכניסה / יציאה</p>
   <img src="${dataUrl}" alt="QR Attendance" />
-  <p class="url">${url}</p>
-  <div class="hint">
-    <strong>NFC:</strong> כתבו את אותו קישור לתג NFC (NDEF URI / URL).
-  </div>
+    <p class="url">${url}</p>
   <script>window.onload = () => { window.print(); };</script>
 </body>
 </html>`);
@@ -92,9 +96,11 @@ export function AttendanceQrPanel({ className }: { className?: string }) {
         ) : (
           <div className="w-72 h-72 sm:w-80 sm:h-80 rounded-2xl bg-slate-100 animate-pulse" />
         )}
-        <p className="mt-4 text-sm font-medium text-slate-800 break-all text-center" dir="ltr">
-          {url}
-        </p>
+        {showUrl && (
+          <p className="mt-4 text-sm font-medium text-slate-800 break-all text-center" dir="ltr">
+            {url}
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-5">
@@ -114,19 +120,6 @@ export function AttendanceQrPanel({ className }: { className?: string }) {
           <Printer className="h-4 w-4 ml-1" />
           הדפסה
         </Button>
-      </div>
-
-      <div className="mt-4 rounded-xl border border-sky-100 bg-sky-50 px-3 py-3 text-sm text-slate-700">
-        <p className="font-semibold flex items-center gap-1.5 text-sky-900">
-          <Nfc className="h-4 w-4" />
-          כתיבה לתג NFC
-        </p>
-        <ol className="list-decimal pr-5 text-xs text-slate-600 space-y-1 mt-1.5">
-          <li>פתחו אפליקציית כתיבת NFC (NFC Tools וכד׳).</li>
-          <li>בחרו רשומת URL / URI.</li>
-          <li>הדביקו: <span dir="ltr">{url}</span></li>
-          <li>הצמידו את התג וכתבו — אותו קישור כמו ב־QR.</li>
-        </ol>
       </div>
     </div>
   );

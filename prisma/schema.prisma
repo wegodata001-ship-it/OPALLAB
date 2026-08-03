@@ -305,6 +305,12 @@ model OrderFile {
   version     Int               @default(1)
   isCurrent   Boolean           @default(true)
   replacesId  String?
+  /// Parsed once on upload: bbox, center, vertex/triangle counts (no re-parse for camera).
+  modelMeta   Json?
+  /// Storage path for PNG preview thumbnail (not Base64).
+  thumbnailPath String?
+  /// When mesh metadata was extracted.
+  parsedAt    DateTime?
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -414,6 +420,15 @@ model Shipment {
   courierPhone String?
   notes        String?
   createdAt    DateTime  @default(now())
+  /// Optional recipient signature PNG in Storage
+  recipientSignaturePath String?
+  recipientSignedAt      DateTime?
+  recipientSignerName    String?
+  recipientSignerUserId  String?
+  recipientSignatureIp   String?
+  recipientSignatureDeviceId String?
+  /// When set, signature is read-only
+  lockedAt DateTime?
 
   order Order @relation(fields: [orderId], references: [id])
 

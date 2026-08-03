@@ -24,11 +24,23 @@ import {
 import { uploadVerificationPhoto } from "@/lib/attendance/verification/upload";
 import { AttendanceVerificationError } from "@/lib/attendance/verification/types";
 import { permissionHelpText } from "@/lib/attendance/gate/open-settings";
-import { CheckCircle2, Loader2, LogIn, LogOut, MapPin, Camera, Shield, AlertTriangle } from "lucide-react";
+import {
+  CheckCircle2,
+  Loader2,
+  LogIn,
+  LogOut,
+  MapPin,
+  Camera,
+  Shield,
+  AlertTriangle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type Phase =
   | "booting"
+  | "choose"
+  | "punch_gps"
+  | "punch_camera"
   | "punching"
   | "success"
   | "need_register"
@@ -38,6 +50,12 @@ type Phase =
   | "registering"
   | "permission_error"
   | "error";
+
+type GpsSnapshot = {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+};
 
 export function GateApp() {
   const { login, currentUser, isAuthenticated, logout } = useApp();
@@ -49,6 +67,9 @@ export function GateApp() {
   const [password, setPassword] = useState("");
   const [userName, setUserName] = useState("");
   const [deviceKey, setDeviceKey] = useState("");
+  const [hasOpenRecord, setHasOpenRecord] = useState(false);
+  const [intendedAction, setIntendedAction] = useState<GatePunchAction | null>(null);
+  const [gpsSnap, setGpsSnap] = useState<GpsSnapshot | null>(null);
   const [lastAction, setLastAction] = useState<GatePunchAction | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [videoReady, setVideoReady] = useState(false);
@@ -79,35 +100,49 @@ export function GateApp() {
       setLastAction(data.action);
       setUserName(data.userName);
       setMessage(data.message);
+      setHasOpenRecord(data.action === "check-in");
       setPhase("success");
     },
     [],
   );
 
-  const runPunch = useCallback(
-    async (key: string) => {
-      setPhase("punching");
-      setMessage("מזהה מכשיר ומבקש מיקום...");
+  const startCamera = useCallback(async () => {
+    setVideoReady(false);
+    const s = await requestFrontCameraStream();
+    streamRef.current = s;
+    setStream(s);
+    if (videoRef.current) {
+      await attachStreamToVideo(videoRef.current, s);
+      setVideoReady(isVideoReadyForCapture(videoRef.current));
+    }
+  }, []);
 
-      const existing = peekGatePunchResult();
-      if (existing) {
-        applyPunchSuccess(existing);
-        return;
-      }
+  const submitPunch = useCallback(
+    async (opts: {
+      key: string;
+      action: GatePunchAction;
+      gps: GpsSnapshot;
+      photoPath?: string | null;
+      userIdForUpload?: string;
+    }) => {
+      setPhase("punching");
+      setMessage(opts.action === "check-in" ? "רושם כניסה..." : "רושם יציאה...");
+      resetGatePunchLock();
 
       try {
         const result = await runGatePunchOnce(async () => {
-          const gps = await captureGpsForVerification();
           const device = captureDeviceInfo();
           const res = await fetch("/api/attendance/gate/punch", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             credentials: "include",
             body: JSON.stringify({
-              deviceKey: key,
-              latitude: gps.latitude,
-              longitude: gps.longitude,
-              accuracy: gps.accuracy,
+              deviceKey: opts.key,
+              latitude: opts.gps.latitude,
+              longitude: opts.gps.longitude,
+              accuracy: opts.gps.accuracy,
+              intendedAction: opts.action,
+              photoPath: opts.photoPath ?? null,
               device,
             }),
           });
@@ -176,9 +211,54 @@ export function GateApp() {
     [applyPunchSuccess, failPermission],
   );
 
+  const beginAction = useCallback(
+    async (action: GatePunchAction) => {
+      const key = deviceKey || getOrCreateDeviceKey();
+      setIntendedAction(action);
+      setGpsSnap(null);
+      cleanupCamera();
+      resetGatePunchLock();
+      setPhase("punch_gps");
+      setMessage("מאשרים מיקום GPS...");
+
+      try {
+        const gps = await captureGpsForVerification();
+        setGpsSnap(gps);
+        setPhase("punch_camera");
+        setMessage(
+          action === "check-in"
+            ? "צלמו סלפי לאישור כניסה"
+            : "צלמו סלפי לאישור יציאה (אופציונלי)",
+        );
+        try {
+          await startCamera();
+        } catch (err) {
+          cleanupCamera();
+          if (action === "check-out") {
+            // Checkout photo is optional — continue without camera.
+            await submitPunch({ key, action, gps, photoPath: null });
+            return;
+          }
+          failPermission(
+            err instanceof Error ? err.message : "נדרשת הרשאת מצלמה לכניסה",
+          );
+        }
+      } catch (err) {
+        if (err instanceof AttendanceVerificationError) {
+          failPermission(err.message);
+          return;
+        }
+        failPermission("נדרש אישור GPS לרישום נוכחות");
+      }
+    },
+    [cleanupCamera, deviceKey, failPermission, startCamera, submitPunch],
+  );
+
   const bootstrap = useCallback(async () => {
     setPhase("booting");
     cleanupCamera();
+    setIntendedAction(null);
+    setGpsSnap(null);
     const key = getOrCreateDeviceKey();
     setDeviceKey(key);
 
@@ -213,7 +293,9 @@ export function GateApp() {
       const status = json.data?.status;
       if (status === "trusted") {
         setUserName(json.data?.userName ?? "");
-        await runPunch(key);
+        setHasOpenRecord(Boolean(json.data?.hasOpenRecord));
+        setPhase("choose");
+        setMessage("");
         return;
       }
       if (status === "blocked") {
@@ -228,10 +310,9 @@ export function GateApp() {
       setPhase("error");
       setMessage("לא ניתן להתחבר לשרת");
     }
-  }, [runPunch, cleanupCamera, applyPunchSuccess]);
+  }, [cleanupCamera, applyPunchSuccess]);
 
   useEffect(() => {
-    // Hard guard against React remount double-bootstrap within the same page load.
     if (bootOnceRef.current) return;
     bootOnceRef.current = true;
     void bootstrap();
@@ -247,7 +328,6 @@ export function GateApp() {
     };
   }, []);
 
-  /** Bind stream when the <video> mounts — critical on iOS where ref is null until paint. */
   const bindVideoRef = useCallback((node: HTMLVideoElement | null) => {
     videoRef.current = node;
     if (!node || !streamRef.current) {
@@ -282,16 +362,8 @@ export function GateApp() {
       await captureGpsForVerification();
       setPhase("register_camera");
       setMessage("צלמו סלפי לאימות חד-פעמי");
-      setVideoReady(false);
       try {
-        const s = await requestFrontCameraStream();
-        streamRef.current = s;
-        setStream(s);
-        // If video already mounted (race), attach immediately
-        if (videoRef.current) {
-          await attachStreamToVideo(videoRef.current, s);
-          setVideoReady(isVideoReadyForCapture(videoRef.current));
-        }
+        await startCamera();
       } catch (err) {
         cleanupCamera();
         failPermission(
@@ -323,8 +395,6 @@ export function GateApp() {
   };
 
   const completeRegistration = async () => {
-    // Snapshot the element BEFORE any phase change — switching to "registering"
-    // unmounts <video> and clears the ref (Safari: null.readyState crash).
     const video = videoRef.current;
     if (!currentUser) return;
     if (!video || !isVideoReadyForCapture(video)) {
@@ -335,7 +405,6 @@ export function GateApp() {
     setCapturing(true);
     setMessage("מצלם...");
     try {
-      // Capture FIRST while the video element is still mounted and has frames
       const photo = await capturePhotoFromVideo(video);
       cleanupCamera();
 
@@ -370,8 +439,10 @@ export function GateApp() {
         return;
       }
 
-      setMessage("המכשיר נרשם בהצלחה — מבצעים כניסה...");
-      await runPunch(key);
+      setDeviceKey(key);
+      setHasOpenRecord(false);
+      setPhase("choose");
+      setMessage("המכשיר נרשם — בחרו כניסה או יציאה");
     } catch (err) {
       cleanupCamera();
       if (err instanceof AttendanceVerificationError) {
@@ -387,7 +458,73 @@ export function GateApp() {
     }
   };
 
-  const showCamera = phase === "register_camera";
+  const completePunchPhoto = async () => {
+    const video = videoRef.current;
+    const action = intendedAction;
+    const gps = gpsSnap;
+    const key = deviceKey || getOrCreateDeviceKey();
+    if (!action || !gps) {
+      setPhase("error");
+      setMessage("חסרים נתוני פעולה או GPS");
+      return;
+    }
+    if (!video || !isVideoReadyForCapture(video)) {
+      setMessage("המצלמה עדיין לא מוכנה — המתינו רגע ונסו שוב");
+      return;
+    }
+
+    setCapturing(true);
+    setMessage("מצלם...");
+    try {
+      const photo = await capturePhotoFromVideo(video);
+      cleanupCamera();
+
+      const form = new FormData();
+      form.append("file", photo.blob, "selfie.jpg");
+      form.append("deviceKey", key);
+      form.append("kind", action);
+      const up = await fetch("/api/attendance/gate/photo", {
+        method: "POST",
+        credentials: "include",
+        body: form,
+      });
+      const upJson = (await up.json()) as {
+        success?: boolean;
+        data?: { photoPath?: string };
+        error?: { message?: string };
+      };
+      if (!upJson.success || !upJson.data?.photoPath) {
+        throw new Error(upJson.error?.message || "העלאת התמונה נכשלה");
+      }
+
+      await submitPunch({ key, action, gps, photoPath: upJson.data.photoPath });
+    } catch (err) {
+      cleanupCamera();
+      if (err instanceof AttendanceVerificationError) {
+        failPermission(err.message);
+        return;
+      }
+      setPhase("error");
+      setMessage(err instanceof Error ? err.message : "צילום/רישום נכשל");
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  const skipPunchPhoto = async () => {
+    if (intendedAction !== "check-out" || !gpsSnap) return;
+    cleanupCamera();
+    const key = deviceKey || getOrCreateDeviceKey();
+    await submitPunch({
+      key,
+      action: "check-out",
+      gps: gpsSnap,
+      photoPath: null,
+    });
+  };
+
+  const showRegisterCamera = phase === "register_camera";
+  const showPunchCamera = phase === "punch_camera";
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex flex-col">
@@ -399,10 +536,49 @@ export function GateApp() {
 
       <main className="flex-1 flex items-center justify-center p-4">
         <div className="w-full max-w-md space-y-4">
-          {(phase === "booting" || phase === "punching" || phase === "registering") && (
+          {(phase === "booting" ||
+            phase === "punch_gps" ||
+            phase === "punching" ||
+            phase === "registering") && (
             <CardBox>
               <Loader2 className="h-10 w-10 animate-spin text-opal-gold mx-auto" />
               <p className="text-center mt-4 text-slate-200">{message || "טוען..."}</p>
+            </CardBox>
+          )}
+
+          {phase === "choose" && (
+            <CardBox className="space-y-4">
+              {userName && (
+                <p className="text-center text-slate-300">
+                  שלום, <span className="font-bold text-white">{userName}</span>
+                </p>
+              )}
+              <p className="text-center text-sm text-slate-400">
+                {hasOpenRecord
+                  ? "יש לכם כניסה פתוחה — ניתן לבצע יציאה"
+                  : "בחרו פעולה להמשך"}
+              </p>
+              {message && <p className="text-center text-sm text-emerald-300">{message}</p>}
+
+              <button
+                type="button"
+                onClick={() => void beginAction("check-in")}
+                className="w-full rounded-2xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-white py-7 px-7 shadow-lg shadow-emerald-900/40 transition"
+              >
+                <LogIn className="h-10 w-10 mx-auto mb-2" />
+                <span className="block text-2xl font-black tracking-wide">כניסה לעבודה</span>
+                <span className="block text-sm text-emerald-50/90 mt-1">GPS · סלפי · רישום שעה</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void beginAction("check-out")}
+                className="w-full rounded-2xl bg-red-500 hover:bg-red-400 active:bg-red-600 text-white py-7 px-4 shadow-lg shadow-red-900/40 transition"
+              >
+                <LogOut className="h-10 w-10 mx-auto mb-2" />
+                <span className="block text-2xl font-black tracking-wide">יציאה מהעבודה</span>
+                <span className="block text-sm text-red-50/90 mt-1">GPS · סלפי (אופציונלי) · סגירת יום</span>
+              </button>
             </CardBox>
           )}
 
@@ -414,35 +590,39 @@ export function GateApp() {
                   : "border-emerald-500/40 bg-emerald-500/10"
               }
             >
-              {lastAction === "check-out" ? (
-                <LogOut className="h-14 w-14 text-sky-300 mx-auto" />
-              ) : lastAction === "check-in" ? (
-                <LogIn className="h-14 w-14 text-emerald-400 mx-auto" />
-              ) : (
-                <CheckCircle2 className="h-14 w-14 text-emerald-400 mx-auto" />
-              )}
-              <p className="text-center text-sm font-semibold tracking-wide mt-3 text-white/70">
-                {lastAction === "check-out" ? "יציאה" : lastAction === "check-in" ? "כניסה" : "נוכחות"}
-              </p>
-              <p className="text-center text-xl font-bold mt-1">{userName}</p>
-              <p
+              <CheckCircle2
                 className={cn(
-                  "text-center mt-2",
-                  lastAction === "check-out" ? "text-sky-100" : "text-emerald-200",
+                  "h-16 w-16 mx-auto",
+                  lastAction === "check-out" ? "text-sky-300" : "text-emerald-400",
                 )}
-              >
-                {message}
+              />
+              <p className="text-center text-2xl font-black mt-4">
+                {lastAction === "check-out" ? "יציאה נרשמה בהצלחה" : "כניסה נרשמה בהצלחה"}
               </p>
+              <p className="text-center text-lg font-semibold mt-2">{userName}</p>
+              {message && (
+                <p
+                  className={cn(
+                    "text-center mt-2 text-sm",
+                    lastAction === "check-out" ? "text-sky-100" : "text-emerald-200",
+                  )}
+                >
+                  {message}
+                </p>
+              )}
               <Button
                 className="w-full mt-6"
                 variant="outline"
                 onClick={() => {
                   resetGatePunchLock();
-                  bootOnceRef.current = false;
-                  void bootstrap();
+                  cleanupCamera();
+                  setIntendedAction(null);
+                  setGpsSnap(null);
+                  setPhase("choose");
+                  setMessage("");
                 }}
               >
-                סריקה נוספת
+                חזרה לתפריט
               </Button>
             </CardBox>
           )}
@@ -504,10 +684,24 @@ export function GateApp() {
             </CardBox>
           )}
 
-          {showCamera && (
+          {(showRegisterCamera || showPunchCamera) && (
             <CardBox>
-              <Camera className="h-8 w-8 text-opal-gold mx-auto mb-2" />
-              <p className="text-center text-sm text-slate-300 mb-3">{message}</p>
+              <Camera
+                className={cn(
+                  "h-8 w-8 mx-auto mb-2",
+                  intendedAction === "check-out" && showPunchCamera
+                    ? "text-red-400"
+                    : "text-opal-gold",
+                )}
+              />
+              <p className="text-center text-sm text-slate-300 mb-1">
+                {showPunchCamera
+                  ? intendedAction === "check-in"
+                    ? "כניסה לעבודה"
+                    : "יציאה מהעבודה"
+                  : "הרשמת מכשיר"}
+              </p>
+              <p className="text-center text-sm text-slate-400 mb-3">{message}</p>
               <div className="aspect-[3/4] rounded-xl overflow-hidden bg-black">
                 <video
                   ref={bindVideoRef}
@@ -523,13 +717,57 @@ export function GateApp() {
                   מצלמה נטענת...
                 </p>
               )}
-              <Button
-                className="w-full mt-4"
-                disabled={!videoReady || capturing || !stream}
-                onClick={() => void completeRegistration()}
-              >
-                {capturing ? "מצלם..." : videoReady ? "צלם ושמור מכשיר מאושר" : "ממתין למצלמה..."}
-              </Button>
+              {showRegisterCamera && (
+                <Button
+                  className="w-full mt-4"
+                  disabled={!videoReady || capturing || !stream}
+                  onClick={() => void completeRegistration()}
+                >
+                  {capturing ? "מצלם..." : videoReady ? "צלם ושמור מכשיר מאושר" : "ממתין למצלמה..."}
+                </Button>
+              )}
+              {showPunchCamera && (
+                <div className="flex flex-col gap-2 mt-4">
+                  <Button
+                    className={cn(
+                      "w-full",
+                      intendedAction === "check-out"
+                        ? "bg-red-500 hover:bg-red-400"
+                        : "bg-emerald-500 hover:bg-emerald-400",
+                    )}
+                    disabled={!videoReady || capturing || !stream}
+                    onClick={() => void completePunchPhoto()}
+                  >
+                    {capturing
+                      ? "מצלם..."
+                      : intendedAction === "check-in"
+                        ? "צלם ואשר כניסה"
+                        : "צלם ואשר יציאה"}
+                  </Button>
+                  {intendedAction === "check-out" && (
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      disabled={capturing}
+                      onClick={() => void skipPunchPhoto()}
+                    >
+                      יציאה ללא תמונה
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    className="w-full text-slate-400"
+                    disabled={capturing}
+                    onClick={() => {
+                      cleanupCamera();
+                      setPhase("choose");
+                      setMessage("");
+                    }}
+                  >
+                    ביטול
+                  </Button>
+                </div>
+              )}
             </CardBox>
           )}
 
@@ -539,7 +777,15 @@ export function GateApp() {
               <p className="text-center font-bold mt-3 whitespace-pre-line">{message}</p>
               <p className="text-sm text-amber-100/80 mt-3 text-center">{detail}</p>
               <div className="flex flex-col gap-2 mt-6">
-                <Button onClick={() => void bootstrap()}>נסה שוב</Button>
+                <Button
+                  onClick={() => {
+                    resetGatePunchLock();
+                    bootOnceRef.current = false;
+                    void bootstrap();
+                  }}
+                >
+                  נסה שוב
+                </Button>
                 <Button
                   variant="outline"
                   onClick={() => {
@@ -557,18 +803,26 @@ export function GateApp() {
             <CardBox className="border-red-500/40 bg-red-500/10">
               <AlertTriangle className="h-12 w-12 text-red-400 mx-auto" />
               <p className="text-center mt-3">{message}</p>
-              <Button className="w-full mt-6" onClick={() => void bootstrap()}>
-                נסה שוב
+              <Button
+                className="w-full mt-6"
+                onClick={() => {
+                  resetGatePunchLock();
+                  setPhase("choose");
+                  setMessage("");
+                }}
+              >
+                חזרה לתפריט
               </Button>
               <Button
                 className="w-full mt-2"
                 variant="outline"
                 onClick={() => {
-                  setPhase("need_register");
-                  setMessage("הרשמת מכשיר מחדש");
+                  resetGatePunchLock();
+                  bootOnceRef.current = false;
+                  void bootstrap();
                 }}
               >
-                הרשמת מכשיר מחדש
+                טען מחדש
               </Button>
             </CardBox>
           )}

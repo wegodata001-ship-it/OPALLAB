@@ -7,9 +7,12 @@ import {
   attendanceExportUrl,
   deleteAttendancePhoto,
   fetchAttendanceRecords,
+  fetchEmployeeAttendanceStats,
 } from "@/lib/attendance/management/client";
+import { AttendancePdfPreview } from "@/components/attendance/pdf/AttendancePdfPreview";
 import type {
   AttendanceEmployeeRosterRow,
+  AttendanceEmployeeStats,
   AttendanceLabGeo,
   AttendanceManagementRecord,
 } from "@/lib/attendance/management/types";
@@ -119,12 +122,14 @@ export function EmployeeAttendanceCard({
 }) {
   const [preset, setPreset] = useState<RangePreset>("month");
   const [records, setRecords] = useState<AttendanceManagementRecord[]>([]);
+  const [stats, setStats] = useState<AttendanceEmployeeStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [photoModal, setPhotoModal] = useState<{ photos: AttendancePhotoItem[]; index: number } | null>(
     null,
   );
   const [busyDevice, setBusyDevice] = useState(false);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
 
   const range = useMemo(() => rangeForPreset(preset), [preset]);
 
@@ -132,19 +137,27 @@ export function EmployeeAttendanceCard({
     if (!row) return;
     setLoading(true);
     try {
-      const result = await fetchAttendanceRecords({
-        userId: row.employee.id,
-        from: range.from,
-        to: range.to,
-        page: 1,
-        limit: 200,
-        sortBy: "checkIn",
-        sortDir: "desc",
-      });
+      const [result, employeeStats] = await Promise.all([
+        fetchAttendanceRecords({
+          userId: row.employee.id,
+          from: range.from,
+          to: range.to,
+          page: 1,
+          limit: 200,
+          sortBy: "checkIn",
+          sortDir: "desc",
+        }),
+        fetchEmployeeAttendanceStats(row.employee.id, {
+          from: range.from,
+          to: range.to,
+        }),
+      ]);
       if (result.mode === "records") setRecords(result.records);
       else setRecords([]);
+      setStats(employeeStats);
     } catch {
       setRecords([]);
+      setStats(null);
     } finally {
       setLoading(false);
     }
@@ -331,6 +344,27 @@ export function EmployeeAttendanceCard({
             </div>
           </section>
 
+          {stats && (
+            <section className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {[
+                { label: "ימי עבודה", value: stats.workDays },
+                { label: "שעות עבודה", value: stats.totalHours },
+                { label: "שעות נוספות", value: stats.overtimeHours },
+                { label: "איחורים", value: stats.lateCount },
+                { label: "יציאות מוקדמות", value: stats.earlyLeaveCount },
+                { label: "ללא יציאה", value: stats.openWithoutCheckout },
+                { label: "חסר GPS", value: stats.missingGpsCount },
+                { label: "חסרה תמונה", value: stats.missingPhotoCount },
+                { label: "מחוץ לאזור", value: stats.outOfGeofenceCount },
+              ].map((s) => (
+                <div key={s.label} className="rounded-lg border bg-slate-50 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">{s.label}</p>
+                  <p className="text-lg font-bold text-slate-900">{s.value}</p>
+                </div>
+              ))}
+            </section>
+          )}
+
           {mapUrl && (
             <section className="space-y-2">
               <h3 className="font-semibold text-slate-800 flex items-center gap-2">
@@ -382,10 +416,10 @@ export function EmployeeAttendanceCard({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => window.open(attendanceExportUrl(exportQuery, "pdf"), "_blank")}
+                onClick={() => setPdfPreviewUrl(attendanceExportUrl(exportQuery, "pdf"))}
               >
                 <FileText className="h-4 w-4 ml-1" />
-                PDF
+                PDF עובד
               </Button>
             </div>
 
@@ -527,6 +561,13 @@ export function EmployeeAttendanceCard({
           }}
         />
       )}
+
+      <AttendancePdfPreview
+        open={Boolean(pdfPreviewUrl)}
+        title={`PDF עובד – ${emp.name}`}
+        url={pdfPreviewUrl}
+        onClose={() => setPdfPreviewUrl(null)}
+      />
     </>
   );
 }

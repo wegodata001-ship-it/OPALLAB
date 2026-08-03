@@ -1,6 +1,7 @@
 import type {
   AttendanceActiveRecord,
   AttendanceEmployeeRosterRow,
+  AttendanceEmployeeStats,
   AttendanceLabGeo,
   AttendanceManagementKpis,
   AttendanceManagementQuery,
@@ -9,10 +10,24 @@ import type {
   AttendanceNotCheckedInRow,
 } from "@/lib/attendance/management/types";
 
-function toQueryString(query: AttendanceManagementQuery & { view?: string; id?: string; format?: string }): string {
+function toQueryString(
+  query: AttendanceManagementQuery & {
+    view?: string;
+    id?: string;
+    format?: string;
+    userId?: string;
+    scope?: "me" | "management";
+    includePhotos?: boolean | number;
+  },
+): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
-    if (value != null && value !== "") params.set(key, String(value));
+    if (value == null || value === "") continue;
+    if (typeof value === "boolean") {
+      if (value) params.set(key, "1");
+      continue;
+    }
+    params.set(key, String(value));
   }
   return params.toString();
 }
@@ -44,6 +59,14 @@ export async function fetchAttendanceRoster(): Promise<{
   labGeo: AttendanceLabGeo;
 }> {
   return getJson("/api/attendance/management?view=roster");
+}
+
+export async function fetchEmployeeAttendanceStats(
+  userId: string,
+  query: Pick<AttendanceManagementQuery, "from" | "to"> = {},
+): Promise<AttendanceEmployeeStats> {
+  const qs = toQueryString({ ...query, view: "employee-stats", userId });
+  return getJson(`/api/attendance/management?${qs}`);
 }
 
 export async function deleteAttendancePhoto(
@@ -121,7 +144,11 @@ export async function fetchAttendancePhotoUrl(
 }
 
 export function attendanceExportUrl(query: AttendanceManagementQuery, format: "csv" | "pdf"): string {
-  const qs = toQueryString({ ...query, view: "records", format: format === "pdf" ? "pdf" : "csv" });
+  if (format === "pdf") {
+    const qs = toQueryString({ ...query, scope: "management" });
+    return `/api/attendance/pdf?${qs}`;
+  }
+  const qs = toQueryString({ ...query, view: "records", format: "csv" });
   return `/api/attendance/management?${qs}`;
 }
 

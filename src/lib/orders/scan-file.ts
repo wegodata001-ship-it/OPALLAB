@@ -1,8 +1,13 @@
-import { unzipSync } from "fflate";
 import { getFileExtension } from "@/lib/file-utils";
+import {
+  MODEL3D_EXTS,
+  type Model3DExt,
+  bundleFromFile,
+  type LoadedModelBundle,
+} from "@/lib/orders/load-model3d";
 
-export const MODEL3D_EXTS = ["stl", "obj", "ply"] as const;
-export type Model3DExt = (typeof MODEL3D_EXTS)[number];
+export { MODEL3D_EXTS, type Model3DExt };
+export type { LoadedModelBundle };
 
 /** Skip auto-thumbnail for very large meshes to keep UI responsive. */
 export const THUMBNAIL_MAX_BYTES = 80 * 1024 * 1024;
@@ -28,7 +33,10 @@ export function isPdfFile(file: File): boolean {
 
 export function isImageFile(file: File): boolean {
   const ext = getFileExtension(file.name);
-  return ["jpg", "jpeg", "png", "gif", "webp"].includes(ext) || file.type.startsWith("image/");
+  return (
+    ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"].includes(ext) ||
+    file.type.startsWith("image/")
+  );
 }
 
 export function isDirectModel3DFile(file: File): boolean {
@@ -43,40 +51,18 @@ export type ResolvedModelSource = {
   buffer: ArrayBuffer;
   fileName: string;
   ext: Model3DExt;
+  companions?: LoadedModelBundle["companions"];
 };
 
-/** Resolve STL/PLY/OBJ from a file or from inside a ZIP. */
+/** Resolve STL/PLY/OBJ/GLB from a file or from inside a ZIP (with companions). */
 export async function resolveModelSource(file: File): Promise<ResolvedModelSource | null> {
-  const ext = getFileExtension(file.name);
-
-  if (isModel3DExt(ext)) {
-    return {
-      buffer: await file.arrayBuffer(),
-      fileName: file.name,
-      ext,
-    };
-  }
-
-  if (!isZipFile(file)) return null;
-
-  const zipBytes = new Uint8Array(await file.arrayBuffer());
-  const entries = unzipSync(zipBytes);
-  const candidates = Object.keys(entries)
-    .filter((name) => !name.endsWith("/") && !name.split("/").some((p) => p.startsWith(".")))
-    .map((name) => ({ name, ext: getFileExtension(name) }))
-    .filter((c): c is { name: string; ext: Model3DExt } => isModel3DExt(c.ext))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  const pick = candidates[0];
-  if (!pick) return null;
-
-  const data = entries[pick.name];
-  if (!data) return null;
-
+  const bundle = await bundleFromFile(file);
+  if (!bundle) return null;
   return {
-    buffer: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-    fileName: pick.name.split("/").pop() || pick.name,
-    ext: pick.ext,
+    buffer: bundle.buffer,
+    fileName: bundle.fileName,
+    ext: bundle.ext,
+    companions: bundle.companions,
   };
 }
 

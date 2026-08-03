@@ -3,8 +3,14 @@
 import { useCallback, useMemo, useState } from "react";
 import type { OrderFile } from "@/lib/types";
 import { FILE_TYPE_LABELS } from "@/lib/constants/labels";
-import { isPreviewable } from "@/lib/file-utils";
+import {
+  buildFileViewUrl,
+  getOrderFileFolderId,
+  getPreviewKind,
+  isPreviewable,
+} from "@/lib/file-utils";
 import { FilePreviewModal } from "@/components/orders/file-preview-modal";
+import { FileModelThumb } from "@/components/orders/file-model-thumb";
 import { useApp } from "@/providers/AppProvider";
 import {
   ORDER_FILE_CATEGORIES,
@@ -16,12 +22,16 @@ import {
 import { formatFileSize } from "@/lib/orders/scan-file";
 import {
   ChevronLeft,
+  Download,
   Eye,
-  FileText,
   Folder,
+  FolderInput,
+  Pencil,
+  Trash2,
   Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { apiPatch } from "@/lib/api/client";
 
 interface OrderFilesSectionProps {
   orderId: string;
@@ -30,12 +40,31 @@ interface OrderFilesSectionProps {
     file: File,
     folderId?: string,
     meta?: { category?: OrderFileCategory; slotKey?: string },
+    onProgress?: (pct: number, info?: { loaded: number; total: number; fileName: string }) => void,
   ) => void | Promise<void>;
   canUpload?: boolean;
 }
 
+type UploadProgress = {
+  fileName: string;
+  pct: number;
+  loaded: number;
+  total: number;
+  startedAt: number;
+};
+
 function categoryOf(file: OrderFile): OrderFileCategory {
   return (file.category as OrderFileCategory) || "Other";
+}
+
+function isScanSlot(file: OrderFile): boolean {
+  return (
+    file.slotKey === "UpperScan" ||
+    file.slotKey === "LowerScan" ||
+    file.slotKey === "BiteScan" ||
+    getPreviewKind(file.mimeType, file.fileName) === "model3d" ||
+    getPreviewKind(file.mimeType, file.fileName) === "zip"
+  );
 }
 
 export function OrderFilesSection({
@@ -43,12 +72,14 @@ export function OrderFilesSection({
   onUpload,
   canUpload = true,
 }: OrderFilesSectionProps) {
-  const { users } = useApp();
+  const { users, refresh } = useApp();
   const [preview, setPreview] = useState<OrderFile | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [openCategory, setOpenCategory] = useState<OrderFileCategory | "all">("all");
   const [showHistory, setShowHistory] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
 
   const userName = useCallback(
     (id: string, fallback?: string | null) =>
@@ -73,19 +104,55 @@ export function OrderFilesSection({
     return map;
   }, [visible]);
 
+  const relatedForPreview = useMemo(() => {
+    if (!preview || !isScanSlot(preview)) return [];
+    return visible.filter(
+      (f) =>
+        f.isCurrent !== false &&
+        isScanSlot(f) &&
+        (f.slotKey === "UpperScan" ||
+          f.slotKey === "LowerScan" ||
+          f.slotKey === "BiteScan" ||
+          f.id === preview.id),
+    );
+  }, [preview, visible]);
+
   const handleFiles = useCallback(
-    async (list: FileList | null, category?: OrderFileCategory) => {
+    async (list: FileList | File[] | null, category?: OrderFileCategory) => {
       if (!list) return;
+      const arr = Array.from(list).slice(0, 50);
+      if (!arr.length) return;
       setUploading(true);
       setUploadMessage(null);
       let ok = 0;
       try {
-        for (const file of Array.from(list)) {
-          await onUpload(file, undefined, category ? { category } : undefined);
+        for (const file of arr) {
+          const startedAt = Date.now();
+          setProgress({
+            fileName: file.name,
+            pct: 0,
+            loaded: 0,
+            total: file.size,
+            startedAt,
+          });
+          await onUpload(
+            file,
+            undefined,
+            category ? { category } : undefined,
+            (pct, info) => {
+              setProgress({
+                fileName: info?.fileName ?? file.name,
+                pct,
+                loaded: info?.loaded ?? Math.round((pct / 100) * file.size),
+                total: info?.total ?? file.size,
+                startedAt,
+              });
+            },
+          );
           ok += 1;
         }
         setUploadMessage(
-          ok === 1 ? "הקובץ נשמר בהצלחה" : `${ok} קבצים נשמרו בהצלחה`,
+          ok === 1 ? "הקובץ נשמר בהצלחה." : `${ok} קבצים נשמרו בהצלחה.`,
         );
       } catch (err) {
         console.error("[order-files-section] upload failed", err);
@@ -94,15 +161,81 @@ export function OrderFilesSection({
         );
       } finally {
         setUploading(false);
+        setProgress(null);
       }
     },
     [onUpload],
+  );
+
+  const renameFile = useCallback(
+    async (file: OrderFile) => {
+      const next = window.prompt("שם קובץ חדש", file.fileName);
+      if (!next || next.trim() === file.fileName) return;
+      try {
+        await apiPatch(`/api/orders/files/${file.id}`, { fileName: next.trim() });
+        await refresh();
+        setUploadMessage("שם הקובץ עודכן");
+      } catch (err) {
+        setUploadMessage(err instanceof Error ? err.message : "שינוי השם נכשל");
+      }
+    },
+    [refresh],
+  );
+
+  const moveFile = useCallback(
+    async (file: OrderFile) => {
+      const labels = ORDER_FILE_CATEGORIES.map(
+        (c, i) => `${i + 1}. ${ORDER_FILE_CATEGORY_LABELS[c]}`,
+      ).join("\n");
+      const pick = window.prompt(`העברה לתיקייה:\n${labels}\n\nהזינו מספר 1-${ORDER_FILE_CATEGORIES.length}`);
+      const idx = Number(pick) - 1;
+      if (!Number.isFinite(idx) || idx < 0 || idx >= ORDER_FILE_CATEGORIES.length) return;
+      const category = ORDER_FILE_CATEGORIES[idx]!;
+      try {
+        await apiPatch(`/api/orders/files/${file.id}`, { category, slotKey: "General" });
+        await refresh();
+        setUploadMessage(`הועבר ל־${ORDER_FILE_CATEGORY_LABELS[category]}`);
+      } catch (err) {
+        setUploadMessage(err instanceof Error ? err.message : "העברה נכשלה");
+      }
+    },
+    [refresh],
+  );
+
+  const deleteFileRow = useCallback(
+    async (file: OrderFile) => {
+      if (!window.confirm(`למחוק את הקובץ «${file.fileName}»?`)) return;
+      try {
+        await fetch(`/api/orders/files/${file.id}`, {
+          method: "DELETE",
+          credentials: "include",
+        }).then(async (res) => {
+          const json = (await res.json()) as { success?: boolean; error?: { message?: string } };
+          if (!json.success) throw new Error(json.error?.message || "מחיקה נכשלה");
+        });
+        await refresh();
+        setUploadMessage("הקובץ נמחק");
+      } catch (err) {
+        setUploadMessage(err instanceof Error ? err.message : "מחיקה נכשלה");
+      }
+    },
+    [refresh],
   );
 
   const categoriesToShow =
     openCategory === "all"
       ? ORDER_FILE_CATEGORIES.filter((c) => (byCategory.get(c)?.length ?? 0) > 0 || canUpload)
       : [openCategory];
+
+  const speedLabel = (() => {
+    if (!progress || progress.pct <= 0) return null;
+    const elapsed = (Date.now() - progress.startedAt) / 1000;
+    if (elapsed < 0.2) return null;
+    const bps = progress.loaded / elapsed;
+    if (bps < 1024) return `${bps.toFixed(0)} B/s`;
+    if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(1)} KB/s`;
+    return `${(bps / (1024 * 1024)).toFixed(1)} MB/s`;
+  })();
 
   return (
     <>
@@ -118,6 +251,24 @@ export function OrderFilesSection({
           {uploadMessage}
         </p>
       )}
+
+      {progress && (
+        <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2 text-xs text-slate-600">
+            <span className="font-medium truncate">{progress.fileName}</span>
+            <span className="shrink-0">
+              {progress.pct}%{speedLabel ? ` · ${speedLabel}` : ""}
+            </span>
+          </div>
+          <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+            <div
+              className="h-full bg-opal-gold transition-all duration-150"
+              style={{ width: `${progress.pct}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div className="flex flex-wrap gap-1">
           <button
@@ -161,20 +312,43 @@ export function OrderFilesSection({
 
       {canUpload && openCategory === "all" && (
         <label
+          onDragEnter={(e) => {
+            e.preventDefault();
+            setDragActive(true);
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+            void handleFiles(e.dataTransfer.files);
+          }}
           className={cn(
-            "flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-opal-gold/30 bg-opal-gold/5 cursor-pointer hover:bg-opal-gold/10 transition-colors mb-3",
+            "flex flex-col items-center justify-center gap-2 p-5 rounded-xl border-2 border-dashed cursor-pointer transition-colors mb-3",
+            dragActive
+              ? "border-opal-gold bg-opal-gold/15"
+              : "border-opal-gold/30 bg-opal-gold/5 hover:bg-opal-gold/10",
             uploading && "opacity-50 pointer-events-none",
           )}
         >
-          <Upload className="h-5 w-5 text-opal-gold" />
-          <span className="text-sm font-medium text-opal-gold-dark">
-            {uploading ? "מעלה..." : "העלאת קבצים (מיון אוטומטי לתיקיות)"}
+          <Upload className="h-6 w-6 text-opal-gold" />
+          <span className="text-sm font-medium text-opal-gold-dark text-center">
+            {uploading
+              ? "מעלה..."
+              : "גררו STL / PLY / OBJ / תמונות לכאן או לחצו לבחירה (עד 50)"}
           </span>
+          <span className="text-[11px] text-slate-500">מיון אוטומטי: Upper / Lower / Bite</span>
           <input
             type="file"
             multiple
             className="hidden"
-            accept="*/*"
+            accept=".stl,.ply,.obj,.glb,.gltf,.zip,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.dcm,image/*,application/pdf,model/*"
             onChange={(e) => {
               void handleFiles(e.target.files);
               e.target.value = "";
@@ -219,15 +393,35 @@ export function OrderFilesSection({
                     const slotLabel = f.slotKey
                       ? ORDER_FILE_SLOT_LABELS[f.slotKey as OrderFileSlotKey] || f.slotKey
                       : null;
+                    const kind = getPreviewKind(f.mimeType, f.fileName);
+                    const thumbUrl =
+                      kind === "image"
+                        ? buildFileViewUrl(f.orderId, getOrderFileFolderId(f))
+                        : null;
+                    const downloadHref =
+                      f.dataUrl || buildFileViewUrl(f.orderId, getOrderFileFolderId(f));
                     return (
-                      <li key={f.id}>
-                        <button
-                          type="button"
-                          onClick={() => setPreview(f)}
-                          className="w-full flex items-start justify-between gap-3 p-3 text-right hover:bg-opal-gold/5 transition-colors"
-                        >
-                          <span className="flex items-start gap-2 min-w-0">
-                            <FileText className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
+                      <li key={f.id} className="p-3 hover:bg-opal-gold/5 transition-colors">
+                        <div className="flex items-start justify-between gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setPreview(f)}
+                            className="flex items-start gap-3 min-w-0 text-right flex-1"
+                          >
+                            <span className="h-14 w-14 rounded-lg border bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center">
+                              {thumbUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={thumbUrl}
+                                  alt=""
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : kind === "model3d" || kind === "zip" ? (
+                                <FileModelThumb file={f} />
+                              ) : (
+                                <Folder className="h-5 w-5 text-slate-300" />
+                              )}
+                            </span>
                             <span className="min-w-0">
                               <span className="block text-sm font-medium truncate">{f.fileName}</span>
                               <span className="block text-[11px] text-slate-500 mt-0.5 space-x-reverse space-x-2">
@@ -242,12 +436,58 @@ export function OrderFilesSection({
                                 {userName(f.uploadedBy, f.uploadedByName)}
                               </span>
                             </span>
+                          </button>
+                          <span className="flex items-center gap-0.5 shrink-0">
+                            {isPreviewable(f.mimeType, f.fileName) && (
+                              <button
+                                type="button"
+                                title="צפייה"
+                                className="p-1.5 rounded-md text-opal-gold hover:bg-white"
+                                onClick={() => setPreview(f)}
+                              >
+                                <Eye className="h-4 w-4" />
+                              </button>
+                            )}
+                            <a
+                              href={downloadHref}
+                              download={f.fileName}
+                              title="הורדה"
+                              className="p-1.5 rounded-md text-slate-500 hover:bg-white"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Download className="h-4 w-4" />
+                            </a>
+                            {canUpload && (
+                              <>
+                                <button
+                                  type="button"
+                                  title="שינוי שם"
+                                  className="p-1.5 rounded-md text-slate-500 hover:bg-white"
+                                  onClick={() => void renameFile(f)}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  title="העברה לתיקייה"
+                                  className="p-1.5 rounded-md text-slate-500 hover:bg-white"
+                                  onClick={() => void moveFile(f)}
+                                >
+                                  <FolderInput className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  title="מחיקה"
+                                  className="p-1.5 rounded-md text-red-500 hover:bg-white"
+                                  onClick={() => void deleteFileRow(f)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </>
+                            )}
+                            <ChevronLeft className="h-4 w-4 text-slate-300" />
                           </span>
-                          <span className="flex items-center gap-1 shrink-0 text-slate-400">
-                            {isPreviewable(f.mimeType, f.fileName) && <Eye className="h-4 w-4 text-opal-gold" />}
-                            <ChevronLeft className="h-4 w-4" />
-                          </span>
-                        </button>
+                        </div>
                       </li>
                     );
                   })}
@@ -262,7 +502,11 @@ export function OrderFilesSection({
         <p className="text-sm text-slate-400 text-center py-6">אין קבצים בהזמנה</p>
       )}
 
-      <FilePreviewModal file={preview} onClose={() => setPreview(null)} />
+      <FilePreviewModal
+        file={preview}
+        relatedFiles={relatedForPreview}
+        onClose={() => setPreview(null)}
+      />
     </>
   );
 }

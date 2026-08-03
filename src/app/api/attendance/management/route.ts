@@ -11,6 +11,7 @@ import {
   getAttendanceRecords,
   getAttendanceRecordsForExport,
   getEmployeeAttendanceRoster,
+  getEmployeeAttendanceStats,
   type AttendancePhotoKind,
 } from "@/lib/attendance/management/service";
 import type { AttendanceManagementQuery } from "@/lib/attendance/management/types";
@@ -35,6 +36,13 @@ function parseQuery(searchParams: URLSearchParams): AttendanceManagementQuery {
     sortDir: (searchParams.get("sortDir") as "asc" | "desc") || undefined,
     page: Number.isFinite(page) ? page : 1,
     limit: Number.isFinite(limit) ? limit : 25,
+    lateOnly: searchParams.get("lateOnly") === "1" || searchParams.get("lateOnly") === "true",
+    overtimeOnly:
+      searchParams.get("overtimeOnly") === "1" || searchParams.get("overtimeOnly") === "true",
+    anomaliesOnly:
+      searchParams.get("anomaliesOnly") === "1" || searchParams.get("anomaliesOnly") === "true",
+    compliance:
+      (searchParams.get("compliance") as AttendanceManagementQuery["compliance"]) || undefined,
   };
 }
 
@@ -57,6 +65,17 @@ export async function GET(request: NextRequest) {
         getAttendanceLabGeo(),
       ]);
       return jsonOk({ roster, labGeo });
+    }
+
+    if (view === "employee-stats") {
+      const id = searchParams.get("userId");
+      if (!id) return jsonError(new AppError("VALIDATION_ERROR", "חסר מזהה עובד", 400));
+      return jsonOk(
+        await getEmployeeAttendanceStats(id, {
+          from: query.from,
+          to: query.to,
+        }),
+      );
     }
 
     if (view === "active") {
@@ -84,9 +103,21 @@ export async function GET(request: NextRequest) {
     }
 
     const format = searchParams.get("format");
+    if (format === "pdf") {
+      const {
+        attendancePdfResponse,
+        generateAttendancePdfReport,
+      } = await import("@/lib/attendance/pdf/generate-report");
+      const pdf = await generateAttendancePdfReport(userId, {
+        ...query,
+        scope: "management",
+        includePhotos: searchParams.get("includePhotos") !== "0",
+      });
+      return attendancePdfResponse(pdf);
+    }
     if (format) {
       const records = await getAttendanceRecordsForExport(query);
-      const exportData = buildAttendanceExport(records, format);
+      const exportData = buildAttendanceExport(records, "csv");
       return new Response(exportData.body, {
         status: 200,
         headers: {

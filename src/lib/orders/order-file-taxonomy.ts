@@ -164,19 +164,47 @@ export function buildStructuredOrderFilePath(input: {
 
 export function inferCategoryFromFileName(fileName: string): SlotRouting {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
-  const lower = fileName.toLowerCase();
+  const lower = fileName.toLowerCase().replace(/[\s_-]+/g, "");
 
-  if (["stl", "ply", "obj"].includes(ext) || lower.includes("scan") || lower.includes("bite")) {
-    if (lower.includes("upper") || lower.includes("maxilla")) {
+  const isMesh =
+    ["stl", "ply", "obj", "glb", "gltf"].includes(ext) ||
+    lower.includes("scan") ||
+    lower.includes("bite") ||
+    lower.includes("jaw");
+
+  if (isMesh) {
+    // Auto-detect Upper / Lower / Bite from common dental filenames
+    if (
+      lower.includes("upper") ||
+      lower.includes("maxilla") ||
+      lower.includes("upperjaw") ||
+      lower.includes("עליון") ||
+      lower.includes("עליונה")
+    ) {
       return { category: "Scans", slotKey: "UpperScan", versionKey: "scan:UpperScan" };
     }
-    if (lower.includes("lower") || lower.includes("mandible")) {
+    if (
+      lower.includes("lower") ||
+      lower.includes("mandible") ||
+      lower.includes("lowerjaw") ||
+      lower.includes("תחתון") ||
+      lower.includes("תחתונה")
+    ) {
       return { category: "Scans", slotKey: "LowerScan", versionKey: "scan:LowerScan" };
     }
-    if (lower.includes("bite")) {
+    if (
+      lower.includes("bite") ||
+      lower.includes("bitescan") ||
+      lower.includes("occlusion") ||
+      lower.includes("סגר")
+    ) {
       return { category: "Scans", slotKey: "BiteScan", versionKey: "scan:BiteScan" };
     }
-    return { category: "Scans", slotKey: "UpperScan", versionKey: `scan:file:${sanitizePathSegment(fileName)}` };
+    return {
+      category: "Scans",
+      slotKey: "UpperScan",
+      versionKey: `scan:file:${sanitizePathSegment(fileName)}`,
+    };
   }
 
   if (ext === "dcm" || ext === "dicom" || lower.includes("opg") || lower.includes("cbct") || lower.includes("ceph")) {

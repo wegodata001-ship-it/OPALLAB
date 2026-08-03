@@ -1,10 +1,14 @@
-import { NextRequest } from "next/server";
-import { requireSessionUserId } from "@/lib/auth/session";
+import { NextRequest, NextResponse } from "next/server";
+import { requireSessionUser } from "@/lib/rbac";
 import { AppError } from "@/lib/errors/app-error";
-import { appDataService } from "@/lib/services/app-data.service";
+import { assertCanAccessOrder } from "@/lib/orders/assert-order-file-access";
 import { getMimeTypeFromFileName, isDentalScanHtml } from "@/lib/file-utils";
 import { prisma } from "@/lib/prisma";
-import { downloadStorageFile, STORAGE_BUCKETS } from "@/lib/supabase/storage";
+import {
+  downloadStorageFile,
+  getSignedUrl,
+  STORAGE_BUCKETS,
+} from "@/lib/supabase/storage";
 
 function injectHtmlBase(html: string, baseHref: string): string {
   const baseTag = `<base href="${baseHref}">`;
@@ -20,19 +24,21 @@ function dirnamePath(storagePath: string): string {
   return idx >= 0 ? storagePath.slice(0, idx) : storagePath;
 }
 
+/**
+ * View route:
+ * - HTML: still proxied (needs base-tag injection)
+ * - Binary (STL/PLY/OBJ/images/…): 302 redirect to short-lived Signed URL (streaming from Storage)
+ */
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ orderId: string; fileId: string; path?: string[] }> },
 ) {
+  const t0 = performance.now();
   try {
-    const userId = await requireSessionUserId();
+    const user = await requireSessionUser();
     const { orderId, fileId, path } = await context.params;
-    const snapshot = await appDataService.getSnapshotForUser(userId);
-    if (!snapshot.orders.some((order) => order.id === orderId)) {
-      throw new AppError("FORBIDDEN", "אין גישה להזמנה זו", 403);
-    }
+    await assertCanAccessOrder(user, orderId);
 
-    // Preferred: fileId is OrderFile.id (new structured paths)
     const byId = await prisma.orderFile.findFirst({
       where: { id: fileId, orderId },
     });
@@ -52,7 +58,6 @@ export async function GET(
       }
       fileName = byId.fileName;
     } else {
-      // Legacy: fileId is batch folder UUID under {orderId}/{folderId}/…
       const folderFiles = await prisma.orderFile.findMany({
         where: {
           orderId,
@@ -72,27 +77,53 @@ export async function GET(
 
     if (!storagePath) throw new AppError("NOT_FOUND", "קובץ לא נמצא", 404);
 
-    const { buffer, contentType } = await downloadStorageFile(STORAGE_BUCKETS.ORDER_FILES, storagePath);
     const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
-    const mimeType = contentType || getMimeTypeFromFileName(fileName);
+    const mimeType = getMimeTypeFromFileName(fileName);
+    const apiMs = Math.round(performance.now() - t0);
 
+    // HTML still needs injection — download only for HTML
     if (ext === "html" || ext === "htm" || mimeType === "text/html") {
+      const { buffer, contentType } = await downloadStorageFile(
+        STORAGE_BUCKETS.ORDER_FILES,
+        storagePath,
+      );
       const baseHref = `/api/orders/files/view/${orderId}/${fileId}/`;
       const html = injectHtmlBase(buffer.toString("utf-8"), baseHref);
       const scanViewer = isDentalScanHtml(html);
       return new Response(html, {
         headers: {
-          "Content-Type": "text/html; charset=utf-8",
+          "Content-Type": contentType || "text/html; charset=utf-8",
           "X-Opal-Scan-Viewer": scanViewer ? "1" : "0",
-          "Cache-Control": "private, no-cache",
+          "X-Opal-Api-Ms": String(apiMs),
+          "Cache-Control": "private, max-age=60",
         },
       });
     }
 
-    return new Response(new Uint8Array(buffer), {
+    // Binary: redirect to Storage signed URL — browser streams directly (no Base64, no Next proxy)
+    const signedUrl = await getSignedUrl(STORAGE_BUCKETS.ORDER_FILES, storagePath, 60 * 30);
+    if (!signedUrl) {
+      throw new AppError("STORAGE_ERROR", "יצירת Signed URL נכשלה", 500);
+    }
+
+    // Prefer redirect; fetch() follow redirects works for viewer
+    if (request.nextUrl.searchParams.get("redirect") === "0") {
+      return NextResponse.json(
+        { success: true, data: { signedUrl, mimeType, apiMs } },
+        {
+          headers: {
+            "X-Opal-Api-Ms": String(Math.round(performance.now() - t0)),
+            "Cache-Control": "private, no-store",
+          },
+        },
+      );
+    }
+
+    return NextResponse.redirect(signedUrl, {
+      status: 302,
       headers: {
-        "Content-Type": mimeType,
-        "Cache-Control": "private, no-cache",
+        "X-Opal-Api-Ms": String(Math.round(performance.now() - t0)),
+        "Cache-Control": "private, no-store",
       },
     });
   } catch (error) {
