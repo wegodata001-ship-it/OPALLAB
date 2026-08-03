@@ -10,9 +10,11 @@ import { getOrCreateDeviceKey } from "@/lib/attendance/gate/device-key";
 import { captureGpsForVerification } from "@/lib/attendance/verification/gps";
 import { captureDeviceInfo } from "@/lib/attendance/verification/device";
 import {
+  attachStreamToVideo,
   capturePhotoFromVideo,
+  isVideoReadyForCapture,
+  releaseCamera,
   requestFrontCameraStream,
-  stopCameraStream,
 } from "@/lib/attendance/verification/camera";
 import { uploadVerificationPhoto } from "@/lib/attendance/verification/upload";
 import { AttendanceVerificationError } from "@/lib/attendance/verification/types";
@@ -44,12 +46,26 @@ export function GateApp() {
   const [userName, setUserName] = useState("");
   const [deviceKey, setDeviceKey] = useState("");
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoReady, setVideoReady] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const failPermission = useCallback((msg: string) => {
     setMessage(msg);
     setDetail(permissionHelpText());
     setPhase("permission_error");
+  }, []);
+
+  const cleanupCamera = useCallback(() => {
+    try {
+      releaseCamera(videoRef.current, streamRef.current);
+    } catch {
+      /* ignore */
+    }
+    streamRef.current = null;
+    setStream(null);
+    setVideoReady(false);
   }, []);
 
   const runPunch = useCallback(async (key: string) => {
@@ -110,6 +126,7 @@ export function GateApp() {
 
   const bootstrap = useCallback(async () => {
     setPhase("booting");
+    cleanupCamera();
     const key = getOrCreateDeviceKey();
     setDeviceKey(key);
 
@@ -153,25 +170,40 @@ export function GateApp() {
       setPhase("error");
       setMessage("לא ניתן להתחבר לשרת");
     }
-  }, [runPunch]);
+  }, [runPunch, cleanupCamera]);
 
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !stream) return;
-    video.srcObject = stream;
-    void video.play().catch(() => undefined);
     return () => {
-      video.srcObject = null;
+      try {
+        releaseCamera(videoRef.current, streamRef.current);
+      } catch {
+        /* ignore */
+      }
     };
-  }, [stream]);
+  }, []);
 
-  useEffect(() => {
-    return () => stopCameraStream(stream);
-  }, [stream]);
+  /** Bind stream when the <video> mounts — critical on iOS where ref is null until paint. */
+  const bindVideoRef = useCallback((node: HTMLVideoElement | null) => {
+    videoRef.current = node;
+    if (!node || !streamRef.current) {
+      setVideoReady(false);
+      return;
+    }
+
+    void (async () => {
+      try {
+        await attachStreamToVideo(node, streamRef.current!);
+        setVideoReady(isVideoReadyForCapture(node));
+      } catch {
+        setVideoReady(false);
+        setMessage("המצלמה לא מוכנה — נסו שוב");
+      }
+    })();
+  }, []);
 
   const startRegistration = () => {
     if (isAuthenticated && currentUser) {
@@ -189,10 +221,18 @@ export function GateApp() {
       await captureGpsForVerification();
       setPhase("register_camera");
       setMessage("צלמו סלפי לאימות חד-פעמי");
+      setVideoReady(false);
       try {
         const s = await requestFrontCameraStream();
+        streamRef.current = s;
         setStream(s);
+        // If video already mounted (race), attach immediately
+        if (videoRef.current) {
+          await attachStreamToVideo(videoRef.current, s);
+          setVideoReady(isVideoReadyForCapture(videoRef.current));
+        }
       } catch (err) {
+        cleanupCamera();
         failPermission(
           err instanceof Error ? err.message : "נדרשת הרשאת מצלמה לרישום המכשיר",
         );
@@ -222,15 +262,26 @@ export function GateApp() {
   };
 
   const completeRegistration = async () => {
-    if (!currentUser || !videoRef.current) return;
-    setPhase("registering");
-    setMessage("שומר מכשיר מאושר...");
-    try {
-      const gps = await captureGpsForVerification();
-      const photo = await capturePhotoFromVideo(videoRef.current);
-      stopCameraStream(stream);
-      setStream(null);
+    // Snapshot the element BEFORE any phase change — switching to "registering"
+    // unmounts <video> and clears the ref (Safari: null.readyState crash).
+    const video = videoRef.current;
+    if (!currentUser) return;
+    if (!video || !isVideoReadyForCapture(video)) {
+      setMessage("המצלמה עדיין לא מוכנה — המתינו רגע ונסו שוב");
+      return;
+    }
 
+    setCapturing(true);
+    setMessage("מצלם...");
+    try {
+      // Capture FIRST while the video element is still mounted and has frames
+      const photo = await capturePhotoFromVideo(video);
+      cleanupCamera();
+
+      setPhase("registering");
+      setMessage("שומר מכשיר מאושר...");
+
+      const gps = await captureGpsForVerification();
       const uploaded = await uploadVerificationPhoto(photo.blob, currentUser.id, "check-in");
       const device = captureDeviceInfo();
       const key = deviceKey || getOrCreateDeviceKey();
@@ -261,14 +312,21 @@ export function GateApp() {
       setMessage("המכשיר נרשם בהצלחה — מבצעים כניסה...");
       await runPunch(key);
     } catch (err) {
+      cleanupCamera();
       if (err instanceof AttendanceVerificationError) {
-        failPermission(err.message);
-        return;
+        if (err.step === "gps" || err.step === "camera" || err.step === "capturing") {
+          failPermission(err.message);
+          return;
+        }
       }
       setPhase("error");
       setMessage(err instanceof Error ? err.message : "רישום המכשיר נכשל");
+    } finally {
+      setCapturing(false);
     }
   };
+
+  const showCamera = phase === "register_camera";
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex flex-col">
@@ -355,15 +413,31 @@ export function GateApp() {
             </CardBox>
           )}
 
-          {phase === "register_camera" && (
+          {showCamera && (
             <CardBox>
               <Camera className="h-8 w-8 text-opal-gold mx-auto mb-2" />
               <p className="text-center text-sm text-slate-300 mb-3">{message}</p>
               <div className="aspect-[3/4] rounded-xl overflow-hidden bg-black">
-                <video ref={videoRef} playsInline muted autoPlay className="h-full w-full object-cover" />
+                <video
+                  ref={bindVideoRef}
+                  playsInline
+                  muted
+                  autoPlay
+                  className="h-full w-full object-cover"
+                />
               </div>
-              <Button className="w-full mt-4" onClick={() => void completeRegistration()}>
-                צלם ושמור מכשיר מאושר
+              {!videoReady && stream && (
+                <p className="text-center text-xs text-slate-400 mt-2 flex items-center justify-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  מצלמה נטענת...
+                </p>
+              )}
+              <Button
+                className="w-full mt-4"
+                disabled={!videoReady || capturing || !stream}
+                onClick={() => void completeRegistration()}
+              >
+                {capturing ? "מצלם..." : videoReady ? "צלם ושמור מכשיר מאושר" : "ממתין למצלמה..."}
               </Button>
             </CardBox>
           )}
