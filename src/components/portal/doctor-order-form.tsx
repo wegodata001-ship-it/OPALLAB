@@ -1,16 +1,20 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DentalChart } from "@/components/DentalChart";
 import { ShadePicker } from "@/components/orders/shade-picker";
+import {
+  OrderUploadTiles,
+  type OrderUploadTilesHandle,
+} from "@/components/orders/order-upload-tiles";
 import { useApp } from "@/providers/AppProvider";
 import { MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS } from "@/lib/constants/labels";
 import { cn } from "@/lib/utils";
 import type { Gender, MaterialType, WorkType } from "@/lib/types";
-import { Plus, Upload } from "lucide-react";
+import { Plus } from "lucide-react";
 
 interface DoctorOrderFormProps {
   doctorId: string;
@@ -18,7 +22,8 @@ interface DoctorOrderFormProps {
 }
 
 export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
-  const { createOrder, addOrderFile } = useApp();
+  const { createOrder } = useApp();
+  const uploadRef = useRef<OrderUploadTilesHandle>(null);
   const [patientName, setPatientName] = useState("");
   const [patientAge, setPatientAge] = useState("");
   const [patientGender, setPatientGender] = useState<Gender | "">("");
@@ -28,7 +33,6 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
   const [selectedTeeth, setSelectedTeeth] = useState<number[]>([]);
   const [description, setDescription] = useState("");
   const [completionDate, setCompletionDate] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -36,11 +40,6 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
     setMaterials((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
   const toggleWorkType = (w: WorkType) =>
     setWorkTypes((p) => (p.includes(w) ? p.filter((x) => x !== w) : [...p, w]));
-
-  const onFiles = useCallback((list: FileList | null) => {
-    if (!list) return;
-    setFiles((prev) => [...prev, ...Array.from(list)]);
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,11 +63,9 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
         completionDate: completionDate ? new Date(completionDate) : undefined,
       });
 
-      if (files.length) {
-        const folderId = crypto.randomUUID();
-        for (const f of files) {
-          await addOrderFile(order.id, f, undefined, folderId);
-        }
+      if (uploadRef.current?.hasFiles()) {
+        await uploadRef.current.uploadAll(order.id);
+        await uploadRef.current.clear();
       }
 
       setPatientName("");
@@ -80,7 +77,6 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
       setSelectedTeeth([]);
       setDescription("");
       setCompletionDate("");
-      setFiles([]);
       onCreated?.(order.serialNumber);
     } catch (err) {
       setError(err instanceof Error ? err.message : "שגיאה בשליחת ההזמנה");
@@ -188,15 +184,10 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
           </div>
 
           <div>
-            <Label>קבצים (STL / תמונות)</Label>
-            <label className="mt-1.5 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-opal-gold/40 bg-opal-gold/5 px-4 py-6 text-sm text-slate-600 hover:bg-opal-gold/10">
-              <Upload className="h-4 w-4 text-opal-gold" />
-              העלאת קבצים
-              <input type="file" multiple className="hidden" onChange={(e) => onFiles(e.target.files)} />
-            </label>
-            {files.length > 0 && (
-              <p className="mt-1 text-xs text-slate-500">{files.length} קבצים נבחרו</p>
-            )}
+            <Label>תמונות וסריקות</Label>
+            <div className="mt-2">
+              <OrderUploadTiles ref={uploadRef} draftKey={`doctor-order-${doctorId}`} />
+            </div>
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}

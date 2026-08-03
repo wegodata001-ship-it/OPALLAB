@@ -58,6 +58,17 @@ export type FileType =
   | "IMAGE"
   | "DOCUMENT";
 
+export type OrderFileCategory =
+  | "ClinicalPhotos"
+  | "Scans"
+  | "Radiographs"
+  | "Prescription"
+  | "Documents"
+  | "CAD"
+  | "Manufacturing"
+  | "Delivery"
+  | "Other";
+
 export type AttendanceMethod = "NFC" | "MANUAL" | "GEOFENCE_AUTO" | "WIFI" | "GPS";
 
 export type PaymentStatus = "PENDING" | "PARTIAL" | "PAID" | "OVERDUE";
@@ -187,6 +198,13 @@ export interface OrderFile {
   dataUrl?: string | null;
   mimeType?: string | null;
   storagePath?: string | null;
+  category?: OrderFileCategory;
+  slotKey?: string | null;
+  versionKey?: string | null;
+  version?: number;
+  isCurrent?: boolean;
+  replacesId?: string | null;
+  uploadedByName?: string | null;
 }
 
 export interface OrderStatusHistory {

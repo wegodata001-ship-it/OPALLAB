@@ -1,0 +1,96 @@
+import { unzipSync } from "fflate";
+import { getFileExtension } from "@/lib/file-utils";
+
+export const MODEL3D_EXTS = ["stl", "obj", "ply"] as const;
+export type Model3DExt = (typeof MODEL3D_EXTS)[number];
+
+/** Skip auto-thumbnail for very large meshes to keep UI responsive. */
+export const THUMBNAIL_MAX_BYTES = 80 * 1024 * 1024;
+
+export function isModel3DExt(ext: string): ext is Model3DExt {
+  return (MODEL3D_EXTS as readonly string[]).includes(ext);
+}
+
+export function isZipFile(file: File): boolean {
+  const ext = getFileExtension(file.name);
+  return ext === "zip" || file.type === "application/zip" || file.type === "application/x-zip-compressed";
+}
+
+export function isDicomFile(file: File): boolean {
+  const ext = getFileExtension(file.name);
+  return ext === "dcm" || file.type === "application/dicom";
+}
+
+export function isPdfFile(file: File): boolean {
+  const ext = getFileExtension(file.name);
+  return ext === "pdf" || file.type === "application/pdf";
+}
+
+export function isImageFile(file: File): boolean {
+  const ext = getFileExtension(file.name);
+  return ["jpg", "jpeg", "png", "gif", "webp"].includes(ext) || file.type.startsWith("image/");
+}
+
+export function isDirectModel3DFile(file: File): boolean {
+  return isModel3DExt(getFileExtension(file.name));
+}
+
+export function canOpenInModelViewer(file: File): boolean {
+  return isDirectModel3DFile(file) || isZipFile(file);
+}
+
+export type ResolvedModelSource = {
+  buffer: ArrayBuffer;
+  fileName: string;
+  ext: Model3DExt;
+};
+
+/** Resolve STL/PLY/OBJ from a file or from inside a ZIP. */
+export async function resolveModelSource(file: File): Promise<ResolvedModelSource | null> {
+  const ext = getFileExtension(file.name);
+
+  if (isModel3DExt(ext)) {
+    return {
+      buffer: await file.arrayBuffer(),
+      fileName: file.name,
+      ext,
+    };
+  }
+
+  if (!isZipFile(file)) return null;
+
+  const zipBytes = new Uint8Array(await file.arrayBuffer());
+  const entries = unzipSync(zipBytes);
+  const candidates = Object.keys(entries)
+    .filter((name) => !name.endsWith("/") && !name.split("/").some((p) => p.startsWith(".")))
+    .map((name) => ({ name, ext: getFileExtension(name) }))
+    .filter((c): c is { name: string; ext: Model3DExt } => isModel3DExt(c.ext))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const pick = candidates[0];
+  if (!pick) return null;
+
+  const data = entries[pick.name];
+  if (!data) return null;
+
+  return {
+    buffer: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    fileName: pick.name.split("/").pop() || pick.name,
+    ext: pick.ext,
+  };
+}
+
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+export function fileTypeLabel(file: File): string {
+  const ext = getFileExtension(file.name).toUpperCase() || "FILE";
+  if (isZipFile(file)) return "ZIP";
+  if (isDicomFile(file)) return "DCM";
+  if (isPdfFile(file)) return "PDF";
+  return ext;
+}

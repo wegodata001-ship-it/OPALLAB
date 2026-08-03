@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, Suspense } from "react";
+import { useState, useCallback, Suspense, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Header } from "@/components/layout/sidebar";
@@ -10,6 +10,10 @@ import { Button } from "@/components/ui/button";
 import { DentalChart } from "@/components/DentalChart";
 import { OrderHistoryButton } from "@/components/orders/order-history-modal";
 import { ShadePicker } from "@/components/orders/shade-picker";
+import {
+  OrderUploadTiles,
+  type OrderUploadTilesHandle,
+} from "@/components/orders/order-upload-tiles";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { OrderStageIndicator } from "@/components/orders/order-stage-indicator";
 import { ExportActions } from "@/components/shared/export-actions";
@@ -34,6 +38,7 @@ function OrdersContent() {
   const setTab = (t: "list" | "new") => router.push(t === "new" ? "/orders?tab=new" : "/orders");
 
   const { orders, doctors, createOrder, addOrderFile, currentUser } = useApp();
+  const uploadRef = useRef<OrderUploadTilesHandle>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<OrderStatus | "ALL">("ALL");
   const [uploadOrderId, setUploadOrderId] = useState("");
@@ -52,6 +57,7 @@ function OrdersContent() {
   const [description, setDescription] = useState("");
   const [completionDate, setCompletionDate] = useState("");
   const [totalPrice, setTotalPrice] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const isAdmin = currentUser ? isPrivilegedRole(currentUser) : false;
   const tab = !isAdmin && tabParam === "new" ? "list" : tabParam;
@@ -86,28 +92,39 @@ function OrdersContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const order = await createOrder({
-      doctorId: doctorId || undefined,
-      patientName: patientName.trim() || undefined,
-      patientAge: patientAge ? parseInt(patientAge) : undefined,
-      patientGender: patientGender || undefined,
-      shade: shade || undefined, materials, workTypes, selectedTeeth,
-      description: description || undefined,
-      completionDate: completionDate ? new Date(completionDate) : undefined,
-      totalPrice: totalPrice ? parseFloat(totalPrice) : undefined,
-    });
-    setDoctorId("");
-    setPatientName("");
-    setPatientAge("");
-    setPatientGender("");
-    setShade("");
-    setMaterials([]);
-    setWorkTypes([]);
-    setSelectedTeeth([]);
-    setDescription("");
-    setCompletionDate("");
-    setTotalPrice("");
-    router.push(`/orders?saved=${order.serialNumber}`);
+    setSaving(true);
+    try {
+      const order = await createOrder({
+        doctorId: doctorId || undefined,
+        patientName: patientName.trim() || undefined,
+        patientAge: patientAge ? parseInt(patientAge) : undefined,
+        patientGender: patientGender || undefined,
+        shade: shade || undefined, materials, workTypes, selectedTeeth,
+        description: description || undefined,
+        completionDate: completionDate ? new Date(completionDate) : undefined,
+        totalPrice: totalPrice ? parseFloat(totalPrice) : undefined,
+      });
+
+      if (uploadRef.current?.hasFiles()) {
+        await uploadRef.current.uploadAll(order.id);
+        await uploadRef.current.clear();
+      }
+
+      setDoctorId("");
+      setPatientName("");
+      setPatientAge("");
+      setPatientGender("");
+      setShade("");
+      setMaterials([]);
+      setWorkTypes([]);
+      setSelectedTeeth([]);
+      setDescription("");
+      setCompletionDate("");
+      setTotalPrice("");
+      router.push(`/orders?saved=${order.serialNumber}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleFiles = useCallback(async (files: FileList | null) => {
@@ -337,11 +354,19 @@ function OrdersContent() {
               </div>
               <DentalChart selectedTeeth={selectedTeeth} onChange={setSelectedTeeth} />
               <div><Label>תיאור עבודה</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} /></div>
-              <div className="flex gap-3 pt-2">
-                <Button type="submit" size="lg">שמירת הזמנה</Button>
-                <Button type="button" variant="outline" onClick={() => setTab("list")}>ביטול</Button>
+              <div>
+                <Label>תמונות וסריקות</Label>
+                <div className="mt-2">
+                  <OrderUploadTiles ref={uploadRef} draftKey="staff-order-create" />
+                </div>
               </div>
-              <p className="text-xs text-slate-400">כל השדות אופציונליים — ניתן לשמור הזמנה ריקה ולהשלים מאוחר יותר</p>
+              <div className="flex gap-3 pt-2">
+                <Button type="submit" size="lg" disabled={saving}>
+                  {saving ? "שומר ומעלה קבצים..." : "שמירת הזמנה"}
+                </Button>
+                <Button type="button" variant="outline" onClick={() => setTab("list")} disabled={saving}>ביטול</Button>
+              </div>
+              <p className="text-xs text-slate-400">כל השדות אופציונליים — ניתן לשמור הזמנה ריקה ולהשלים מאוחר יותר. קבצים שנבחרו נשמרים אוטומטית בדפדפן.</p>
             </CardContent>
           </Card>
         </form>

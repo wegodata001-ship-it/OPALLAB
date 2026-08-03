@@ -54,10 +54,16 @@ import {
 } from "@/lib/workflow-permissions";
 import {
   buildInventoryImagePath,
-  buildOrderFilePath,
+  buildStructuredOrderFilePath,
   STORAGE_BUCKETS,
   uploadFile,
 } from "@/lib/supabase/storage";
+import {
+  routingFromUploadSlot,
+  type OrderFileCategory,
+  type OrderFileSlotKey,
+} from "@/lib/orders/order-file-taxonomy";
+import { parseSlotFromNotes } from "@/lib/orders/upload-slots";
 import { defaultLabSettings } from "@/lib/constants/lab-settings";
 import { filterSnapshotForUser, buildOrderWhereForUser } from "@/lib/access-control";
 import { writeAuditLog } from "@/lib/audit-log";
@@ -454,18 +460,74 @@ export class AppDataService {
       mimeType: string;
       buffer: Buffer;
     },
-    options?: { folderId?: string },
+    options?: {
+      folderId?: string;
+      uploadSlotId?: string | null;
+      category?: OrderFileCategory;
+      slotKey?: OrderFileSlotKey | string;
+      versionKey?: string;
+      /** When a current file exists for versionKey — required to proceed. */
+      versionMode?: "new_version" | "replace";
+    },
   ): Promise<OrderFile> {
     const now = new Date();
-    const folderId = options?.folderId ?? crypto.randomUUID();
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+
+    const slotFromNotes = parseSlotFromNotes(file.notes);
+    const routing = routingFromUploadSlot(
+      options?.uploadSlotId ?? slotFromNotes,
+      file.fileName,
+    );
+    const category = (options?.category ?? routing.category) as OrderFileCategory;
+    const slotKey = String(options?.slotKey ?? (options?.category ? "General" : routing.slotKey));
+    const versionKey =
+      options?.versionKey ??
+      (options?.category && !options?.uploadSlotId
+        ? `${category}:${slotKey}:${file.fileName}`
+        : routing.versionKey);
+
+    const current = versionKey
+      ? await prisma.orderFile.findFirst({
+          where: { orderId, versionKey, isCurrent: true },
+          orderBy: { version: "desc" },
+        })
+      : null;
+
+    // Same logical file (versionKey) already current → ask replace vs new version
+    if (current && !options?.versionMode) {
+      throw new AppError("CONFLICT", "כבר קיים קובץ עם אותו שם", 409, {
+        code: "FILE_VERSION_CONFLICT",
+        existing: {
+          id: current.id,
+          fileName: current.fileName,
+          version: current.version,
+          category: current.category,
+          slotKey: current.slotKey,
+          uploadedAt: current.uploadedAt,
+        },
+      });
+    }
+
+    const nextVersion = current ? current.version + 1 : 1;
     const recordId = crypto.randomUUID();
-    const storagePath = buildOrderFilePath(orderId, folderId, file.fileName);
+    const storagePath = buildStructuredOrderFilePath({
+      serialNumber: order.serialNumber,
+      category,
+      slotKey: slotKey as OrderFileSlotKey,
+      version: nextVersion,
+      fileName: file.fileName,
+    });
 
     await uploadFile(STORAGE_BUCKETS.ORDER_FILES, storagePath, file.buffer, file.mimeType);
 
     return prisma.$transaction(async (tx) => {
-      const order = await tx.order.findUnique({ where: { id: orderId } });
-      if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+      if (current) {
+        await tx.orderFile.update({
+          where: { id: current.id },
+          data: { isCurrent: false },
+        });
+      }
 
       const created = await tx.orderFile.create({
         data: {
@@ -479,6 +541,12 @@ export class AppDataService {
           mimeType: file.mimeType,
           uploadedBy: userId,
           notes: file.notes ?? null,
+          category,
+          slotKey,
+          versionKey,
+          version: nextVersion,
+          isCurrent: true,
+          replacesId: current?.id ?? null,
         },
       });
 
@@ -489,7 +557,7 @@ export class AppDataService {
               orderId,
               status: "FILES_ATTACHED",
               changedBy: userId,
-              notes: `צורף: ${file.fileName}`,
+              notes: `צורף: ${file.fileName} → ${category}/${slotKey}`,
             },
           });
         }
@@ -508,7 +576,11 @@ export class AppDataService {
         });
       }
 
-      return mapOrderFile(created);
+      const uploader = await tx.user.findUnique({
+        where: { id: userId },
+        select: { name: true },
+      });
+      return mapOrderFile(created, uploader?.name);
     });
   }
 

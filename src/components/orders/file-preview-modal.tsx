@@ -39,7 +39,7 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
   const previewKind = file ? getPreviewKind(file.mimeType, file.fileName) : "none";
   const folderId = file ? getOrderFileFolderId(file) : "";
   const viewUrl = useMemo(() => {
-    if (!file || previewKind === "none" || previewKind === "zip" || previewKind === "plx") return null;
+    if (!file || previewKind === "none" || previewKind === "plx" || previewKind === "dcm") return null;
     return buildFileViewUrl(file.orderId, folderId, file.fileName);
   }, [file, folderId, previewKind]);
 
@@ -215,7 +215,7 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
             />
           )}
 
-          {previewKind === "model3d" && viewUrl && !error && (
+          {(previewKind === "model3d" || previewKind === "zip") && viewUrl && !error && (
             <ModelViewer3D
               key={refreshKey}
               url={viewUrl}
@@ -228,11 +228,13 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
             />
           )}
 
-          {previewKind === "zip" && (
+          {previewKind === "dcm" && (
             <div className="flex items-center justify-center h-full p-8 text-center">
               <div>
-                <p className="font-medium text-slate-800">קובץ ZIP</p>
-                <p className="text-sm text-slate-500 mt-2">תצוגה מקדימה אינה זמינה — ניתן להוריד את הקובץ</p>
+                <p className="font-medium text-slate-800">קובץ DCM (DICOM)</p>
+                <p className="text-sm text-slate-500 mt-2">
+                  ניתן להוריד ולפתוח בתוכנת DICOM ייעודית. תצוגת נפח רפואי אינה זמינה כאן.
+                </p>
                 {downloadUrl && (
                   <a href={downloadUrl} download={file.fileName} className="inline-block mt-4">
                     <Button><Download className="h-4 w-4" />הורדה</Button>

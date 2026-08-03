@@ -34,6 +34,11 @@ export interface DentalChartProps {
   readOnly?: boolean;
   className?: string;
   toothStatuses?: Partial<Record<number, ToothStatus>>;
+  /**
+   * Lab production legend (בריאה / בטיפול / הושלם / בעיה).
+   * Off by default — not relevant on doctor/staff order-create screens.
+   */
+  showStatusLegend?: boolean;
 }
 
 export function toothKindFromNumber(number: number): ToothKind {

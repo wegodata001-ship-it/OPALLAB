@@ -15,6 +15,11 @@ function injectHtmlBase(html: string, baseHref: string): string {
   return `<!DOCTYPE html><html><head>${baseTag}</head><body>${html}</body></html>`;
 }
 
+function dirnamePath(storagePath: string): string {
+  const idx = storagePath.lastIndexOf("/");
+  return idx >= 0 ? storagePath.slice(0, idx) : storagePath;
+}
+
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ orderId: string; fileId: string; path?: string[] }> },
@@ -27,25 +32,49 @@ export async function GET(
       throw new AppError("FORBIDDEN", "אין גישה להזמנה זו", 403);
     }
 
-    const folderFiles = await prisma.orderFile.findMany({
-      where: {
-        orderId,
-        storagePath: { startsWith: `${orderId}/${fileId}/` },
-      },
+    // Preferred: fileId is OrderFile.id (new structured paths)
+    const byId = await prisma.orderFile.findFirst({
+      where: { id: fileId, orderId },
     });
-    if (!folderFiles.length) {
-      throw new AppError("NOT_FOUND", "תיקיית קובץ לא נמצאה", 404);
+
+    let storagePath: string | null = null;
+    let fileName = "";
+
+    if (byId?.storagePath) {
+      const baseDir = dirnamePath(byId.storagePath);
+      if (path?.length) {
+        if (path.some((p) => p.includes(".."))) {
+          throw new AppError("VALIDATION_ERROR", "נתיב קובץ לא תקין", 400);
+        }
+        storagePath = `${baseDir}/${path.join("/")}`;
+      } else {
+        storagePath = byId.storagePath;
+      }
+      fileName = byId.fileName;
+    } else {
+      // Legacy: fileId is batch folder UUID under {orderId}/{folderId}/…
+      const folderFiles = await prisma.orderFile.findMany({
+        where: {
+          orderId,
+          storagePath: { startsWith: `${orderId}/${fileId}/` },
+        },
+      });
+      if (!folderFiles.length) {
+        throw new AppError("NOT_FOUND", "קובץ לא נמצא", 404);
+      }
+      const relativePath = path?.length ? path.join("/") : folderFiles[0].fileName;
+      if (relativePath.includes("..")) {
+        throw new AppError("VALIDATION_ERROR", "נתיב קובץ לא תקין", 400);
+      }
+      storagePath = `${orderId}/${fileId}/${relativePath}`;
+      fileName = relativePath;
     }
 
-    const relativePath = path?.length ? path.join("/") : folderFiles[0].fileName;
-    if (relativePath.includes("..")) {
-      throw new AppError("VALIDATION_ERROR", "נתיב קובץ לא תקין", 400);
-    }
+    if (!storagePath) throw new AppError("NOT_FOUND", "קובץ לא נמצא", 404);
 
-    const storagePath = `${orderId}/${fileId}/${relativePath}`;
     const { buffer, contentType } = await downloadStorageFile(STORAGE_BUCKETS.ORDER_FILES, storagePath);
-    const ext = relativePath.split(".").pop()?.toLowerCase() ?? "";
-    const mimeType = contentType || getMimeTypeFromFileName(relativePath);
+    const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+    const mimeType = contentType || getMimeTypeFromFileName(fileName);
 
     if (ext === "html" || ext === "htm" || mimeType === "text/html") {
       const baseHref = `/api/orders/files/view/${orderId}/${fileId}/`;

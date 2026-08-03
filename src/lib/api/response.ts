@@ -15,6 +15,7 @@ export function jsonError(error: unknown) {
       error: {
         code: appError.code,
         message: appError.message,
+        details: appError.details ?? undefined,
       },
     },
     { status: appError.status },

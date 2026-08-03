@@ -3,6 +3,7 @@ export type AppErrorCode =
   | "NOT_FOUND"
   | "UNAUTHORIZED"
   | "FORBIDDEN"
+  | "CONFLICT"
   | "DATABASE_ERROR"
   | "STORAGE_ERROR"
   | "UPLOAD_ERROR"

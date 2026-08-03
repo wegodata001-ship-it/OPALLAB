@@ -142,7 +142,10 @@ export function mapOrder(order: PrismaOrder): Order {
   };
 }
 
-export async function mapOrderFile(file: PrismaOrderFile): Promise<OrderFile> {
+export async function mapOrderFile(
+  file: PrismaOrderFile,
+  uploaderName?: string | null,
+): Promise<OrderFile> {
   const dataUrl = file.storagePath
     ? await getSignedUrl(STORAGE_BUCKETS.ORDER_FILES, file.storagePath)
     : null;
@@ -159,6 +162,13 @@ export async function mapOrderFile(file: PrismaOrderFile): Promise<OrderFile> {
     mimeType: file.mimeType,
     storagePath: file.storagePath,
     dataUrl,
+    category: file.category,
+    slotKey: file.slotKey,
+    versionKey: file.versionKey,
+    version: file.version,
+    isCurrent: file.isCurrent,
+    replacesId: file.replacesId,
+    uploadedByName: uploaderName ?? null,
   };
 }
 
@@ -187,7 +197,7 @@ type OrderWithIncludes = PrismaOrder & {
 };
 
 export async function mapOrderWithRelations(order: OrderWithIncludes): Promise<OrderWithRelations> {
-  const files = await Promise.all(order.files.map(mapOrderFile));
+  const files = await Promise.all(order.files.map((file) => mapOrderFile(file)));
   return {
     ...mapOrder(order),
     doctor: mapDoctor(order.doctor),

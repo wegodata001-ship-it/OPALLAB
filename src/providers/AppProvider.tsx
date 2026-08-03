@@ -83,7 +83,18 @@ interface AppContextValue {
   updateOrderStatus: (input: UpdateOrderStatusInput) => Promise<void>;
   completeStage: (input: CompleteStageInput) => Promise<void>;
   undoStage: (input: UndoStageInput) => Promise<void>;
-  addOrderFile: (orderId: string, file: File, notes?: string, folderId?: string) => Promise<void>;
+  addOrderFile: (
+    orderId: string,
+    file: File,
+    notes?: string,
+    folderId?: string,
+    meta?: {
+      category?: string;
+      slotKey?: string;
+      versionMode?: "new_version" | "replace";
+      uploadSlotId?: string;
+    },
+  ) => Promise<void>;
   previewDeliveryNote: () => Promise<string>;
   createShipment: (orderId: string, deliveryNote: string, courier?: { name: string; phone: string }) => Promise<Shipment>;
   updateInventoryItem: (id: string, updates: Partial<InventoryItem>) => Promise<void>;
@@ -258,7 +269,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, "מעדכן...");
   }, [currentUser, withLoading, refreshInternal]);
 
-  const addOrderFile = useCallback(async (orderId: string, file: File, notes?: string, folderId?: string) => {
+  const addOrderFile = useCallback(async (
+    orderId: string,
+    file: File,
+    notes?: string,
+    folderId?: string,
+    meta?: {
+      category?: string;
+      slotKey?: string;
+      versionMode?: "new_version" | "replace";
+      uploadSlotId?: string;
+    },
+  ) => {
     if (!currentUser) return;
     await withLoading(async () => {
       const formData = new FormData();
@@ -266,6 +288,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       formData.append("file", file);
       if (notes) formData.append("notes", notes);
       if (folderId) formData.append("folderId", folderId);
+      if (meta?.category) formData.append("category", meta.category);
+      if (meta?.slotKey) formData.append("slotKey", meta.slotKey);
+      if (meta?.versionMode) formData.append("versionMode", meta.versionMode);
+      if (meta?.uploadSlotId) formData.append("uploadSlotId", meta.uploadSlotId);
       await apiPost("/api/orders/files", formData);
       await refreshInternal();
     }, "מעלה קבצים...");

@@ -73,9 +73,12 @@ export async function deleteFile(bucket: StorageBucket, storagePath: string): Pr
   }
 }
 
+/** Legacy flat path (kept for older records). */
 export function buildOrderFilePath(orderId: string, fileId: string, fileName: string): string {
   return `${orderId}/${fileId}/${fileName}`;
 }
+
+export { buildStructuredOrderFilePath } from "@/lib/orders/order-file-taxonomy";
 
 export function buildInventoryImagePath(itemId: string, fileName: string): string {
   return `${itemId}/${fileName}`;

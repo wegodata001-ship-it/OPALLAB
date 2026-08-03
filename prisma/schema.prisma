@@ -73,6 +73,18 @@ enum FileType {
   DOCUMENT
 }
 
+enum OrderFileCategory {
+  ClinicalPhotos
+  Scans
+  Radiographs
+  Prescription
+  Documents
+  CAD
+  Manufacturing
+  Delivery
+  Other
+}
+
 enum AttendanceMethod {
   NFC
   MANUAL
@@ -236,7 +248,7 @@ model Order {
 }
 
 model OrderFile {
-  id          String   @id @default(cuid())
+  id          String            @id @default(cuid())
   orderId     String
   fileName    String
   fileType    FileType
@@ -245,12 +257,23 @@ model OrderFile {
   bucket      String?
   mimeType    String?
   uploadedBy  String
-  uploadedAt  DateTime @default(now())
+  uploadedAt  DateTime          @default(now())
   notes       String?
+  /// Storage taxonomy folder (ClinicalPhotos, Scans, …)
+  category    OrderFileCategory @default(Other)
+  /// Subfolder / clinical slot key (Smile, UpperScan, …)
+  slotKey     String?
+  /// Logical key for versioning within an order (e.g. clinical:Smile)
+  versionKey  String?
+  version     Int               @default(1)
+  isCurrent   Boolean           @default(true)
+  replacesId  String?
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
+  @@index([orderId, category, isCurrent])
+  @@index([orderId, versionKey, isCurrent])
 }
 
 model OrderStatusHistory {

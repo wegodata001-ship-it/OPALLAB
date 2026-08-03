@@ -116,7 +116,12 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
               orderId={order.id}
               files={order.files}
               canUpload={!!canEdit}
-              onUpload={(f, folderId) => addOrderFile(order.id, f, undefined, folderId)}
+              onUpload={(f, folderId, meta) =>
+                addOrderFile(order.id, f, undefined, folderId, {
+                  category: meta?.category,
+                  slotKey: meta?.slotKey,
+                })
+              }
             />
           </CardContent>
         </Card>

@@ -7,7 +7,8 @@ import { useDentalChart } from "./useDentalChart";
 import type { DentalChartProps } from "./toothTypes";
 import "./styles.css";
 
-const LEGEND = [
+/** Lab-only status legend — not shown on order creation. */
+const LAB_STATUS_LEGEND = [
   { label: "בריאה", color: "bg-white border-[#CFCFCF]" },
   { label: "נבחרה", color: "bg-[#7C3AED] border-violet-800" },
   { label: "בטיפול", color: "bg-amber-200 border-amber-600" },
@@ -21,6 +22,7 @@ export function DentalChart({
   readOnly,
   className,
   toothStatuses,
+  showStatusLegend = false,
 }: DentalChartProps) {
   const {
     selectedSet,
@@ -35,6 +37,8 @@ export function DentalChart({
     RIGHT_SIDE_NUMBERS,
     LEFT_SIDE_NUMBERS,
   } = useDentalChart(selectedTeeth, onChange, readOnly, toothStatuses);
+
+  const showAside = showStatusLegend || !readOnly;
 
   return (
     <div className={cn("dc-root rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4", className)}>
@@ -62,7 +66,7 @@ export function DentalChart({
         )}
       </div>
 
-      <div className="flex flex-col gap-4 lg:flex-row">
+      <div className={cn("flex flex-col gap-4", showAside && "lg:flex-row")}>
         <div className="min-w-0 flex-1 space-y-1">
           <div>
             <p className="mb-0.5 text-center text-[10px] font-semibold text-slate-400">
@@ -95,46 +99,50 @@ export function DentalChart({
           </div>
         </div>
 
-        <aside className="flex shrink-0 flex-col gap-4 border-t border-dashed border-slate-200 pt-3 lg:w-44 lg:border-r lg:border-t-0 lg:pr-3 lg:pt-0">
-          <div>
-            <p className="mb-2 text-[10px] font-semibold tracking-wide text-slate-400">מקרא</p>
-            <ul className="space-y-1.5">
-              {LEGEND.map((item) => (
-                <li key={item.label} className="flex items-center gap-2 text-xs text-slate-600">
-                  <span className={cn("h-3.5 w-3.5 rounded-sm border shadow-sm", item.color)} />
-                  {item.label}
-                </li>
-              ))}
-            </ul>
-          </div>
+        {showAside && (
+          <aside className="flex shrink-0 flex-col gap-4 border-t border-dashed border-slate-200 pt-3 lg:w-44 lg:border-r lg:border-t-0 lg:pr-3 lg:pt-0">
+            {showStatusLegend && (
+              <div>
+                <p className="mb-2 text-[10px] font-semibold tracking-wide text-slate-400">מקרא סטטוסים</p>
+                <ul className="space-y-1.5">
+                  {LAB_STATUS_LEGEND.map((item) => (
+                    <li key={item.label} className="flex items-center gap-2 text-xs text-slate-600">
+                      <span className={cn("h-3.5 w-3.5 rounded-sm border shadow-sm", item.color)} />
+                      {item.label}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
-          {!readOnly && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold tracking-wide text-slate-400">בחירה מהירה</p>
-              {(
-                [
-                  ["בחר כל הלסת העליונה", UPPER_JAW_NUMBERS],
-                  ["בחר כל הלסת התחתונה", LOWER_JAW_NUMBERS],
-                  ["בחר צד ימין", RIGHT_SIDE_NUMBERS],
-                  ["בחר צד שמאל", LEFT_SIDE_NUMBERS],
-                ] as const
-              ).map(([label, teeth]) => {
-                const all = teeth.every((t) => selectedSet.has(t));
-                return (
-                  <label key={label} className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
-                    <input
-                      type="checkbox"
-                      checked={all}
-                      onChange={() => toggleGroup([...teeth], !all)}
-                      className="h-3.5 w-3.5 accent-[#7C3AED]"
-                    />
-                    {label}
-                  </label>
-                );
-              })}
-            </div>
-          )}
-        </aside>
+            {!readOnly && (
+              <div className="space-y-2">
+                <p className="text-[10px] font-semibold tracking-wide text-slate-400">בחירה מהירה</p>
+                {(
+                  [
+                    ["בחר כל הלסת העליונה", UPPER_JAW_NUMBERS],
+                    ["בחר כל הלסת התחתונה", LOWER_JAW_NUMBERS],
+                    ["בחר צד ימין", RIGHT_SIDE_NUMBERS],
+                    ["בחר צד שמאל", LEFT_SIDE_NUMBERS],
+                  ] as const
+                ).map(([label, teeth]) => {
+                  const all = teeth.every((t) => selectedSet.has(t));
+                  return (
+                    <label key={label} className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={all}
+                        onChange={() => toggleGroup([...teeth], !all)}
+                        className="h-3.5 w-3.5 accent-[#7C3AED]"
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </aside>
+        )}
       </div>
 
       {selectedTeeth.length > 0 && (
