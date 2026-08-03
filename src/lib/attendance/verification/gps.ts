@@ -1,12 +1,11 @@
 import { AttendanceVerificationError } from "@/lib/attendance/verification/types";
 import type { GpsCaptureResult } from "@/lib/attendance/verification/types";
 
+export const GPS_REQUIRED_MESSAGE = "יש לאשר הרשאת מיקום כדי לבצע רישום נוכחות.";
+
 export async function captureGpsForVerification(): Promise<GpsCaptureResult> {
   if (typeof navigator === "undefined" || !navigator.geolocation) {
-    throw new AttendanceVerificationError(
-      "לא ניתן לבצע רישום נוכחות\nיש לאפשר גישה למיקום.",
-      "gps",
-    );
+    throw new AttendanceVerificationError(GPS_REQUIRED_MESSAGE, "gps");
   }
 
   try {
@@ -25,9 +24,6 @@ export async function captureGpsForVerification(): Promise<GpsCaptureResult> {
       capturedAt: new Date(position.timestamp),
     };
   } catch {
-    throw new AttendanceVerificationError(
-      "לא ניתן לבצע רישום נוכחות\nיש לאפשר גישה למיקום.",
-      "gps",
-    );
+    throw new AttendanceVerificationError(GPS_REQUIRED_MESSAGE, "gps");
   }
 }

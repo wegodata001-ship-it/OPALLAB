@@ -1,7 +1,8 @@
 import type { AttendanceManagementRecord } from "@/lib/attendance/management/types";
 
 const TZ = "Asia/Jerusalem";
-const STANDARD_DAILY_HOURS = 8;
+/** Standard day for overtime — aligned with management (9h). */
+const STANDARD_DAILY_HOURS = 9;
 
 export type AttendanceReportKpis = {
   totalHours: number;
@@ -9,7 +10,9 @@ export type AttendanceReportKpis = {
   checkOuts: number;
   overtimeHours: number;
   lateCount: number;
+  earlyLeaveCount: number;
   workDays: number;
+  avgHoursPerDay: number;
   missingDays: number | null;
 };
 
@@ -18,7 +21,6 @@ function dateKey(date: Date): string {
 }
 
 function isIsraelWorkday(date: Date): boolean {
-  // Sunday–Thursday
   const weekday = new Intl.DateTimeFormat("en-US", {
     timeZone: TZ,
     weekday: "short",
@@ -39,6 +41,15 @@ function eachDay(from: Date, to: Date): Date[] {
   return days;
 }
 
+function hourInIsrael(date: Date): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: TZ,
+    hour: "numeric",
+    hour12: false,
+  }).formatToParts(date);
+  return Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+}
+
 export function computeAttendanceReportKpis(
   records: AttendanceManagementRecord[],
   opts: { from?: string; to?: string; personal?: boolean },
@@ -48,10 +59,17 @@ export function computeAttendanceReportKpis(
   let totalHours = 0;
   let checkOuts = 0;
   let lateCount = 0;
+  let earlyLeaveCount = 0;
 
   for (const r of records) {
     if (r.isLate) lateCount += 1;
-    if (r.checkOut) checkOuts += 1;
+    if (r.checkOut) {
+      checkOuts += 1;
+      const hours = r.durationHours ?? 0;
+      if (hourInIsrael(r.checkOut) < 16 && hours < STANDARD_DAILY_HOURS) {
+        earlyLeaveCount += 1;
+      }
+    }
     if (r.durationHours == null) continue;
     totalHours += r.durationHours;
     const key = dateKey(r.checkIn);
@@ -62,6 +80,10 @@ export function computeAttendanceReportKpis(
   for (const hours of dailyHours.values()) {
     overtimeHours += Math.max(0, hours - STANDARD_DAILY_HOURS);
   }
+
+  const workDays = workDayKeys.size;
+  const avgHoursPerDay =
+    workDays > 0 ? Math.round((totalHours / workDays) * 100) / 100 : 0;
 
   let missingDays: number | null = null;
   if (opts.personal && opts.from && opts.to) {
@@ -79,7 +101,9 @@ export function computeAttendanceReportKpis(
     checkOuts,
     overtimeHours: Math.round(overtimeHours * 100) / 100,
     lateCount,
-    workDays: workDayKeys.size,
+    earlyLeaveCount,
+    workDays,
+    avgHoursPerDay,
     missingDays,
   };
 }

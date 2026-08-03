@@ -37,7 +37,8 @@ export async function GET(request: Request) {
       return jsonOk({ history });
     }
 
-    const devices = await listTrustedDevices();
+    const userId = url.searchParams.get("userId") ?? undefined;
+    const devices = await listTrustedDevices({ userId: userId || undefined });
     const settings = await getLabGateSettings();
     return jsonOk({ devices, settings });
   } catch (error) {

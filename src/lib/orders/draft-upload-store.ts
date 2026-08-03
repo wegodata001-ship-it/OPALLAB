@@ -2,12 +2,11 @@ import type { OrderUploadSlotId } from "@/lib/orders/upload-slots";
 
 const DB_NAME = "opal-lab-order-drafts";
 const STORE = "slot-files";
-const DB_VERSION = 1;
+const DB_VERSION = 3;
 
 export type DraftSlotRecord = {
   draftKey: string;
   slotId: OrderUploadSlotId;
-  /** For extra_files — index within the slot. */
   index: number;
   fileName: string;
   mimeType: string;
@@ -20,10 +19,14 @@ function openDb(): Promise<IDBDatabase> {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        const store = db.createObjectStore(STORE, { keyPath: ["draftKey", "slotId", "index"] });
-        store.createIndex("byDraft", "draftKey", { unique: false });
+      if (db.objectStoreNames.contains("category-files")) {
+        db.deleteObjectStore("category-files");
       }
+      if (db.objectStoreNames.contains(STORE)) {
+        db.deleteObjectStore(STORE);
+      }
+      const store = db.createObjectStore(STORE, { keyPath: ["draftKey", "slotId", "index"] });
+      store.createIndex("byDraft", "draftKey", { unique: false });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error ?? new Error("IndexedDB open failed"));

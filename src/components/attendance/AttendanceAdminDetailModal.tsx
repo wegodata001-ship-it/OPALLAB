@@ -16,7 +16,6 @@ interface AttendanceAdminDetailModalProps {
 function DetailSection({
   title,
   time,
-  photoUrl,
   address,
   lat,
   lng,
@@ -34,7 +33,6 @@ function DetailSection({
 }: {
   title: string;
   time?: Date | null;
-  photoUrl?: string | null;
   address?: string | null;
   lat?: number | null;
   lng?: number | null;
@@ -55,9 +53,6 @@ function DetailSection({
   return (
     <div className="space-y-3 rounded-xl border p-4">
       <h3 className="font-bold text-slate-800">{title} — {formatTime(time)} · {formatDate(time)}</h3>
-      {photoUrl && (
-        <img src={photoUrl} alt={title} className="w-full max-h-80 rounded-xl object-cover border" />
-      )}
       <div className="text-sm space-y-1 text-slate-600">
         <p className="flex items-center gap-2"><MapPin className="h-4 w-4" />{address || "—"}</p>
         {(street || city || country) && (
@@ -112,7 +107,6 @@ export function AttendanceAdminDetailModal({ open, onClose, record, employeeName
         <DetailSection
           title="כניסה"
           time={record.checkIn}
-          photoUrl={record.checkInPhotoUrl}
           address={record.checkInAddress}
           lat={record.checkInLatitude ?? record.latitude}
           lng={record.checkInLongitude ?? record.longitude}
@@ -132,7 +126,6 @@ export function AttendanceAdminDetailModal({ open, onClose, record, employeeName
         <DetailSection
           title="יציאה"
           time={record.checkOut}
-          photoUrl={record.checkOutPhotoUrl}
           address={record.checkOutAddress}
           lat={record.checkOutLatitude}
           lng={record.checkOutLongitude}

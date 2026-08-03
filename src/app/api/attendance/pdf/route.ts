@@ -23,7 +23,6 @@ function parsePdfQuery(searchParams: URLSearchParams): AttendancePdfRequest {
     role: (searchParams.get("role") as UserRole) || undefined,
     status: (searchParams.get("status") as AttendanceManagementQuery["status"]) || undefined,
     gps: (searchParams.get("gps") as AttendanceManagementQuery["gps"]) || undefined,
-    photo: (searchParams.get("photo") as AttendanceManagementQuery["photo"]) || undefined,
     search: searchParams.get("search") ?? undefined,
     sortBy: (searchParams.get("sortBy") as AttendanceManagementQuery["sortBy"]) || undefined,
     sortDir: (searchParams.get("sortDir") as "asc" | "desc") || undefined,
@@ -37,7 +36,6 @@ function parsePdfQuery(searchParams: URLSearchParams): AttendancePdfRequest {
     compliance:
       (searchParams.get("compliance") as AttendanceManagementQuery["compliance"]) || undefined,
     scope: scopeParam === "me" ? "me" : "management",
-    includePhotos: searchParams.get("includePhotos") !== "0",
   };
 
   if (month && year) {
@@ -51,10 +49,16 @@ function parsePdfQuery(searchParams: URLSearchParams): AttendancePdfRequest {
 export async function GET(request: NextRequest) {
   try {
     const userId = await requireSessionUserId();
-    const query = parsePdfQuery(new URL(request.url).searchParams);
+    const params = new URL(request.url).searchParams;
+    const query = parsePdfQuery(params);
+    const format = params.get("format");
+    if (format === "html") query.format = "html";
     const pdf = await generateAttendancePdfReport(userId, query);
     return attendancePdfResponse(pdf);
   } catch (error) {
     return jsonError(error);
   }
 }
+
+export const runtime = "nodejs";
+export const maxDuration = 120;

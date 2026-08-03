@@ -14,7 +14,6 @@ import { PAYMENT_STATUS_LABELS, PAYMENT_METHOD_LABELS, USER_ROLE_LABELS } from "
 import { calculateEmployeePay, getSalaryLabel } from "@/lib/salary";
 import { printHtml } from "@/lib/export";
 import { AttendanceAdminRecord } from "@/components/attendance/AttendanceAdminRecord";
-import { canViewAttendanceVerification } from "@/lib/attendance/attendance-verification";
 import { LAB_INFO } from "@/lib/constants/labels";
 import type { DateRange, Payment, PaymentMethod } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -90,7 +89,7 @@ export default function AccountsPage() {
     if (!order) return;
     const html = `<h2>תעודת משלוח ${note}</h2><table>
       <tr><td>עבודה</td><td>${order.serialNumber}</td></tr>
-      <tr><td>רופא</td><td>${order.doctor.name}</td></tr>
+      <tr><td>רופא</td><td>${order.doctor?.name ?? "—"}</td></tr>
       <tr><td>מטופל</td><td>${order.patient.name}</td></tr>
       <tr><td>שליח</td><td>${shipment?.courierName ?? "—"} ${shipment?.courierPhone ?? ""}</td></tr>
       <tr><td>תאריך</td><td>${formatDate(shipment?.shippedAt ?? shipment?.createdAt)}</td></tr>
@@ -299,7 +298,6 @@ export default function AccountsPage() {
                       <AttendanceAdminRecord
                         record={a}
                         employeeName={emp.name}
-                        canViewPhotos={canViewAttendanceVerification(currentUser, a.userId)}
                       />
                     </div>
                   ))}

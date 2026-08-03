@@ -1,14 +1,12 @@
-import type { AttendanceMethod, AttendanceRecord, User, UserRole } from "@/lib/types";
+import type { AttendanceRecord, UserRole } from "@/lib/types";
 
 export type AttendanceRecordStatus = "present" | "left" | "late" | "not_checked_in";
 export type AttendanceGpsFilter = "all" | "valid" | "invalid";
-export type AttendancePhotoFilter = "all" | "has" | "none";
 export type AttendanceSortField = "name" | "checkIn" | "checkOut" | "duration" | "date";
 export type AttendanceComplianceStatus = "ok" | "missing" | "anomaly";
 export type AttendanceAnomalyCode =
   | "missing_checkout"
   | "missing_gps"
-  | "missing_photo"
   | "out_of_geofence"
   | "late"
   | "unusual_hours"
@@ -21,7 +19,6 @@ export interface AttendanceManagementQuery {
   role?: UserRole;
   status?: AttendanceRecordStatus;
   gps?: AttendanceGpsFilter;
-  photo?: AttendancePhotoFilter;
   search?: string;
   sortBy?: AttendanceSortField;
   sortDir?: "asc" | "desc";
@@ -48,7 +45,6 @@ export interface AttendanceManagementRecord extends AttendanceRecord {
   durationHours: number | null;
   isLate: boolean;
   gpsValid: boolean;
-  hasPhoto: boolean;
   anomalies: AttendanceAnomalyCode[];
   complianceStatus: AttendanceComplianceStatus;
   outOfGeofence: boolean;
@@ -65,7 +61,6 @@ export interface AttendanceEmployeeStats {
   earlyLeaveCount: number;
   openWithoutCheckout: number;
   missingGpsCount: number;
-  missingPhotoCount: number;
   outOfGeofenceCount: number;
 }
 

@@ -1,5 +1,6 @@
 import { AppError } from "@/lib/errors/app-error";
 import { jsonError, jsonOk, parseJsonBody } from "@/lib/api/response";
+import { withServerTiming } from "@/lib/api/with-timing";
 import { assertCanUploadOrderFile, requireSessionUser } from "@/lib/rbac";
 import { prepareOrderFileUpload } from "@/lib/orders/order-file-upload";
 import type { OrderFileCategory } from "@/lib/orders/order-file-taxonomy";
@@ -9,6 +10,7 @@ export const runtime = "nodejs";
 const MAX_UPLOAD_BYTES = (Number(process.env.MAX_UPLOAD_SIZE_MB) || 500) * 1024 * 1024;
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
   try {
     const user = await requireSessionUser();
     await assertCanUploadOrderFile(user);
@@ -54,8 +56,8 @@ export async function POST(request: Request) {
       versionMode: body.versionMode,
     });
 
-    return jsonOk({ upload: prepared });
+    return withServerTiming(jsonOk({ upload: prepared }), startedAt);
   } catch (error) {
-    return jsonError(error);
+    return withServerTiming(jsonError(error), startedAt);
   }
 }

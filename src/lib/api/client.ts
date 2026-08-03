@@ -41,3 +41,21 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   });
   return parseResponse<T>(response);
 }
+
+export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "PUT",
+    credentials: "include",
+    headers: body instanceof FormData ? undefined : { "Content-Type": "application/json" },
+    body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
+  });
+  return parseResponse<T>(response);
+}
+
+export async function apiDelete<T = { ok?: boolean }>(path: string): Promise<T> {
+  const response = await fetch(path, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  return parseResponse<T>(response);
+}

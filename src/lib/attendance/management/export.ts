@@ -57,8 +57,6 @@ export function buildAttendanceExport(
     "GPS יציאה",
     "IP",
     "מכשיר",
-    "תמונת כניסה",
-    "תמונת יציאה",
   ];
   const lines = records.map((r) =>
     [
@@ -82,8 +80,6 @@ export function buildAttendanceExport(
         : "",
       r.ipAddress ?? "",
       r.checkInDeviceType ?? r.deviceInfo ?? "",
-      r.checkInPhotoUrl ?? "",
-      r.checkOutPhotoUrl ?? "",
     ]
       .map(escapeCsv)
       .join(","),

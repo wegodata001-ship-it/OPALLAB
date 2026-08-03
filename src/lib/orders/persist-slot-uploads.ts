@@ -14,7 +14,6 @@ export type PendingSlotUpload = {
 };
 
 export type PersistUploadsOptions = {
-  /** Ask user replace vs new version on same-name conflict. */
   askVersionMode?: (
     fileName: string,
     existingName: string,
@@ -26,10 +25,6 @@ export type PersistUploadsOptions = {
   onFileError?: (file: File, error: Error) => void;
 };
 
-/**
- * Persist selected create-order slot files to Storage + DB for a real orderId.
- * Independent of React tile state (safe after remount / refresh).
- */
 export async function persistSlotUploads(
   orderId: string,
   pending: PendingSlotUpload[],
@@ -54,20 +49,8 @@ export async function persistSlotUploads(
       await uploadOneWithConflict(orderId, item, options);
       uploaded += 1;
       options.onFileDone?.(item.file, item.slotId);
-      console.info("[orders/upload] saved", {
-        orderId,
-        slotId: item.slotId,
-        fileName: item.file.name,
-        size: item.file.size,
-      });
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      console.error("[orders/upload] failed", {
-        orderId,
-        slotId: item.slotId,
-        fileName: item.file.name,
-        message: error.message,
-      });
       options.onFileError?.(item.file, error);
       throw error;
     }
@@ -115,7 +98,6 @@ async function uploadOneWithConflict(
   }
 }
 
-/** Fallback: rebuild pending list from IndexedDB draft if React state was cleared. */
 export async function loadPendingFromDraft(draftKey: string): Promise<PendingSlotUpload[]> {
   const draft = await loadDraftAll(draftKey);
   const out: PendingSlotUpload[] = [];

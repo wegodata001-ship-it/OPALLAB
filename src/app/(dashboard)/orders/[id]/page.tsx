@@ -12,6 +12,7 @@ import { WorkflowTracker } from "@/components/orders/workflow-tracker";
 import { DentalChart } from "@/components/DentalChart";
 import { OrderEditForm } from "@/components/orders/order-edit-form";
 import { OrderFilesSection } from "@/components/orders/order-files-section";
+import { TelegramOrderButton } from "@/components/orders/telegram-order-button";
 import { ExportActions } from "@/components/shared/export-actions";
 import { OrderHistoryButton } from "@/components/orders/order-history-modal";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -50,7 +51,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   const pdfHtml = `
     <h2>הזמנה ${order.serialNumber}</h2>
     <table>
-      <tr><td>רופא</td><td>${order.doctor.name}</td></tr>
+      <tr><td>רופא</td><td>${order.doctor?.name ?? "—"}</td></tr>
       <tr><td>מטופל</td><td>${order.patient.name}</td></tr>
       <tr><td>צבע</td><td>${order.shade ?? "—"}</td></tr>
       <tr><td>שיניים</td><td>${order.selectedTeeth.join(", ") || "—"}</td></tr>
@@ -61,22 +62,32 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       <tr><td>מחיר</td><td>${order.totalPrice ? formatCurrency(order.totalPrice) : "—"}</td></tr>
     </table>`;
 
-  const waText = `${LAB_INFO.name}\nהזמנה: ${order.serialNumber}\nרופא: ${order.doctor.name}\nמטופל: ${order.patient.name}\nסטטוס: ${ORDER_STATUS_LABELS[order.status]}\nיעד: ${formatDate(order.completionDate)}`;
+  const waText = `${LAB_INFO.name}\nהזמנה: ${order.serialNumber}\nרופא: ${order.doctor?.name ?? "—"}\nמטופל: ${order.patient.name}\nסטטוס: ${ORDER_STATUS_LABELS[order.status]}\nיעד: ${formatDate(order.completionDate)}`;
 
   return (
     <>
       <Header
         title={order.serialNumber}
-        description={`${order.doctor.name} · ${order.patient.name}`}
+        description={`${order.doctor?.name ?? "—"} · ${order.patient.name}`}
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <OrderHistoryButton order={order} showLabel />
             {canEdit && !editing && (
               <Button variant="outline" onClick={() => setEditing(true)}>
                 <Pencil className="h-4 w-4" />עריכה
               </Button>
             )}
-            <ExportActions title={`הזמנה ${order.serialNumber}`} whatsappText={waText} pdfHtml={pdfHtml} phone={order.doctor.phone ?? undefined} />
+            <TelegramOrderButton
+              size="md"
+              order={{
+                serialNumber: order.serialNumber,
+                patientName: order.patient.name,
+                doctorName: order.doctor?.name ?? "—",
+                workTypes: order.workTypes,
+                orderId: order.id,
+              }}
+            />
+            <ExportActions title={`הזמנה ${order.serialNumber}`} whatsappText={waText} pdfHtml={pdfHtml} phone={order.doctor?.phone ?? undefined} />
           </div>
         }
       />
@@ -97,7 +108,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2"><User className="h-5 w-5" />פרטים</CardTitle></CardHeader>
           <CardContent className="grid grid-cols-2 gap-2 text-sm">
-            <span className="text-slate-500">רופא</span><span className="font-medium">{order.doctor.name}</span>
+            <span className="text-slate-500">רופא</span><span className="font-medium">{order.doctor?.name ?? "—"}</span>
             <span className="text-slate-500">מטופל</span><span>{order.patient.name}{order.patient.age ? ` (${order.patient.age})` : ""}{order.patient.gender ? ` ${GENDER_LABELS[order.patient.gender]}` : ""}</span>
             <span className="text-slate-500">צבע</span><span>{order.shade || "—"}</span>
             <span className="text-slate-500">כניסה</span><span>{formatDate(order.entryDate)}</span>

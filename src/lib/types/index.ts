@@ -28,6 +28,7 @@ export type WorkType =
   | "NIGHT_GUARD_WHITENING_MILLED";
 
 export type OrderStatus =
+  | "DRAFT"
   | "RECEIVED"
   | "FILES_ATTACHED"
   | "DESIGN"
@@ -179,7 +180,7 @@ export interface Patient {
 export interface Order {
   id: string;
   serialNumber: string;
-  doctorId: string;
+  doctorId: string | null;
   patientId: string;
   entryDate: Date;
   completionDate?: Date | null;
@@ -367,9 +368,6 @@ export interface AttendanceLocationMeta {
   accuracy?: number;
   deviceInfo?: string;
   address?: string;
-  photoUrl?: string | null;
-  photoPath?: string | null;
-  fileName?: string | null;
   device?: AttendanceDeviceMeta;
   trustedDeviceId?: string | null;
   ipAddress?: string | null;
@@ -396,10 +394,6 @@ export interface AttendanceRecord {
   checkOutLongitude?: number | null;
   checkOutAccuracy?: number | null;
   checkOutAddress?: string | null;
-  checkInPhotoUrl?: string | null;
-  checkOutPhotoUrl?: string | null;
-  checkInPhotoPath?: string | null;
-  checkOutPhotoPath?: string | null;
   checkInAddressCountry?: string | null;
   checkInAddressCity?: string | null;
   checkInAddressStreet?: string | null;
@@ -426,7 +420,7 @@ export interface AttendanceRecord {
 }
 
 export interface OrderWithRelations extends Order {
-  doctor: Doctor;
+  doctor: Doctor | null;
   patient: Patient;
   assignedDesigner?: User | null;
   processingEmployee?: User | null;

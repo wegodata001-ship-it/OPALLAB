@@ -112,7 +112,7 @@ export default function DashboardPage() {
             <div className="space-y-2">
               {filteredOrders.slice(0, 6).map((o) => (
                 <Link key={o.id} href={`/orders/${o.id}`} className="flex justify-between items-center p-2 rounded-lg hover:bg-slate-50">
-                  <div><p className="font-medium text-sm">{o.serialNumber}</p><p className="text-xs text-slate-500">{o.doctor.name}</p></div>
+                  <div><p className="font-medium text-sm">{o.serialNumber}</p><p className="text-xs text-slate-500">{o.doctor?.name ?? "—"}</p></div>
                   <StatusBadge status={o.status} />
                 </Link>
               ))}

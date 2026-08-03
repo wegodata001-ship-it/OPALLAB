@@ -38,45 +38,41 @@ export async function createSignedUploadUrl(
   return { signedUrl: data.signedUrl, token: data.token, path: data.path };
 }
 
-/** Verify an object exists and is non-empty in Storage (metadata only — no full download). */
+/**
+ * Verify an object exists in Storage (metadata only — no full download).
+ * Uses `.info()` (HEAD/object info) — NOT folder `.list()`, which is slow/unreliable
+ * on large prefixes and was a major upload bottleneck.
+ */
 export async function assertStorageObjectExists(
   bucket: StorageBucket,
   storagePath: string,
-): Promise<{ size: number }> {
+): Promise<{ size: number; ms: number }> {
   const supabase = getSupabaseAdmin();
-  const lastSlash = storagePath.lastIndexOf("/");
-  const folder = lastSlash >= 0 ? storagePath.slice(0, lastSlash) : "";
-  const name = lastSlash >= 0 ? storagePath.slice(lastSlash + 1) : storagePath;
+  const t0 = Date.now();
 
-  const { data, error } = await supabase.storage.from(bucket).list(folder, {
-    search: name,
-    limit: 100,
-  });
+  const { data, error } = await supabase.storage.from(bucket).info(storagePath);
+  const ms = Date.now() - t0;
 
-  if (error) {
-    throw new AppError(
-      "STORAGE_ERROR",
-      "אימות הקובץ ב־Storage נכשל — נסו שוב",
-      500,
-      error,
-    );
-  }
-
-  const match = (data ?? []).find((item) => item.name === name);
-  const size = Number(match?.metadata?.size ?? match?.metadata?.contentLength ?? 0);
-
-  if (!match) {
+  if (error || !data) {
+    // Fallback: exists() HEAD — still O(1), never list entire folder
+    const exists = await supabase.storage.from(bucket).exists(storagePath);
+    if (exists.data === true) {
+      return { size: 0, ms: Date.now() - t0 };
+    }
     throw new AppError(
       "STORAGE_ERROR",
       "הקובץ לא נמצא ב־Storage לאחר ההעלאה — נסו שוב",
       500,
+      error ?? exists.error,
     );
   }
-  if (!size) {
-    // Some providers omit size in list metadata — treat presence as success.
-    return { size: 0 };
-  }
-  return { size };
+
+  const size = Number(
+    (data as { size?: number; metadata?: { size?: number } }).size ??
+      (data as { metadata?: { size?: number } }).metadata?.size ??
+      0,
+  );
+  return { size, ms };
 }
 
 export async function getSignedUrl(

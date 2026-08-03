@@ -206,7 +206,7 @@ export async function mapInventoryItem(item: PrismaInventoryItem): Promise<Inven
 }
 
 type OrderWithIncludes = PrismaOrder & {
-  doctor: PrismaDoctor;
+  doctor: PrismaDoctor | null;
   patient: PrismaPatient;
   assignedDesigner: PrismaUser | null;
   processingEmployee: PrismaUser | null;
@@ -220,7 +220,7 @@ export async function mapOrderWithRelations(order: OrderWithIncludes): Promise<O
   const files = await Promise.all(order.files.map((file) => mapOrderFile(file)));
   return {
     ...mapOrder(order),
-    doctor: mapDoctor(order.doctor),
+    doctor: order.doctor ? mapDoctor(order.doctor) : null,
     patient: mapPatient(order.patient),
     assignedDesigner: order.assignedDesigner ? mapUser(order.assignedDesigner) : null,
     processingEmployee: order.processingEmployee ? mapUser(order.processingEmployee) : null,

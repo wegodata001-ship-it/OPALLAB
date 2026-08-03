@@ -10,10 +10,10 @@ import { useApp } from "@/providers/AppProvider";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { ORDER_STATUS_LABELS } from "@/lib/constants/labels";
 import { formatDate, formatDateTime } from "@/lib/utils";
-import { Check, Circle, RotateCcw } from "lucide-react";
+import { Check, Circle, Loader2, RotateCcw } from "lucide-react";
 import type { DateRange } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { filterByDateRange } from "@/lib/date-filter";
 import {
   PRODUCTION_STAGES,
@@ -24,10 +24,39 @@ import {
   isStageCompletionAdmin,
 } from "@/lib/workflow-permissions";
 import { OrderHistoryButton } from "@/components/orders/order-history-modal";
+import { shippingLog } from "@/lib/shipping/action-log";
 
 export default function WorkflowPage() {
   const { orders, currentUser, completeStage, undoStage, users } = useApp();
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const lockRef = useRef<Set<string>>(new Set());
+
+  const runStageAction = useCallback(
+    async (key: string, fn: () => Promise<void>) => {
+      if (lockRef.current.has(key)) {
+        shippingLog("click", key, { ignored: "double-submit" });
+        return;
+      }
+      lockRef.current.add(key);
+      setBusyKey(key);
+      setActionError(null);
+      shippingLog("click", key);
+      try {
+        await fn();
+        shippingLog("ui:updated", key);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "הפעולה נכשלה";
+        setActionError(message);
+        shippingLog("error", key, { message });
+      } finally {
+        lockRef.current.delete(key);
+        setBusyKey(null);
+      }
+    },
+    [],
+  );
 
   if (!currentUser) return null;
 
@@ -65,6 +94,12 @@ export default function WorkflowPage() {
 
       <DateRangeFilter value={dateRange} onChange={setDateRange} className="mb-4" />
 
+      {actionError && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {actionError}
+        </div>
+      )}
+
       <div className="space-y-4">
         {activeOrders.map((order) => (
           <Card key={order.id} className="overflow-hidden">
@@ -80,7 +115,7 @@ export default function WorkflowPage() {
                   <p className="text-xl font-bold pl-8 lg:pl-0">{order.serialNumber}</p>
                 </Link>
                 <p className="text-sm text-slate-300 mt-1">{order.patient.name}</p>
-                <p className="text-xs text-slate-400">{order.doctor.name}</p>
+                <p className="text-xs text-slate-400">{order.doctor?.name ?? "—"}</p>
                 <div className="mt-3"><StatusBadge status={order.status} /></div>
                 <p className="text-xs text-slate-500 mt-2">יעד: {formatDate(order.completionDate)}</p>
               </div>
@@ -144,16 +179,23 @@ export default function WorkflowPage() {
                             {canUndo ? (
                               <button
                                 type="button"
+                                disabled={busyKey === `undo:${order.id}:${stage.status}`}
                                 onClick={() =>
-                                  undoStage({
-                                    orderId: order.id,
-                                    stage: stage.status,
-                                    undoneBy: currentUser.id,
-                                  })
+                                  void runStageAction(`undo:${order.id}:${stage.status}`, () =>
+                                    undoStage({
+                                      orderId: order.id,
+                                      stage: stage.status,
+                                      undoneBy: currentUser.id,
+                                    }),
+                                  )
                                 }
-                                className="mt-1 inline-flex items-center gap-0.5 text-[10px] text-red-500 hover:underline"
+                                className="mt-1 inline-flex items-center gap-0.5 text-[10px] text-red-500 hover:underline disabled:opacity-50"
                               >
-                                <RotateCcw className="h-3 w-3" />
+                                {busyKey === `undo:${order.id}:${stage.status}` ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <RotateCcw className="h-3 w-3" />
+                                )}
                                 {isAdmin ? "החזר שלב" : "ביטול שלי"}
                               </button>
                             ) : (
@@ -164,16 +206,27 @@ export default function WorkflowPage() {
                           <Button
                             size="sm"
                             className="h-10 w-full"
+                            disabled={Boolean(busyKey)}
                             onClick={() =>
-                              completeStage({
-                                orderId: order.id,
-                                stage: stage.status,
-                                completedBy: currentUser.id,
-                              })
+                              void runStageAction(`complete:${order.id}:${stage.status}`, () =>
+                                completeStage({
+                                  orderId: order.id,
+                                  stage: stage.status,
+                                  completedBy: currentUser.id,
+                                }),
+                              )
                             }
                           >
-                            <Check className="h-4 w-4" />
-                            {isAdmin && !isCurrent ? "השלם עד כאן" : "סיימתי"}
+                            {busyKey === `complete:${order.id}:${stage.status}` ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Check className="h-4 w-4" />
+                            )}
+                            {busyKey === `complete:${order.id}:${stage.status}`
+                              ? "שומר..."
+                              : isAdmin && !isCurrent
+                                ? "השלם עד כאן"
+                                : "סיימתי"}
                           </Button>
                         ) : noPermission ? (
                           <span

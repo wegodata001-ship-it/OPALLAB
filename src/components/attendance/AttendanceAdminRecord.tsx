@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import type { AttendanceRecord } from "@/lib/types";
-import { AttendanceVerificationCard } from "@/components/attendance/AttendanceVerificationCard";
 import { AttendanceLocationDisplay } from "@/components/attendance/location-display";
 import { AttendanceAdminDetailModal } from "@/components/attendance/AttendanceAdminDetailModal";
 import { formatDate, formatTime } from "@/lib/utils";
@@ -11,10 +10,9 @@ import { Clock } from "lucide-react";
 interface AttendanceAdminRecordProps {
   record: AttendanceRecord;
   employeeName: string;
-  canViewPhotos: boolean;
 }
 
-export function AttendanceAdminRecord({ record, employeeName, canViewPhotos }: AttendanceAdminRecordProps) {
+export function AttendanceAdminRecord({ record, employeeName }: AttendanceAdminRecordProps) {
   const [detailOpen, setDetailOpen] = useState(false);
 
   const hours = record.checkOut
@@ -62,12 +60,6 @@ export function AttendanceAdminRecord({ record, employeeName, canViewPhotos }: A
             </div>
           )}
         </div>
-
-        {canViewPhotos && (
-          <div onClick={(e) => e.stopPropagation()}>
-            <AttendanceVerificationCard record={record} canView={true} />
-          </div>
-        )}
 
         <p className="text-xs text-slate-400">{formatDate(record.checkIn)} · לחץ לפרטים מלאים</p>
       </button>

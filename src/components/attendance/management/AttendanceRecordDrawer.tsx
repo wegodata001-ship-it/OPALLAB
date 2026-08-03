@@ -25,8 +25,6 @@ function EventBlock({
   title,
   markerColor,
   time,
-  photoUrl,
-  hasPhoto,
   address,
   lat,
   lng,
@@ -41,14 +39,10 @@ function EventBlock({
   city,
   street,
   houseNumber,
-  photoKind,
-  onOpenPhoto,
 }: {
   title: string;
   markerColor: string;
   time?: Date | null;
-  photoUrl?: string | null;
-  hasPhoto?: boolean;
   address?: string | null;
   lat?: number | null;
   lng?: number | null;
@@ -63,8 +57,6 @@ function EventBlock({
   city?: string | null;
   street?: string | null;
   houseNumber?: string | null;
-  photoKind: "check-in" | "check-out";
-  onOpenPhoto?: (kind: "check-in" | "check-out") => void;
 }) {
   if (!time) return null;
   return (
@@ -73,35 +65,6 @@ function EventBlock({
         <span className="h-3 w-3 rounded-full" style={{ backgroundColor: markerColor }} />
         {title} — {formatTime(time)} · {formatDate(time)}
       </h3>
-      {photoUrl || hasPhoto ? (
-        <button
-          type="button"
-          className="block w-full"
-          onClick={() => onOpenPhoto?.(photoKind)}
-        >
-          {photoUrl ? (
-            <img
-              src={photoUrl}
-              alt={title}
-              className="w-full max-h-72 rounded-xl object-cover border hover:opacity-95"
-              referrerPolicy="no-referrer"
-              onError={(e) => {
-                e.currentTarget.style.display = "none";
-                const sibling = e.currentTarget.nextElementSibling as HTMLElement | null;
-                if (sibling) sibling.hidden = false;
-              }}
-            />
-          ) : null}
-          <p
-            className="text-sm text-slate-500 py-8 text-center border rounded-xl"
-            hidden={Boolean(photoUrl)}
-          >
-            {photoUrl ? "אין תמונה זמינה" : "פתח תמונה"}
-          </p>
-        </button>
-      ) : (
-        <p className="text-sm text-slate-400">אין תמונה</p>
-      )}
       <div className="text-sm space-y-1 text-slate-600">
         <p className="flex items-center gap-2"><MapPin className="h-4 w-4" />{address || "אין נתונים"}</p>
         {(street || city || country) && (
@@ -135,10 +98,9 @@ interface AttendanceRecordDrawerProps {
   open: boolean;
   onClose: () => void;
   record: AttendanceManagementRecord | null;
-  onOpenPhoto?: (kind: "check-in" | "check-out") => void;
 }
 
-export function AttendanceRecordDrawer({ open, onClose, record, onOpenPhoto }: AttendanceRecordDrawerProps) {
+export function AttendanceRecordDrawer({ open, onClose, record }: AttendanceRecordDrawerProps) {
   if (!record) return null;
 
   const inLat = record.checkInLatitude ?? record.latitude;
@@ -171,9 +133,6 @@ export function AttendanceRecordDrawer({ open, onClose, record, onOpenPhoto }: A
           title="כניסה"
           markerColor="#ef4444"
           time={record.checkIn}
-          photoUrl={record.checkInPhotoUrl}
-          hasPhoto={Boolean(record.checkInPhotoUrl || record.checkInPhotoPath)}
-          photoKind="check-in"
           address={record.checkInAddress}
           lat={inLat}
           lng={inLng}
@@ -188,16 +147,12 @@ export function AttendanceRecordDrawer({ open, onClose, record, onOpenPhoto }: A
           city={record.checkInAddressCity}
           street={record.checkInAddressStreet}
           houseNumber={record.checkInAddressHouseNumber}
-          onOpenPhoto={onOpenPhoto}
         />
 
         <EventBlock
           title="יציאה"
           markerColor="#3b82f6"
           time={record.checkOut}
-          photoUrl={record.checkOutPhotoUrl}
-          hasPhoto={Boolean(record.checkOutPhotoUrl || record.checkOutPhotoPath)}
-          photoKind="check-out"
           address={record.checkOutAddress}
           lat={record.checkOutLatitude}
           lng={record.checkOutLongitude}
@@ -212,7 +167,6 @@ export function AttendanceRecordDrawer({ open, onClose, record, onOpenPhoto }: A
           city={record.checkOutAddressCity}
           street={record.checkOutAddressStreet}
           houseNumber={record.checkOutAddressHouseNumber}
-          onOpenPhoto={onOpenPhoto}
         />
       </div>
     </Drawer>

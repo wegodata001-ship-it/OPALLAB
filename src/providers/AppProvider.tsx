@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { apiGet, apiPatch, apiPost } from "@/lib/api/client";
+import { shippingLog, shippingTimed } from "@/lib/shipping/action-log";
 import { uploadOrderFileWithProgress } from "@/lib/orders/upload-with-progress";
 import { defaultLabSettings } from "@/lib/constants/lab-settings";
 import type { AppDataSnapshot } from "@/lib/services/app-data.service";
@@ -53,7 +54,7 @@ const STAGE_NEXT: Partial<Record<OrderStatus, OrderStatus>> = {
   MILLING: "PROCESSING",
   PROCESSING: "FINISH",
   FINISH: "PACKAGING",
-  PACKAGING: "SHIPPED",
+  // PACKAGING stays until createShipment — avoids vanishing from shipping desk
 };
 
 interface AppContextValue {
@@ -84,6 +85,8 @@ interface AppContextValue {
     options?: { skipRefresh?: boolean },
   ) => Promise<Order>;
   refresh: () => Promise<void>;
+  /** Snapshot refresh without fullscreen overlay (packing/shipping). */
+  refreshQuiet: () => Promise<void>;
   updateOrder: (input: UpdateOrderInput) => Promise<void>;
   updateOrderStatus: (input: UpdateOrderStatusInput) => Promise<void>;
   completeStage: (input: CompleteStageInput) => Promise<void>;
@@ -184,10 +187,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setStore(snapshot);
   }, []);
 
+  /** Full snapshot without blocking fullscreen overlay (shipping/packing path). */
+  const quietRefresh = useCallback(async () => {
+    await refreshInternal();
+  }, [refreshInternal]);
+
   const refresh = useCallback(
     () => withLoading(refreshInternal, "טוען נתונים..."),
     [withLoading, refreshInternal],
   );
+
+  const patchOrderStatus = useCallback((orderId: string, status: OrderStatus) => {
+    setStore((prev) => ({
+      ...prev,
+      orders: prev.orders.map((o) =>
+        o.id === orderId ? { ...o, status, updatedAt: new Date() } : o,
+      ),
+    }));
+  }, []);
+
+  const upsertShipment = useCallback((shipment: Shipment) => {
+    setStore((prev) => {
+      const exists = prev.shipments.some((s) => s.id === shipment.id);
+      const shipments = exists
+        ? prev.shipments.map((s) => (s.id === shipment.id ? { ...s, ...shipment } : s))
+        : [shipment, ...prev.shipments];
+      const orders = prev.orders.map((o) =>
+        o.id === shipment.orderId
+          ? { ...o, status: "SHIPPED" as OrderStatus, updatedAt: new Date() }
+          : o,
+      );
+      return { ...prev, shipments, orders };
+    });
+  }, []);
 
   useEffect(() => {
     async function bootstrap() {
@@ -262,27 +294,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [currentUser, withLoading, refreshInternal]);
 
   const updateOrderStatus = useCallback(async (input: UpdateOrderStatusInput) => {
-    await withLoading(async () => {
+    // No global overlay — packing/shipping buttons stay responsive; optimistic patch + quiet refresh.
+    const timer = shippingTimed("updateOrderStatus");
+    shippingLog("api:start", "updateOrderStatus", { orderId: input.orderId, status: input.status });
+    patchOrderStatus(input.orderId, input.status);
+    try {
       await apiPost("/api/orders/status", input);
-      await refreshInternal();
-    }, "מעדכן...");
-  }, [withLoading, refreshInternal]);
+      timer.end("api:end", { ok: true });
+      void quietRefresh().then(() => shippingLog("ui:updated", "updateOrderStatus"));
+    } catch (error) {
+      await quietRefresh().catch(() => undefined);
+      timer.end("error", { message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }, [patchOrderStatus, quietRefresh]);
 
   const completeStage = useCallback(async (input: CompleteStageInput) => {
     if (!currentUser) return;
-    await withLoading(async () => {
+    const timer = shippingTimed("completeStage");
+    shippingLog("api:start", "completeStage", { orderId: input.orderId, stage: input.stage });
+    try {
       await apiPost("/api/orders/stages", { action: "complete", input });
-      await refreshInternal();
-    }, "שומר...");
-  }, [currentUser, withLoading, refreshInternal]);
+      // Optimistic advance when STAGE_NEXT is defined (PACKAGING no longer jumps to SHIPPED)
+      const next = STAGE_NEXT[input.stage];
+      if (next) patchOrderStatus(input.orderId, next);
+      timer.end("api:end", { ok: true });
+      await quietRefresh();
+      shippingLog("ui:updated", "completeStage");
+    } catch (error) {
+      timer.end("error", { message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }, [currentUser, patchOrderStatus, quietRefresh]);
 
   const undoStage = useCallback(async (input: UndoStageInput) => {
     if (!currentUser) return;
-    await withLoading(async () => {
+    const timer = shippingTimed("undoStage");
+    shippingLog("api:start", "undoStage", { orderId: input.orderId, stage: input.stage });
+    try {
       await apiPost("/api/orders/stages", { action: "undo", input });
-      await refreshInternal();
-    }, "מעדכן...");
-  }, [currentUser, withLoading, refreshInternal]);
+      timer.end("api:end", { ok: true });
+      await quietRefresh();
+      shippingLog("ui:updated", "undoStage");
+    } catch (error) {
+      timer.end("error", { message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }, [currentUser, quietRefresh]);
 
   const addOrderFile = useCallback(async (
     orderId: string,
@@ -326,11 +384,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [currentUser, withLoading, refreshInternal]);
 
   const previewDeliveryNote = useCallback(async () => {
-    return withLoading(async () => {
-      const result = await apiGet<{ deliveryNote: string }>("/api/shipments");
-      return result.deliveryNote;
-    }, "טוען נתונים...");
-  }, [withLoading]);
+    const timer = shippingTimed("previewDeliveryNote");
+    shippingLog("api:start", "previewDeliveryNote");
+    const result = await apiGet<{ deliveryNote: string }>("/api/shipments");
+    timer.end("api:end", { note: result.deliveryNote });
+    return result.deliveryNote;
+  }, []);
 
   const createShipment = useCallback(async (
     orderId: string,
@@ -339,30 +398,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     signature?: { dataUrl: string; signerName?: string | null; deviceId?: string | null } | null,
   ) => {
     if (!currentUser) throw new Error("נדרשת התחברות");
-    console.info("[shipment:ui] api:start", {
+    const timer = shippingTimed("createShipment");
+    shippingLog("api:start", "createShipment", {
       orderId,
       deliveryNote,
       courier: courier?.name,
       hasSignature: Boolean(signature?.dataUrl),
     });
-    return withLoading(async () => {
-      const result = await apiPost<{ shipment: Shipment }>("/api/shipments", {
-        orderId,
-        deliveryNote,
-        courier,
-        signature: signature ?? null,
-      });
-      console.info("[shipment:ui] api:ok", { shipmentId: result.shipment?.id });
-      try {
-        await refreshInternal();
-        console.info("[shipment:ui] refresh:ok");
-      } catch (refreshError) {
-        // Shipment already created — don't fail the whole confirm on refresh.
-        console.error("[shipment:ui] refresh:failed", refreshError);
-      }
-      return result.shipment;
-    }, "מאשר משלוח...");
-  }, [currentUser, withLoading, refreshInternal]);
+    // Scoped UI loading lives on the shipping page — never block the whole app.
+    const result = await apiPost<{ shipment: Shipment }>("/api/shipments", {
+      orderId,
+      deliveryNote,
+      courier,
+      signature: signature ?? null,
+    });
+    upsertShipment(result.shipment);
+    timer.end("api:end", { shipmentId: result.shipment?.id });
+    shippingLog("ui:updated", "createShipment", { shipmentId: result.shipment.id });
+    void quietRefresh().catch((refreshError) => {
+      console.error("[shipment:ui] quietRefresh:failed", refreshError);
+    });
+    return result.shipment;
+  }, [currentUser, upsertShipment, quietRefresh]);
 
   const addInventoryMovement = useCallback(async (mov: Omit<InventoryMovement, "id" | "createdAt">) => {
     await withLoading(async () => {
@@ -614,6 +671,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     getCategoryLabel,
     createOrder,
     refresh,
+    refreshQuiet: quietRefresh,
     updateOrder,
     updateOrderStatus,
     completeStage,

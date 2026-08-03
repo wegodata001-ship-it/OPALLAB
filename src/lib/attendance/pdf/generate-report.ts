@@ -3,10 +3,9 @@ import { AppError } from "@/lib/errors/app-error";
 import { requireAttendanceManager } from "@/lib/attendance/management/auth";
 import { getAttendanceRecordsForExport } from "@/lib/attendance/management/service";
 import type { AttendanceManagementQuery } from "@/lib/attendance/management/types";
-import {
-  buildAttendancePdf,
-  type AttendancePdfMeta,
-} from "@/lib/attendance/pdf/build-attendance-pdf";
+import { buildAttendancePdfV2 } from "@/lib/attendance/pdf-v2/build-pdf";
+import type { AttendanceReportMeta } from "@/lib/attendance/pdf-v2/types";
+import { stampFilename } from "@/lib/attendance/pdf-v2/html-builder";
 
 function endOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
@@ -20,7 +19,8 @@ export type AttendancePdfRequest = AttendanceManagementQuery & {
   scope?: "me" | "management";
   month?: number;
   year?: number;
-  includePhotos?: boolean;
+  /** html = debug preview only */
+  format?: "pdf" | "html";
 };
 
 function resolveRange(query: AttendancePdfRequest): { from?: string; to?: string } {
@@ -38,7 +38,12 @@ function resolveRange(query: AttendancePdfRequest): { from?: string; to?: string
 export async function generateAttendancePdfReport(
   actorUserId: string,
   request: AttendancePdfRequest,
-): Promise<{ buffer: Buffer; filename: string; contentType: "application/pdf" }> {
+): Promise<{
+  buffer: Buffer;
+  filename: string;
+  contentType: "application/pdf" | "text/html";
+  html?: string;
+}> {
   const actor = await prisma.user.findUnique({
     where: { id: actorUserId },
     select: { id: true, name: true },
@@ -55,7 +60,7 @@ export async function generateAttendancePdfReport(
   };
 
   let employeeName: string | null | undefined;
-  let mode: AttendancePdfMeta["mode"] = "general";
+  let mode: AttendanceReportMeta["mode"] = "general";
 
   if (scope === "me") {
     query = { ...query, userId: actorUserId };
@@ -77,32 +82,49 @@ export async function generateAttendancePdfReport(
 
   const records = await getAttendanceRecordsForExport(query);
 
-  return buildAttendancePdf({
-    records,
-    meta: {
-      generatedAt: new Date(),
-      generatedByName: actor.name,
-      employeeName,
-      dateFrom: query.from,
-      dateTo: query.to,
-      includePhotos: request.includePhotos !== false,
-      mode,
-    },
-  });
+  const meta: AttendanceReportMeta = {
+    generatedAt: new Date(),
+    generatedByName: actor.name,
+    employeeName,
+    dateFrom: query.from,
+    dateTo: query.to,
+    mode,
+  };
+
+  if (request.format === "html") {
+    const { html } = await buildAttendancePdfV2({ records, meta, htmlOnly: true });
+    return {
+      buffer: Buffer.from(html, "utf-8"),
+      filename: stampFilename(meta.generatedAt).replace(/\.pdf$/, ".html"),
+      contentType: "text/html",
+      html,
+    };
+  }
+
+  const result = await buildAttendancePdfV2({ records, meta });
+
+  return {
+    buffer: result.buffer,
+    filename: result.filename,
+    contentType: "application/pdf",
+    html: result.html,
+  };
 }
 
 export function attendancePdfResponse(result: {
   buffer: Buffer;
   filename: string;
-  contentType: "application/pdf";
+  contentType: "application/pdf" | "text/html";
 }): Response {
+  const isHtml = result.contentType === "text/html";
   return new Response(new Uint8Array(result.buffer), {
     status: 200,
     headers: {
-      "Content-Type": "application/pdf",
+      "Content-Type": result.contentType,
       "Content-Disposition": `inline; filename="${result.filename}"`,
       "Cache-Control": "no-store",
       "Content-Length": String(result.buffer.byteLength),
+      ...(isHtml ? {} : { "X-Attendance-Pdf-Engine": "v2-html-chromium" }),
     },
   });
 }

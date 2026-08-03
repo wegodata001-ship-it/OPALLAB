@@ -260,3 +260,68 @@ export function routingFromUploadSlot(slotId?: string | null, fileName?: string)
   if (fileName) return inferCategoryFromFileName(fileName);
   return { category: "Other", slotKey: "Other", versionKey: "other:unknown" };
 }
+
+/** Notes tag stored on OrderFile when uploaded from category card UI. */
+export const CATEGORY_NOTES_PREFIX = "category:";
+
+export function categoryNotes(category: OrderFileCategory): string {
+  return `${CATEGORY_NOTES_PREFIX}${category}`;
+}
+
+export function parseCategoryFromNotes(notes?: string | null): OrderFileCategory | null {
+  if (!notes?.startsWith(CATEGORY_NOTES_PREFIX)) return null;
+  const cat = notes.slice(CATEGORY_NOTES_PREFIX.length) as OrderFileCategory;
+  return ORDER_FILE_CATEGORIES.includes(cat) ? cat : null;
+}
+
+/** Default slotKey when uploading directly to a category card. */
+export function categoryDefaultSlotKey(category: OrderFileCategory): OrderFileSlotKey {
+  const map: Partial<Record<OrderFileCategory, OrderFileSlotKey>> = {
+    ClinicalPhotos: "Other",
+    Scans: "UpperScan",
+    Radiographs: "Panoramic",
+    Prescription: "Prescription",
+    Documents: "General",
+    CAD: "Exocad",
+    Manufacturing: "CAM",
+    Delivery: "PackagingPhoto",
+    Other: "Other",
+  };
+  return map[category] ?? "General";
+}
+
+/** File input accept string per category card. */
+export function categoryAccept(category: OrderFileCategory): string {
+  switch (category) {
+    case "ClinicalPhotos":
+      return "image/*,.heic,.HEIC,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp";
+    case "Scans":
+      return ".stl,.obj,.ply,.zip,.glb,.gltf,model/*,application/zip";
+    case "Radiographs":
+      return ".dcm,.dicom,image/*,.jpg,.jpeg,.png,.tif,.tiff";
+    case "Prescription":
+      return "image/*,.pdf,.jpg,.jpeg,.png,.heic,.HEIC";
+    case "Documents":
+      return ".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.rtf,application/pdf";
+    case "CAD":
+      return ".stl,.obj,.ply,.zip,.dentalproject,.3ox,model/*,application/zip";
+    case "Manufacturing":
+      return ".stl,.obj,.ply,.zip,image/*,.pdf,application/zip";
+    case "Delivery":
+      return "image/*,.pdf,.jpg,.jpeg,.png,.heic,.HEIC";
+    case "Other":
+    default:
+      return ".stl,.obj,.ply,.pdf,.zip,.rar,.jpg,.jpeg,.png,.heic,.HEIC,.dcm,.mp4,.mov,image/*,video/*,application/pdf,application/zip,*/*";
+  }
+}
+
+/** Categories that show a camera capture button (images). */
+export function categorySupportsCamera(category: OrderFileCategory): boolean {
+  return (
+    category === "ClinicalPhotos" ||
+    category === "Radiographs" ||
+    category === "Prescription" ||
+    category === "Delivery" ||
+    category === "Manufacturing"
+  );
+}

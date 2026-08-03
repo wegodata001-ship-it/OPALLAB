@@ -1,14 +1,16 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { OrderFile } from "@/lib/types";
 import { FILE_TYPE_LABELS } from "@/lib/constants/labels";
 import {
   buildFileViewUrl,
+  getFileExtension,
   getOrderFileFolderId,
   getPreviewKind,
   isPreviewable,
 } from "@/lib/file-utils";
+import { isMaterialCompanionName } from "@/lib/orders/load-model3d";
 import { FilePreviewModal } from "@/components/orders/file-preview-modal";
 import { FileModelThumb } from "@/components/orders/file-model-thumb";
 import { useApp } from "@/providers/AppProvider";
@@ -16,19 +18,22 @@ import {
   ORDER_FILE_CATEGORIES,
   ORDER_FILE_CATEGORY_LABELS,
   ORDER_FILE_SLOT_LABELS,
+  categoryAccept,
+  categorySupportsCamera,
   type OrderFileCategory,
   type OrderFileSlotKey,
 } from "@/lib/orders/order-file-taxonomy";
 import { formatFileSize } from "@/lib/orders/scan-file";
 import {
+  Camera,
   ChevronLeft,
   Download,
   Eye,
   Folder,
   FolderInput,
+  FolderOpen,
   Pencil,
   Trash2,
-  Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiPatch } from "@/lib/api/client";
@@ -79,7 +84,11 @@ export function OrderFilesSection({
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [openCategory, setOpenCategory] = useState<OrderFileCategory | "all">("all");
   const [showHistory, setShowHistory] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    setIsMobile(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
+  }, []);
 
   const userName = useCallback(
     (id: string, fallback?: string | null) =>
@@ -106,7 +115,8 @@ export function OrderFilesSection({
 
   const relatedForPreview = useMemo(() => {
     if (!preview || !isScanSlot(preview)) return [];
-    return visible.filter(
+    const previewBase = preview.fileName.replace(/\.[^.]+$/, "").toLowerCase();
+    const scans = visible.filter(
       (f) =>
         f.isCurrent !== false &&
         isScanSlot(f) &&
@@ -115,6 +125,17 @@ export function OrderFilesSection({
           f.slotKey === "BiteScan" ||
           f.id === preview.id),
     );
+    // OBJ sidecars (MTL / PNG / JPG…) uploaded alongside the mesh
+    const sidecars = visible.filter((f) => {
+      if (f.isCurrent === false || f.id === preview.id) return false;
+      if (!isMaterialCompanionName(f.fileName)) return false;
+      const base = f.fileName.replace(/\.[^.]+$/, "").toLowerCase();
+      const ext = getFileExtension(preview.fileName);
+      return ext === "obj" || base.includes(previewBase) || previewBase.includes(base);
+    });
+    const byId = new Map<string, OrderFile>();
+    for (const f of [...scans, ...sidecars]) byId.set(f.id, f);
+    return [...byId.values()];
   }, [preview, visible]);
 
   const handleFiles = useCallback(
@@ -311,77 +332,61 @@ export function OrderFilesSection({
       </div>
 
       {canUpload && openCategory === "all" && (
-        <label
-          onDragEnter={(e) => {
-            e.preventDefault();
-            setDragActive(true);
-          }}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragActive(true);
-          }}
-          onDragLeave={(e) => {
-            e.preventDefault();
-            setDragActive(false);
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragActive(false);
-            void handleFiles(e.dataTransfer.files);
-          }}
-          className={cn(
-            "flex flex-col items-center justify-center gap-2 p-5 rounded-xl border-2 border-dashed cursor-pointer transition-colors mb-3",
-            dragActive
-              ? "border-opal-gold bg-opal-gold/15"
-              : "border-opal-gold/30 bg-opal-gold/5 hover:bg-opal-gold/10",
-            uploading && "opacity-50 pointer-events-none",
-          )}
-        >
-          <Upload className="h-6 w-6 text-opal-gold" />
-          <span className="text-sm font-medium text-opal-gold-dark text-center">
-            {uploading
-              ? "מעלה..."
-              : "גררו STL / PLY / OBJ / תמונות לכאן או לחצו לבחירה (עד 50)"}
-          </span>
-          <span className="text-[11px] text-slate-500">מיון אוטומטי: Upper / Lower / Bite</span>
-          <input
-            type="file"
-            multiple
-            className="hidden"
-            accept=".stl,.ply,.obj,.glb,.gltf,.zip,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.dcm,image/*,application/pdf,model/*"
-            onChange={(e) => {
-              void handleFiles(e.target.files);
-              e.target.value = "";
-            }}
-          />
-        </label>
+        <p className="text-xs text-slate-500 mb-3">
+          בחרו קטגוריה והעלו קובץ ישירות — ללא חלונות ביניים.
+        </p>
       )}
 
       <div className="space-y-3">
         {categoriesToShow.map((cat) => {
           const list = byCategory.get(cat) ?? [];
+          const accept = categoryAccept(cat);
+          const showCamera = categorySupportsCamera(cat);
           return (
             <div key={cat} className="rounded-xl border bg-white overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-2 bg-slate-50 border-b">
+              <div className="px-3 py-2.5 bg-slate-50 border-b">
                 <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
                   <Folder className="h-4 w-4 text-opal-gold" />
                   {ORDER_FILE_CATEGORY_LABELS[cat]}
-                  <span className="text-xs font-normal text-slate-400">/{cat}</span>
+                  {list.length > 0 && (
+                    <span className="text-xs font-normal text-emerald-700">({list.length})</span>
+                  )}
                 </div>
                 {canUpload && (
-                  <label className="text-xs text-opal-gold-dark cursor-pointer hover:underline flex items-center gap-1">
-                    <Upload className="h-3.5 w-3.5" />
-                    העלה לכאן
-                    <input
-                      type="file"
-                      multiple
-                      className="hidden"
-                      onChange={(e) => {
-                        void handleFiles(e.target.files, cat);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 cursor-pointer hover:bg-slate-50">
+                      <FolderOpen className="h-3.5 w-3.5 text-opal-gold" />
+                      העלאת קובץ
+                      <input
+                        type="file"
+                        multiple
+                        accept={accept}
+                        className="sr-only"
+                        disabled={uploading}
+                        onChange={(e) => {
+                          void handleFiles(e.target.files, cat);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    {showCamera && (
+                      <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 cursor-pointer hover:bg-slate-50">
+                        <Camera className="h-3.5 w-3.5 text-opal-gold" />
+                        צילום מהמצלמה
+                        <input
+                          type="file"
+                          accept="image/*,.heic,.HEIC"
+                          capture={isMobile ? "environment" : undefined}
+                          className="sr-only"
+                          disabled={uploading}
+                          onChange={(e) => {
+                            void handleFiles(e.target.files, cat);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
                 )}
               </div>
 

@@ -33,6 +33,7 @@ import type {
   Order,
   OrderFile,
   OrderStatus,
+  OrderWithRelations,
   Payment,
   PaymentStatus,
   Shipment,
@@ -54,6 +55,7 @@ import {
 import {
   buildInventoryImagePath,
   buildStructuredOrderFilePath,
+  deleteFile,
   STORAGE_BUCKETS,
   uploadFile,
 } from "@/lib/supabase/storage";
@@ -69,6 +71,7 @@ import { writeAuditLog } from "@/lib/audit-log";
 import { createAuthUser, deleteAuthUser, updateAuthUser } from "@/lib/supabase/auth-admin";
 import { normalizeUserRoles, primaryRole, isSystemAdminUser, isDoctorUser } from "@/lib/user-roles";
 import { assertUserCanBeDeleted } from "@/lib/people/protected-users";
+import { uploadAudit } from "@/lib/orders/upload-audit";
 import type { AuditLogEntry, Warehouse } from "@/lib/types";
 
 function toPrismaAttendanceMethod(method: AttendanceMethod): $Enums.AttendanceMethod {
@@ -85,7 +88,7 @@ const STAGE_NEXT: Partial<Record<OrderStatus, OrderStatus>> = {
   MILLING: "PROCESSING",
   PROCESSING: "FINISH",
   FINISH: "PACKAGING",
-  PACKAGING: "SHIPPED",
+  // PACKAGING → SHIPPED only via createShipment (shipping desk), never workflow "סיימתי"
 };
 
 export interface AppDataSnapshot {
@@ -121,8 +124,11 @@ export class AppDataService {
   }
 
   async getSnapshot(orderWhere?: Prisma.OrderWhereInput): Promise<AppDataSnapshot> {
+    const where: Prisma.OrderWhereInput = orderWhere
+      ? { AND: [{ status: { not: "DRAFT" } }, orderWhere] }
+      : { status: { not: "DRAFT" } };
     const ordersQuery = prisma.order.findMany({
-      ...(orderWhere ? { where: orderWhere } : {}),
+      where,
       include: ORDER_INCLUDE,
       orderBy: { createdAt: "desc" },
     });
@@ -274,19 +280,313 @@ export class AppDataService {
     });
   }
 
+  /**
+   * Invisible temporary order used so files can upload before the user clicks save.
+   * Excluded from order lists until finalizeDraftOrder.
+   */
+  async createDraftOrder(userId: string, input?: { doctorId?: string }): Promise<Order> {
+    const actor = await this.getUserById(userId);
+    let doctorId = input?.doctorId;
+
+    if (actor && isDoctorUser(actor) && !isSystemAdminUser(actor)) {
+      const linked = await prisma.doctor.findFirst({ where: { userId } });
+      if (!linked) throw new AppError("FORBIDDEN", "לא נמצא פרופיל רופא מקושר", 403);
+      doctorId = linked.id;
+    } else if (doctorId) {
+      const exists = await prisma.doctor.findUnique({ where: { id: doctorId } });
+      if (!exists) doctorId = undefined;
+    }
+
+    const patient = await prisma.patient.create({
+      data: { name: "טיוטה" },
+    });
+
+    const order = await prisma.order.create({
+      data: {
+        serialNumber: generateSerialNumber(),
+        doctorId: doctorId ?? null,
+        patientId: patient.id,
+        status: "DRAFT",
+        materials: [],
+        workTypes: [],
+        selectedTeeth: [],
+      },
+    });
+
+    uploadAudit({
+      step: "CREATE_DRAFT",
+      orderId: order.id,
+      draft: true,
+      success: true,
+      extra: { serialNumber: order.serialNumber, doctorId: order.doctorId },
+    });
+    uploadAudit({
+      step: "GENERATE_ORDER_ID",
+      orderId: order.id,
+      draft: true,
+      success: true,
+      extra: { serialNumber: order.serialNumber },
+    });
+
+    return mapOrder(order);
+  }
+
+  async getDraftOrder(orderId: string, userId: string): Promise<OrderWithRelations | null> {
+    const actor = await this.getUserById(userId);
+    if (!actor) throw new AppError("UNAUTHORIZED", "משתמש לא נמצא", 401);
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: ORDER_INCLUDE,
+    });
+    if (!order || order.status !== "DRAFT") return null;
+
+    if (isDoctorUser(actor) && !isSystemAdminUser(actor)) {
+      const linked = await prisma.doctor.findFirst({ where: { userId } });
+      if (!linked || order.doctorId !== linked.id) {
+        throw new AppError("FORBIDDEN", "אין גישה לטיוטה זו", 403);
+      }
+    }
+
+    return mapOrderWithRelations(order);
+  }
+
+  /** Persist form fields on a draft without finalizing. */
+  async updateDraftOrder(input: UpdateOrderInput, userId: string): Promise<Order> {
+    const order = await prisma.order.findUnique({ where: { id: input.orderId } });
+    if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+    if (order.status !== "DRAFT") {
+      throw new AppError("VALIDATION_ERROR", "ניתן לעדכן טיוטה בלבד", 400);
+    }
+    await this.updateOrder(input, userId);
+    const updated = await prisma.order.findUniqueOrThrow({ where: { id: input.orderId } });
+    return mapOrder(updated);
+  }
+
+  /**
+   * Convert a draft into a real order. Existing uploaded files stay attached.
+   */
+  async finalizeDraftOrder(input: CreateOrderInput & { orderId: string }, userId: string): Promise<Order> {
+    const now = new Date();
+    const actor = await this.getUserById(userId);
+
+    const fileCountBefore = await prisma.orderFile.count({
+      where: { orderId: input.orderId, isCurrent: true },
+    });
+    uploadAudit({
+      step: "FINALIZE_DRAFT",
+      orderId: input.orderId,
+      draft: true,
+      count: fileCountBefore,
+      extra: { phase: "before" },
+    });
+
+    return prisma.$transaction(async (tx) => {
+      const existing = await tx.order.findUnique({
+        where: { id: input.orderId },
+        include: { files: { select: { id: true } } },
+      });
+      if (!existing) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+      if (existing.status !== "DRAFT") {
+        throw new AppError("VALIDATION_ERROR", "ההזמנה כבר נשמרה", 400);
+      }
+
+      let doctorId = input.doctorId ?? existing.doctorId ?? undefined;
+
+      if (actor && isDoctorUser(actor) && !isSystemAdminUser(actor)) {
+        const linked = await tx.doctor.findFirst({ where: { userId } });
+        if (!linked) throw new AppError("FORBIDDEN", "לא נמצא פרופיל רופא מקושר", 403);
+        doctorId = linked.id;
+      }
+
+      if (doctorId) {
+        const exists = await tx.doctor.findUnique({ where: { id: doctorId } });
+        if (!exists) doctorId = undefined;
+      }
+      if (!doctorId) {
+        if (input.doctorName?.trim()) {
+          const doctorName = input.doctorName.trim();
+          const found = await tx.doctor.findFirst({ where: { name: doctorName } });
+          if (found) doctorId = found.id;
+          else {
+            throw new AppError(
+              "VALIDATION_ERROR",
+              "יש לבחור רופא מהרשימה או ליצור רופא חדש עם פרטי התחברות",
+              400,
+            );
+          }
+        } else {
+          throw new AppError("VALIDATION_ERROR", "יש לבחור רופא", 400);
+        }
+      }
+
+      const patientName = input.patientName?.trim() || "לא צוין";
+      await tx.patient.update({
+        where: { id: existing.patientId },
+        data: {
+          name: patientName,
+          age: input.patientAge ?? null,
+          gender: input.patientGender ?? null,
+          updatedAt: now,
+        },
+      });
+
+      const hasFiles = existing.files.length > 0;
+      const finalStatus = hasFiles ? "DESIGN" : "RECEIVED";
+
+      const order = await tx.order.update({
+        where: { id: existing.id },
+        data: {
+          doctorId: doctorId!,
+          completionDate: input.completionDate ?? null,
+          shade: input.shade ?? null,
+          materials: input.materials ?? [],
+          workTypes: input.workTypes ?? [],
+          selectedTeeth: input.selectedTeeth ?? [],
+          description: input.description ?? null,
+          totalPrice: input.totalPrice ?? null,
+          status: finalStatus,
+          entryDate: now,
+          updatedAt: now,
+        },
+      });
+
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId: order.id,
+          status: "RECEIVED",
+          changedBy: userId,
+          notes: "הזמנה חדשה",
+        },
+      });
+
+      if (hasFiles) {
+        await tx.orderStatusHistory.create({
+          data: {
+            orderId: order.id,
+            status: "FILES_ATTACHED",
+            changedBy: userId,
+            notes: "קבצים צורפו בזמן יצירת ההזמנה",
+          },
+        });
+        await tx.orderStatusHistory.create({
+          data: {
+            orderId: order.id,
+            status: "DESIGN",
+            changedBy: userId,
+            notes: "התחלת ייצור — עיצוב",
+          },
+        });
+      }
+
+      if (input.totalPrice) {
+        await tx.payment.create({
+          data: {
+            doctorId: doctorId!,
+            orderId: order.id,
+            serialNumber: order.serialNumber,
+            patientName,
+            amount: input.totalPrice,
+            type: "CHARGE",
+            status: "PENDING",
+            description: `חיוב עבודה ${order.serialNumber}`,
+          },
+        });
+        await tx.doctor.update({
+          where: { id: doctorId! },
+          data: { balance: { decrement: input.totalPrice }, updatedAt: now },
+        });
+      }
+
+      return mapOrder(order);
+    }).then((order) => {
+      uploadAudit({
+        step: "FINALIZE_DRAFT",
+        orderId: order.id,
+        draft: false,
+        success: true,
+        count: fileCountBefore,
+        extra: {
+          phase: "after",
+          serialNumber: order.serialNumber,
+          status: order.status,
+          filesPreserved: fileCountBefore,
+        },
+      });
+      if (fileCountBefore === 0) {
+        console.warn("[upload-audit] FINALIZE with ZERO files on order", order.id);
+      }
+      return order;
+    });
+  }
+
+  /** Delete a draft and all of its uploaded files (DB + storage). */
+  async discardDraftOrder(orderId: string, userId: string): Promise<void> {
+    const actor = await this.getUserById(userId);
+    if (!actor) throw new AppError("UNAUTHORIZED", "משתמש לא נמצא", 401);
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: { files: true },
+    });
+    if (!order) return;
+    if (order.status !== "DRAFT") {
+      throw new AppError("VALIDATION_ERROR", "ניתן למחוק טיוטה בלבד", 400);
+    }
+
+    if (isDoctorUser(actor) && !isSystemAdminUser(actor)) {
+      const linked = await prisma.doctor.findFirst({ where: { userId } });
+      if (!linked || order.doctorId !== linked.id) {
+        throw new AppError("FORBIDDEN", "אין גישה לטיוטה זו", 403);
+      }
+    }
+
+    for (const file of order.files) {
+      if (file.storagePath) {
+        try {
+          await deleteFile(STORAGE_BUCKETS.ORDER_FILES, file.storagePath);
+        } catch (err) {
+          console.warn("[draft] storage delete failed", file.id, err);
+        }
+      }
+      if (file.thumbnailPath) {
+        try {
+          await deleteFile(STORAGE_BUCKETS.ORDER_FILES, file.thumbnailPath);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.orderFile.deleteMany({ where: { orderId } });
+      await tx.orderStatusHistory.deleteMany({ where: { orderId } });
+      await tx.payment.deleteMany({ where: { orderId } });
+      await tx.order.delete({ where: { id: orderId } });
+      const otherOrders = await tx.order.count({ where: { patientId: order.patientId } });
+      if (otherOrders === 0) {
+        await tx.patient.delete({ where: { id: order.patientId } }).catch(() => undefined);
+      }
+    });
+  }
+
   async updateOrder(input: UpdateOrderInput, userId: string): Promise<void> {
     const now = new Date();
     await prisma.$transaction(async (tx) => {
       const order = await tx.order.findUnique({ where: { id: input.orderId } });
       if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
 
-      let doctorId = input.doctorId ?? order.doctorId;
+      let doctorId: string | null | undefined = input.doctorId ?? order.doctorId;
       if (input.doctorName !== undefined || input.doctorId !== undefined) {
-        const doctorName =
-          input.doctorName?.trim() ??
-          (await tx.doctor.findUnique({ where: { id: doctorId } }))?.name ??
-          "לא צוין";
-        if (!input.doctorId) {
+        if (input.doctorId) {
+          doctorId = input.doctorId;
+        } else {
+          const doctorName =
+            input.doctorName?.trim() ??
+            (doctorId
+              ? (await tx.doctor.findUnique({ where: { id: doctorId } }))?.name
+              : null) ??
+            "לא צוין";
           const existing = await tx.doctor.findFirst({ where: { name: doctorName } });
           if (existing) doctorId = existing.id;
           else {
@@ -562,6 +862,7 @@ export class AppDataService {
         },
       });
 
+      // Keep DRAFT orders in draft until finalize; only advance real orders.
       if (order.status === "RECEIVED" || order.status === "FILES_ATTACHED") {
         if (order.status === "RECEIVED") {
           await tx.orderStatusHistory.create({
@@ -1119,7 +1420,7 @@ export class AppDataService {
   async addDoctor(input: CreateDoctorInput, actorId?: string): Promise<ReturnType<typeof mapDoctor>> {
     const name = input.name.trim();
     const username = input.username.trim();
-    const email = input.email.trim();
+    const email = input.email.trim().toLowerCase();
     const password = input.password;
 
     if (!name) throw new AppError("VALIDATION_ERROR", "שם חובה", 400);
@@ -1130,18 +1431,60 @@ export class AppDataService {
       throw new AppError("VALIDATION_ERROR", "אימות הסיסמה אינו תואם", 400);
     }
 
-    const existingUser = await prisma.user.findFirst({
-      where: { OR: [{ username }, { email }] },
-    });
-    if (existingUser) {
-      throw new AppError("VALIDATION_ERROR", "שם משתמש או אימייל כבר קיים במערכת", 409);
+    const [byUsername, byEmail] = await Promise.all([
+      prisma.user.findFirst({
+        where: { username: { equals: username, mode: "insensitive" } },
+        select: { username: true },
+      }),
+      prisma.user.findFirst({
+        where: { email: { equals: email, mode: "insensitive" } },
+        select: { email: true },
+      }),
+    ]);
+    if (byUsername && byEmail) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        `שם המשתמש "${username}" והאימייל כבר קיימים במערכת — יש לבחור ערכים אחרים`,
+        409,
+      );
+    }
+    if (byUsername) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        `שם המשתמש "${username}" כבר תפוס — יש לבחור שם משתמש אחר`,
+        409,
+      );
+    }
+    if (byEmail) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        `האימייל "${email}" כבר קיים במערכת — יש לבחור אימייל אחר`,
+        409,
+      );
     }
 
     let authUserId: string | null = null;
     try {
       authUserId = await createAuthUser(email, password);
     } catch (error) {
-      if (!(error instanceof AppError && error.status === 409)) throw error;
+      if (error instanceof AppError && error.status === 409) {
+        // Auth user already exists — continue and link if possible below isn't implemented;
+        // surface a clear email conflict instead of a generic 500.
+        throw new AppError(
+          "VALIDATION_ERROR",
+          `האימייל "${email}" כבר רשום במערכת ההתחברות — יש לבחור אימייל אחר`,
+          409,
+        );
+      }
+      const message = error instanceof Error ? error.message : "";
+      if (/already|registered|exists|duplicate/i.test(message)) {
+        throw new AppError(
+          "VALIDATION_ERROR",
+          `האימייל "${email}" כבר רשום במערכת ההתחברות — יש לבחור אימייל אחר`,
+          409,
+        );
+      }
+      throw error;
     }
 
     const hashed = await hashPassword(password);
@@ -1784,8 +2127,6 @@ export class AppDataService {
             checkOutAddressCity: geo.city,
             checkOutAddressStreet: geo.street,
             checkOutAddressHouseNumber: geo.houseNumber,
-            checkOutPhotoUrl: meta?.photoUrl ?? null,
-            checkOutPhotoPath: meta?.photoPath ?? null,
             checkOutDeviceBrowser: device?.browser ?? null,
             checkOutDeviceOs: device?.os ?? null,
             checkOutDeviceType: device?.deviceType ?? null,
@@ -1837,8 +2178,6 @@ export class AppDataService {
           checkInAddressCity: geo.city,
           checkInAddressStreet: geo.street,
           checkInAddressHouseNumber: geo.houseNumber,
-          checkInPhotoUrl: meta?.photoUrl ?? null,
-          checkInPhotoPath: meta?.photoPath ?? null,
           checkInDeviceBrowser: device?.browser ?? null,
           checkInDeviceOs: device?.os ?? null,
           checkInDeviceType: device?.deviceType ?? null,
@@ -1848,7 +2187,7 @@ export class AppDataService {
           deviceInfo: device
             ? `${device.browser} · ${device.os} · ${device.deviceType}`
             : meta?.deviceInfo ?? null,
-          notes: meta?.fileName ? `תמונה: ${meta.fileName}` : null,
+          notes: null,
         },
       });
 
@@ -1944,8 +2283,6 @@ export class AppDataService {
         checkInAddressCity: geo.city,
         checkInAddressStreet: geo.street,
         checkInAddressHouseNumber: geo.houseNumber,
-        checkInPhotoUrl: meta?.photoUrl ?? null,
-        checkInPhotoPath: meta?.photoPath ?? null,
         checkInDeviceBrowser: device?.browser ?? null,
         checkInDeviceOs: device?.os ?? null,
         checkInDeviceType: device?.deviceType ?? null,
@@ -1955,7 +2292,7 @@ export class AppDataService {
         deviceInfo: device
           ? `${device.browser} · ${device.os} · ${device.deviceType}`
           : meta?.deviceInfo ?? null,
-        notes: meta?.fileName ? `תמונה: ${meta.fileName}` : null,
+        notes: null,
       },
     });
   }
@@ -2004,8 +2341,6 @@ export class AppDataService {
         checkOutAddressCity: geo.city,
         checkOutAddressStreet: geo.street,
         checkOutAddressHouseNumber: geo.houseNumber,
-        checkOutPhotoUrl: meta?.photoUrl ?? null,
-        checkOutPhotoPath: meta?.photoPath ?? null,
         checkOutDeviceBrowser: device?.browser ?? null,
         checkOutDeviceOs: device?.os ?? null,
         checkOutDeviceType: device?.deviceType ?? null,
@@ -2015,10 +2350,7 @@ export class AppDataService {
         deviceInfo: device
           ? `${device.browser} · ${device.os} · ${device.deviceType}`
           : active.deviceInfo,
-        notes: [
-          active.notes ?? (meta?.fileName ? `תמונה: ${meta.fileName}` : null),
-          meta?.ipAddress ? `IP יציאה: ${meta.ipAddress}` : null,
-        ]
+        notes: [active.notes, meta?.ipAddress ? `IP יציאה: ${meta.ipAddress}` : null]
           .filter(Boolean)
           .join(" · ") || null,
       },

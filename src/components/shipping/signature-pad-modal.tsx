@@ -10,7 +10,7 @@ type SignaturePadModalProps = {
   title?: string;
   defaultSignerName?: string;
   onCancel: () => void;
-  onSave: (result: { dataUrl: string; signerName: string }) => void;
+  onSave: (result: { dataUrl: string; signerName: string }) => void | Promise<void>;
 };
 
 export function SignaturePadModal({
@@ -24,6 +24,7 @@ export function SignaturePadModal({
   const drawing = useRef(false);
   const [signerName, setSignerName] = useState(defaultSignerName);
   const [hasStroke, setHasStroke] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const resizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -48,6 +49,7 @@ export function SignaturePadModal({
   useEffect(() => {
     if (!open) return;
     setSignerName(defaultSignerName);
+    setSaving(false);
     const id = requestAnimationFrame(() => resizeCanvas());
     return () => cancelAnimationFrame(id);
   }, [open, defaultSignerName, resizeCanvas]);
@@ -90,13 +92,18 @@ export function SignaturePadModal({
 
   const clear = () => resizeCanvas();
 
-  const save = () => {
+  const save = async () => {
     const canvas = canvasRef.current;
-    if (!canvas || !hasStroke) return;
-    onSave({
-      dataUrl: canvas.toDataURL("image/png"),
-      signerName: signerName.trim(),
-    });
+    if (!canvas || !hasStroke || saving) return;
+    setSaving(true);
+    try {
+      await onSave({
+        dataUrl: canvas.toDataURL("image/png"),
+        signerName: signerName.trim(),
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (!open) return null;
@@ -134,16 +141,16 @@ export function SignaturePadModal({
           </div>
           <p className="text-xs text-slate-400 text-center">חתימה באצבע או בעכבר · אופציונלי</p>
           <div className="flex gap-2 justify-end">
-            <Button type="button" variant="outline" onClick={onCancel}>
+            <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>
               ביטול
             </Button>
-            <Button type="button" variant="outline" onClick={clear}>
+            <Button type="button" variant="outline" onClick={clear} disabled={saving}>
               <Eraser className="h-4 w-4" />
               נקה
             </Button>
-            <Button type="button" disabled={!hasStroke} onClick={save}>
+            <Button type="button" disabled={!hasStroke || saving} onClick={() => void save()}>
               <Save className="h-4 w-4" />
-              שמור
+              {saving ? "שומר..." : "שמור"}
             </Button>
           </div>
         </div>

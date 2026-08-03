@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Header } from "@/components/layout/sidebar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import {
   Trash2,
   RefreshCw,
   Lock,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SignaturePadModal } from "@/components/shipping/signature-pad-modal";
@@ -33,6 +34,9 @@ import {
   buildDeliveryNoteHtml,
   shipmentSignatureForPdf,
 } from "@/lib/shipping/delivery-note-html";
+import { apiDelete, apiPost, apiPut } from "@/lib/api/client";
+import { shippingLog, shippingTimed } from "@/lib/shipping/action-log";
+
 function getDeviceId(): string {
   if (typeof window === "undefined") return "";
   const key = "opal-shipping-device-id";
@@ -58,7 +62,7 @@ export default function ShippingPage() {
     createShipment,
     updateOrderStatus,
     currentUser,
-    refresh,
+    refreshQuiet,
   } = useApp();
   const [tab, setTab] = useState<"ship" | "archive">("ship");
   const [selectedId, setSelectedId] = useState("");
@@ -70,8 +74,24 @@ export default function ShippingPage() {
   const [padForShipmentId, setPadForShipmentId] = useState<string | null>(null);
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState<string | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirmSuccess, setConfirmSuccess] = useState<string | null>(null);
+  const actionLock = useRef<Set<string>>(new Set());
+
+  const withActionLock = useCallback(async <T,>(key: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    if (actionLock.current.has(key)) {
+      shippingLog("click", key, { ignored: "double-submit" });
+      return undefined;
+    }
+    actionLock.current.add(key);
+    try {
+      return await fn();
+    } finally {
+      actionLock.current.delete(key);
+    }
+  }, []);
 
   const readyOrders = orders.filter((o) => o.status === "FINISH" || o.status === "PACKAGING");
   const selected = orders.find((o) => o.id === selectedId);
@@ -86,15 +106,31 @@ export default function ShippingPage() {
   );
 
   const generatePreview = async () => {
-    if (!selectedId) return;
-    const note = await previewDeliveryNote();
-    setPreviewNote(note);
-    setPendingSignature(null);
-    await updateOrderStatus({
-      orderId: selectedId,
-      status: "PACKAGING",
-      changedBy: currentUser!.id,
-      notes: "מוכן לאריזה",
+    if (!selectedId || !currentUser || generating || confirming) return;
+    shippingLog("click", "generatePreview", { selectedId });
+    await withActionLock(`preview:${selectedId}`, async () => {
+      setGenerating(true);
+      setConfirmError(null);
+      const timer = shippingTimed("generatePreview");
+      try {
+        const note = await previewDeliveryNote();
+        setPreviewNote(note);
+        setPendingSignature(null);
+        await updateOrderStatus({
+          orderId: selectedId,
+          status: "PACKAGING",
+          changedBy: currentUser.id,
+          notes: "מוכן לאריזה",
+        });
+        timer.end("ui:updated", { note });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "הפקת תעודת המשלוח נכשלה";
+        setConfirmError(message);
+        timer.end("error", { message });
+      } finally {
+        setGenerating(false);
+      }
     });
   };
 
@@ -138,7 +174,7 @@ export default function ShippingPage() {
   );
 
   const confirmShip = async () => {
-    console.info("[shipment:ui] click:confirm", {
+    shippingLog("click", "confirmShip", {
       selectedId,
       previewNote,
       courierId,
@@ -164,44 +200,40 @@ export default function ShippingPage() {
       return;
     }
 
-    setConfirming(true);
-    try {
-      console.info("[shipment:ui] confirm:start", {
-        orderId: selectedId,
-        deliveryNote: previewNote,
-        courier: courier.name,
-        hasSignature: Boolean(pendingSignature),
-      });
-      const shipment = await createShipment(
-        selectedId,
-        previewNote,
-        { name: courier.name, phone: courier.phone },
-        pendingSignature
-          ? {
-              dataUrl: pendingSignature.dataUrl,
-              signerName: pendingSignature.signerName || currentUser.name,
-              deviceId: getDeviceId(),
-            }
-          : null,
-      );
-      console.info("[shipment:ui] confirm:success", { shipmentId: shipment.id });
-      setConfirmSuccess("✓ המשלוח אושר בהצלחה");
-      setSelectedId("");
-      setPreviewNote("");
-      setCourierId("");
-      setPendingSignature(null);
-      setTab("archive");
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : "אישור המשלוח נכשל — נסו שוב";
-      console.error("[shipment:ui] confirm:failed", error);
-      setConfirmError(message);
-    } finally {
-      setConfirming(false);
-      console.info("[shipment:ui] confirm:finished");
-    }
+    await withActionLock(`confirm:${selectedId}`, async () => {
+      setConfirming(true);
+      const timer = shippingTimed("confirmShip");
+      try {
+        const shipment = await createShipment(
+          selectedId,
+          previewNote,
+          { name: courier.name, phone: courier.phone },
+          pendingSignature
+            ? {
+                dataUrl: pendingSignature.dataUrl,
+                signerName: pendingSignature.signerName || currentUser.name,
+                deviceId: getDeviceId(),
+              }
+            : null,
+        );
+        setConfirmSuccess("✓ המשלוח אושר בהצלחה");
+        setSelectedId("");
+        setPreviewNote("");
+        setCourierId("");
+        setPendingSignature(null);
+        setTab("archive");
+        timer.end("ui:updated", { shipmentId: shipment.id });
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : "אישור המשלוח נכשל — נסו שוב";
+        setConfirmError(message);
+        timer.end("error", { message });
+      } finally {
+        setConfirming(false);
+      }
+    });
   };
 
   const openPadForNew = () => {
@@ -210,53 +242,81 @@ export default function ShippingPage() {
   };
 
   const openPadForShipment = (shipmentId: string) => {
+    if (archiveBusy) return;
     setPadForShipmentId(shipmentId);
     setPadOpen(true);
   };
 
   const onPadSave = async (result: { dataUrl: string; signerName: string }) => {
-    if (padForShipmentId) {
-      await fetch(`/api/shipments/${padForShipmentId}/signature`, {
-        method: "PUT",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+    if (!padForShipmentId) {
+      setPendingSignature(result);
+      setPadOpen(false);
+      setPadForShipmentId(null);
+      return;
+    }
+
+    const shipmentId = padForShipmentId;
+    await withActionLock(`sig:${shipmentId}`, async () => {
+      setArchiveBusy(shipmentId);
+      const timer = shippingTimed("saveSignature");
+      try {
+        await apiPut(`/api/shipments/${shipmentId}/signature`, {
           dataUrl: result.dataUrl,
           signerName: result.signerName || currentUser?.name,
           deviceId: getDeviceId(),
-        }),
-      });
-      await refresh();
-    } else {
-      setPendingSignature(result);
-    }
-    setPadOpen(false);
-    setPadForShipmentId(null);
+        });
+        await refreshQuiet();
+        timer.end("ui:updated", { shipmentId });
+        setPadOpen(false);
+        setPadForShipmentId(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "שמירת החתימה נכשלה";
+        setConfirmError(message);
+        timer.end("error", { message });
+      } finally {
+        setArchiveBusy(null);
+      }
+    });
   };
 
   const deleteSignature = async (shipmentId: string) => {
     if (!window.confirm("למחוק את חתימת המקבל?")) return;
-    await fetch(`/api/shipments/${shipmentId}/signature`, {
-      method: "DELETE",
-      credentials: "include",
+    await withActionLock(`delsig:${shipmentId}`, async () => {
+      setArchiveBusy(shipmentId);
+      const timer = shippingTimed("deleteSignature");
+      try {
+        await apiDelete(`/api/shipments/${shipmentId}/signature`);
+        await refreshQuiet();
+        timer.end("ui:updated", { shipmentId });
+      } catch (error) {
+        setConfirmError(error instanceof Error ? error.message : "מחיקת החתימה נכשלה");
+        timer.end("error");
+      } finally {
+        setArchiveBusy(null);
+      }
     });
-    await refresh();
   };
 
   const lockShipment = async (shipmentId: string) => {
     if (!window.confirm("לנעול את המשלוח? לאחר נעילה לא ניתן לשנות את החתימה.")) return;
-    await fetch(`/api/shipments/${shipmentId}/lock`, {
-      method: "POST",
-      credentials: "include",
+    await withActionLock(`lock:${shipmentId}`, async () => {
+      setArchiveBusy(shipmentId);
+      const timer = shippingTimed("lockShipment");
+      try {
+        await apiPost(`/api/shipments/${shipmentId}/lock`);
+        await refreshQuiet();
+        timer.end("ui:updated", { shipmentId });
+      } catch (error) {
+        setConfirmError(error instanceof Error ? error.message : "נעילת המשלוח נכשלה");
+        timer.end("error");
+      } finally {
+        setArchiveBusy(null);
+      }
     });
-    await refresh();
   };
 
   const viewSignature = async (shipment: Shipment) => {
     if (!shipment.recipientSignatureUrl) return;
-    void fetch(`/api/shipments/${shipment.id}/signature`, {
-      credentials: "include",
-    });
     setViewerUrl(shipment.recipientSignatureUrl);
   };
 
@@ -326,7 +386,7 @@ export default function ShippingPage() {
                     <span className="font-bold">{o.serialNumber}</span>
                   </div>
                   <p className="text-sm text-slate-500">
-                    {o.doctor.name} · {o.patient.name}
+                    {o.doctor?.name ?? "—"} · {o.patient.name}
                   </p>
                 </button>
               ))}
@@ -342,9 +402,18 @@ export default function ShippingPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 {!previewNote ? (
-                  <Button className="w-full" size="lg" onClick={generatePreview}>
-                    <FileText className="h-5 w-5" />
-                    הפקת תעודת משלוח
+                  <Button
+                    className="w-full"
+                    size="lg"
+                    onClick={() => void generatePreview()}
+                    disabled={generating || confirming}
+                  >
+                    {generating ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <FileText className="h-5 w-5" />
+                    )}
+                    {generating ? "מפיק תעודה..." : "הפקת תעודת משלוח"}
                   </Button>
                 ) : (
                   <>
@@ -458,9 +527,13 @@ export default function ShippingPage() {
                       className="w-full"
                       size="lg"
                       onClick={() => void confirmShip()}
-                      disabled={confirming}
+                      disabled={confirming || generating}
                     >
-                      <Truck className="h-5 w-5" />
+                      {confirming ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <Truck className="h-5 w-5" />
+                      )}
                       {confirming ? "מאשר משלוח..." : "אישור שליחה"}
                     </Button>
                   </>
@@ -483,7 +556,7 @@ export default function ShippingPage() {
                       <div>
                         <p className="font-bold text-opal-gold-dark">{s.deliveryNote}</p>
                         <p className="text-sm">
-                          {s.order?.serialNumber} · {s.order?.patient.name} · {s.order?.doctor.name}
+                          {s.order?.serialNumber} · {s.order?.patient.name} · {s.order?.doctor?.name ?? "—"}
                         </p>
                         <p className="text-xs text-slate-400">
                           {s.courierName} {s.courierPhone} ·{" "}
@@ -521,8 +594,13 @@ export default function ShippingPage() {
                             size="sm"
                             onClick={() => void lockShipment(s.id)}
                             title="נעילת משלוח"
+                            disabled={archiveBusy === s.id}
                           >
-                            <Lock className="h-4 w-4" />
+                            {archiveBusy === s.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Lock className="h-4 w-4" />
+                            )}
                           </Button>
                         )}
                       </div>
@@ -619,7 +697,7 @@ export default function ShippingPage() {
           setPadOpen(false);
           setPadForShipmentId(null);
         }}
-        onSave={(r) => void onPadSave(r)}
+        onSave={onPadSave}
       />
 
       {viewerUrl && (

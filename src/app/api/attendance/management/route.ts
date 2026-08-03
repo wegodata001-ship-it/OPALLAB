@@ -2,17 +2,14 @@ import { NextRequest } from "next/server";
 import { requireSessionUserId } from "@/lib/auth/session";
 import { requireAttendanceManager } from "@/lib/attendance/management/auth";
 import {
-  clearAttendancePhoto,
   getActiveAttendanceRecords,
   getAttendanceKpis,
   getAttendanceLabGeo,
-  getAttendancePhotoSignedUrl,
   getAttendanceRecordById,
   getAttendanceRecords,
   getAttendanceRecordsForExport,
   getEmployeeAttendanceRoster,
   getEmployeeAttendanceStats,
-  type AttendancePhotoKind,
 } from "@/lib/attendance/management/service";
 import type { AttendanceManagementQuery } from "@/lib/attendance/management/types";
 import { jsonError, jsonOk } from "@/lib/api/response";
@@ -30,7 +27,6 @@ function parseQuery(searchParams: URLSearchParams): AttendanceManagementQuery {
     role: (searchParams.get("role") as UserRole) || undefined,
     status: (searchParams.get("status") as AttendanceManagementQuery["status"]) || undefined,
     gps: (searchParams.get("gps") as AttendanceManagementQuery["gps"]) || undefined,
-    photo: (searchParams.get("photo") as AttendanceManagementQuery["photo"]) || undefined,
     search: searchParams.get("search") ?? undefined,
     sortBy: (searchParams.get("sortBy") as AttendanceManagementQuery["sortBy"]) || undefined,
     sortDir: (searchParams.get("sortDir") as "asc" | "desc") || undefined,
@@ -90,18 +86,6 @@ export async function GET(request: NextRequest) {
       return jsonOk(record);
     }
 
-    if (view === "photo") {
-      const id = searchParams.get("id");
-      const kind = searchParams.get("kind") as AttendancePhotoKind | null;
-      if (!id) return jsonError(new AppError("VALIDATION_ERROR", "חסר מזהה רשומה", 400));
-      if (kind !== "check-in" && kind !== "check-out") {
-        return jsonError(new AppError("VALIDATION_ERROR", "סוג תמונה לא תקין", 400));
-      }
-      const photo = await getAttendancePhotoSignedUrl(id, kind);
-      if (!photo) return jsonError(new AppError("NOT_FOUND", "אין תמונה זמינה", 404));
-      return jsonOk(photo);
-    }
-
     const format = searchParams.get("format");
     if (format === "pdf") {
       const {
@@ -111,7 +95,6 @@ export async function GET(request: NextRequest) {
       const pdf = await generateAttendancePdfReport(userId, {
         ...query,
         scope: "management",
-        includePhotos: searchParams.get("includePhotos") !== "0",
       });
       return attendancePdfResponse(pdf);
     }
@@ -145,26 +128,6 @@ export async function GET(request: NextRequest) {
     }
 
     return jsonOk(await getAttendanceRecords(query));
-  } catch (error) {
-    return jsonError(error);
-  }
-}
-
-export async function DELETE(request: NextRequest) {
-  try {
-    const userId = await requireSessionUserId();
-    await requireAttendanceManager(userId);
-
-    const { searchParams } = new URL(request.url);
-    const id = searchParams.get("id");
-    const kind = searchParams.get("kind") as AttendancePhotoKind | null;
-    if (!id) throw new AppError("VALIDATION_ERROR", "חסר מזהה רשומה", 400);
-    if (kind !== "check-in" && kind !== "check-out") {
-      throw new AppError("VALIDATION_ERROR", "סוג תמונה לא תקין", 400);
-    }
-
-    await clearAttendancePhoto(id, kind);
-    return jsonOk({ ok: true });
   } catch (error) {
     return jsonError(error);
   }

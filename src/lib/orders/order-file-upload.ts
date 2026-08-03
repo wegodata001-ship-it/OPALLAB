@@ -14,6 +14,7 @@ import {
 } from "@/lib/orders/order-file-taxonomy";
 import { detectFileType, getMimeTypeFromFileName } from "@/lib/file-utils";
 import { mapOrderFile } from "@/lib/mappers/prisma-to-app";
+import { uploadAudit } from "@/lib/orders/upload-audit";
 import type { OrderFile, OrderFileModelMeta } from "@/lib/types";
 import type { Prisma } from "@prisma/client";
 
@@ -102,6 +103,33 @@ export async function prepareOrderFileUpload(input: {
 
   const signed = await createSignedUploadUrl(STORAGE_BUCKETS.ORDER_FILES, storagePath);
 
+  uploadAudit({
+    step: "PREPARE",
+    orderId: input.orderId,
+    draft: order.status === "DRAFT",
+    fileId,
+    fileName: input.fileName,
+    size: input.fileSize,
+    mimeType,
+    bucket: STORAGE_BUCKETS.ORDER_FILES,
+    storagePath,
+    category,
+    slotKey,
+    versionKey,
+    success: true,
+    extra: { version: nextVersion, uploadSlotId: input.uploadSlotId ?? null },
+  });
+  uploadAudit({
+    step: "CATEGORY",
+    orderId: input.orderId,
+    fileId,
+    fileName: input.fileName,
+    category,
+    slotKey,
+    versionKey,
+    success: true,
+  });
+
   return {
     fileId,
     storagePath,
@@ -137,9 +165,22 @@ export async function completeOrderFileUpload(input: {
   /** PNG bytes for preview thumb — stored beside the mesh (not Base64 in DB). */
   thumbnailBuffer?: Buffer | null;
 }): Promise<OrderFile> {
-  // Storage → must exist before DB
+  // Storage → must exist before DB (info/exists — never folder list)
   const stored = await assertStorageObjectExists(STORAGE_BUCKETS.ORDER_FILES, input.storagePath);
   const fileSize = stored.size > 0 ? stored.size : input.fileSize;
+
+  uploadAudit({
+    step: "STORAGE_UPLOAD",
+    orderId: input.orderId,
+    fileId: input.fileId,
+    fileName: input.fileName,
+    size: fileSize,
+    mimeType: input.mimeType,
+    bucket: STORAGE_BUCKETS.ORDER_FILES,
+    storagePath: input.storagePath,
+    success: true,
+    extra: { verifiedInStorage: true, verifyMs: stored.ms },
+  });
 
   const order = await prisma.order.findUnique({ where: { id: input.orderId } });
   if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
@@ -188,6 +229,7 @@ export async function completeOrderFileUpload(input: {
       },
     });
 
+    // Keep DRAFT orders in draft until the user finalizes ("שמור הזמנה").
     if (order.status === "RECEIVED" || order.status === "FILES_ATTACHED") {
       if (order.status === "RECEIVED") {
         await tx.orderStatusHistory.create({
@@ -218,6 +260,33 @@ export async function completeOrderFileUpload(input: {
       select: { name: true },
     });
     return { row, uploaderName: uploader?.name };
+  });
+
+  const fileCount = await prisma.orderFile.count({
+    where: { orderId: input.orderId, isCurrent: true },
+  });
+  uploadAudit({
+    step: "DATABASE_INSERT",
+    orderId: input.orderId,
+    draft: order.status === "DRAFT",
+    fileId: created.row.id,
+    fileName: created.row.fileName,
+    size: created.row.fileSize ?? fileSize,
+    mimeType: created.row.mimeType ?? undefined,
+    bucket: created.row.bucket ?? STORAGE_BUCKETS.ORDER_FILES,
+    storagePath: created.row.storagePath ?? undefined,
+    category: created.row.category,
+    slotKey: created.row.slotKey ?? undefined,
+    success: true,
+    count: fileCount,
+  });
+  uploadAudit({
+    step: "VERIFY_DB",
+    orderId: input.orderId,
+    fileId: created.row.id,
+    success: fileCount > 0,
+    count: fileCount,
+    extra: { query: "OrderFile where orderId + isCurrent" },
   });
 
   return await mapOrderFile(created.row, created.uploaderName);

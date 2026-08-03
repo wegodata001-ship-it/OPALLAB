@@ -12,7 +12,6 @@ export async function POST(request: Request) {
       longitude?: number;
       accuracy?: number;
       intendedAction?: "check-in" | "check-out";
-      photoPath?: string | null;
       device?: {
         browser?: string;
         os?: string;
@@ -32,9 +31,12 @@ export async function POST(request: Request) {
       });
     }
     if (body.latitude == null || body.longitude == null) {
-      throw new AppError("VALIDATION_ERROR", "נדרש GPS לרישום נוכחות", 400, {
-        code: "GPS_REQUIRED",
-      });
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "יש לאשר הרשאת מיקום כדי לבצע רישום נוכחות.",
+        400,
+        { code: "GPS_REQUIRED" },
+      );
     }
 
     const result = await punchViaTrustedDevice({
@@ -53,7 +55,6 @@ export async function POST(request: Request) {
         timezone: body.device?.timezone ?? "",
       },
       intendedAction: body.intendedAction,
-      photoPath: body.photoPath,
       headers: request.headers,
     });
 

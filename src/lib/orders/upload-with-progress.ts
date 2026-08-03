@@ -3,6 +3,7 @@ import { getFileExtension, getMimeTypeFromFileName } from "@/lib/file-utils";
 import { setGeometryInIdb } from "@/lib/orders/geometry-cache";
 import { parseModelGeometry } from "@/lib/orders/parse-model-worker";
 import { thumbnailFromGeometry } from "@/lib/orders/thumbnail-from-geometry";
+import { uploadAudit } from "@/lib/orders/upload-audit";
 
 export type UploadVersionMode = "new_version" | "replace";
 
@@ -87,12 +88,25 @@ function putFileToSignedUrl(
   file: File,
   mimeType: string,
   onProgress?: (pct: number, loaded: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", signedUrl);
     xhr.setRequestHeader("Content-Type", mimeType || file.type || "application/octet-stream");
     xhr.setRequestHeader("x-upsert", "true");
+
+    const onAbort = () => {
+      xhr.abort();
+      reject(new DOMException("ההעלאה בוטלה", "AbortError"));
+    };
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
 
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;
@@ -101,6 +115,7 @@ function putFileToSignedUrl(
     };
 
     xhr.onload = () => {
+      signal?.removeEventListener("abort", onAbort);
       if (xhr.status >= 200 && xhr.status < 300) {
         onProgress?.(100, file.size, file.size);
         resolve();
@@ -112,15 +127,40 @@ function putFileToSignedUrl(
         ),
       );
     };
-    xhr.onerror = () => reject(new Error("שגיאת רשת בהעלאה ל־Storage"));
+    xhr.onerror = () => {
+      signal?.removeEventListener("abort", onAbort);
+      reject(new Error("שגיאת רשת בהעלאה ל־Storage"));
+    };
+    xhr.onabort = () => {
+      signal?.removeEventListener("abort", onAbort);
+      reject(new DOMException("ההעלאה בוטלה", "AbortError"));
+    };
     xhr.send(file);
   });
+}
+
+function isRetryableUploadError(err: unknown): boolean {
+  if (err instanceof UploadConflictError) return false;
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("רשת") ||
+    message.includes("network") ||
+    message.includes("Network") ||
+    message.includes("Failed to fetch") ||
+    message.includes("timeout") ||
+    message.includes("Timeout")
+  );
+}
+
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
  * Direct-to-Storage upload:
  * prepare (JSON) → PUT file to signed URL → complete (verify Storage + DB).
  * Bypasses Vercel/proxy body limits that cause "Unexpected token 'R'".
+ * Retries automatically on transient network failures.
  */
 export function uploadOrderFileWithProgress(input: {
   orderId: string;
@@ -132,6 +172,7 @@ export function uploadOrderFileWithProgress(input: {
   slotKey?: string;
   versionKey?: string;
   versionMode?: UploadVersionMode;
+  signal?: AbortSignal;
   onProgress?: (pct: number, meta?: { loaded: number; total: number; fileName: string }) => void;
 }): Promise<{ fileId?: string; message?: string }> {
   const mimeType =
@@ -147,8 +188,16 @@ export function uploadOrderFileWithProgress(input: {
     });
   };
 
-  return (async () => {
+  const attemptOnce = async () => {
     report(0);
+    uploadAudit({
+      step: "UPLOAD_START",
+      orderId: input.orderId,
+      fileName: input.file.name,
+      size: input.file.size,
+      mimeType,
+      extra: { uploadSlotId: input.uploadSlotId ?? null },
+    });
 
     const prepared = await xhrJson<PrepareResponse>("POST", "/api/orders/files/prepare", {
       orderId: input.orderId,
@@ -194,10 +243,20 @@ export function uploadOrderFileWithProgress(input: {
       throw new Error("השרת לא החזיר קישור העלאה תקין");
     }
 
+    if (input.signal?.aborted) {
+      throw new DOMException("ההעלאה בוטלה", "AbortError");
+    }
+
     // Progress 0–85 during Storage PUT
-    await putFileToSignedUrl(upload.signedUrl, input.file, upload.mimeType || mimeType, (pct, loaded, total) => {
-      report(Math.min(85, Math.round(pct * 0.85)), loaded, total);
-    });
+    await putFileToSignedUrl(
+      upload.signedUrl,
+      input.file,
+      upload.mimeType || mimeType,
+      (pct, loaded, total) => {
+        report(Math.min(85, Math.round(pct * 0.85)), loaded, total);
+      },
+      input.signal,
+    );
 
     report(86, input.file.size, input.file.size);
 
@@ -264,9 +323,55 @@ export function uploadOrderFileWithProgress(input: {
     }
 
     report(100, input.file.size, input.file.size);
+    const fileId = completed.json.data?.file?.id ?? upload.fileId;
+    uploadAudit({
+      step: "UPLOAD_DONE",
+      orderId: input.orderId,
+      fileId,
+      fileName: input.file.name,
+      size: input.file.size,
+      mimeType: upload.mimeType || mimeType,
+      bucket: upload.bucket,
+      storagePath: upload.storagePath,
+      category: upload.category,
+      slotKey: upload.slotKey,
+      success: true,
+    });
     return {
-      fileId: completed.json.data?.file?.id ?? upload.fileId,
+      fileId,
       message: completed.json.data?.message ?? "הקובץ נשמר בהצלחה.",
     };
+  };
+
+  return (async () => {
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await attemptOnce();
+      } catch (err) {
+        lastError = err;
+        if (
+          (err instanceof DOMException && err.name === "AbortError") ||
+          err instanceof UploadConflictError ||
+          !isRetryableUploadError(err) ||
+          attempt === maxAttempts
+        ) {
+          uploadAudit({
+            step: "UPLOAD_FAILED",
+            orderId: input.orderId,
+            fileName: input.file.name,
+            size: input.file.size,
+            mimeType,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+            extra: { attempt },
+          });
+          throw err;
+        }
+        await sleep(400 * attempt);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("העלאה נכשלה");
   })();
 }

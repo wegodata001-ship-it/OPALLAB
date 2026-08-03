@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -9,16 +9,18 @@ import { ShadePicker } from "@/components/orders/shade-picker";
 import {
   OrderUploadTiles,
   type OrderUploadTilesHandle,
+  type FmUploadAggregate,
 } from "@/components/orders/order-upload-tiles";
+import { FmSaveUploadHint } from "@/components/file-manager-v2/fm-global-progress";
+import { TelegramOrderButton } from "@/components/orders/telegram-order-button";
 import { useApp } from "@/providers/AppProvider";
+import { useOrderCreateDraft } from "@/hooks/use-order-create-draft";
 import { MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS } from "@/lib/constants/labels";
+import { openTelegramOrderShare } from "@/lib/orders/telegram-order";
 import { cn } from "@/lib/utils";
-import type { Gender, MaterialType, WorkType } from "@/lib/types";
+import type { Gender, MaterialType, Order, WorkType } from "@/lib/types";
 import { Plus } from "lucide-react";
-import {
-  loadPendingFromDraft,
-  persistSlotUploads,
-} from "@/lib/orders/persist-slot-uploads";
+import { loadPendingFromDraft, persistSlotUploads } from "@/lib/orders/persist-slot-uploads";
 
 interface DoctorOrderFormProps {
   doctorId: string;
@@ -26,7 +28,8 @@ interface DoctorOrderFormProps {
 }
 
 export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
-  const { createOrder, refresh } = useApp();
+  const { refresh, doctors } = useApp();
+  const doctorName = doctors.find((d) => d.id === doctorId)?.name ?? "רופא";
   const uploadRef = useRef<OrderUploadTilesHandle>(null);
   const [patientName, setPatientName] = useState("");
   const [patientAge, setPatientAge] = useState("");
@@ -38,15 +41,138 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
   const [description, setDescription] = useState("");
   const [completionDate, setCompletionDate] = useState("");
   const [saving, setSaving] = useState(false);
+  const [uploadState, setUploadState] = useState<FmUploadAggregate | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
   const draftKey = `doctor-order-${doctorId}`;
+  const draft = useOrderCreateDraft(draftKey, { doctorId, enabled: true });
+  const saveDraftFields = draft.saveDraftFields;
+  const draftOrderId = draft.orderId;
+
+  const hasUploadFiles = (uploadState?.total ?? 0) > 0;
+  const uploadBlocking = uploadState?.hasBlocking ?? false;
+  const saveReady =
+    draft.ready && !uploadBlocking && (!hasUploadFiles || uploadState?.isComplete === true);
 
   const toggleMaterial = (m: MaterialType) =>
     setMaterials((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
   const toggleWorkType = (w: WorkType) =>
     setWorkTypes((p) => (p.includes(w) ? p.filter((x) => x !== w) : [...p, w]));
+
+  useEffect(() => {
+    const h = draft.hydrateFromDraft;
+    if (!h) return;
+    startTransition(() => {
+      if (h.patient?.name && h.patient.name !== "טיוטה") setPatientName(h.patient.name);
+      if (h.patient?.age != null) setPatientAge(String(h.patient.age));
+      if (h.patient?.gender) setPatientGender(h.patient.gender);
+      if (h.shade) setShade(h.shade);
+      if (h.materials?.length) setMaterials(h.materials);
+      if (h.workTypes?.length) setWorkTypes(h.workTypes);
+      if (h.selectedTeeth?.length) setSelectedTeeth(h.selectedTeeth);
+      if (h.description) setDescription(h.description);
+      if (h.completionDate) {
+        setCompletionDate(new Date(h.completionDate).toISOString().slice(0, 10));
+      }
+    });
+  }, [draft.hydrateFromDraft]);
+
+  useEffect(() => {
+    if (!draftOrderId) return;
+    const t = window.setTimeout(() => {
+      void saveDraftFields({
+        doctorId,
+        patientName: patientName.trim() || "טיוטה",
+        patientAge: patientAge ? parseInt(patientAge, 10) : null,
+        patientGender: patientGender || null,
+        shade: shade || null,
+        materials,
+        workTypes,
+        selectedTeeth,
+        description: description || null,
+        completionDate: completionDate ? new Date(completionDate) : null,
+      });
+    }, 900);
+    return () => window.clearTimeout(t);
+  }, [
+    draftOrderId,
+    doctorId,
+    patientName,
+    patientAge,
+    patientGender,
+    shade,
+    materials,
+    workTypes,
+    selectedTeeth,
+    description,
+    completionDate,
+    saveDraftFields,
+  ]);
+
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (uploadRef.current?.hasFiles()) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, []);
+
+  const resetForm = () => {
+    setPatientName("");
+    setPatientAge("");
+    setPatientGender("");
+    setShade("");
+    setMaterials([]);
+    setWorkTypes([]);
+    setSelectedTeeth([]);
+    setDescription("");
+    setCompletionDate("");
+  };
+
+  const saveOrder = async (): Promise<Order> => {
+    if (uploadRef.current?.hasBlockingUploads()) {
+      throw new Error("יש להמתין עד שכל הקבצים יסתיימו");
+    }
+    await uploadRef.current?.waitForUploads();
+    const alreadyOnServer = uploadRef.current?.hasUploadedFiles() ?? false;
+    let pending = uploadRef.current?.getPendingUploads() ?? [];
+    if (pending.length === 0 && !alreadyOnServer) {
+      pending = await loadPendingFromDraft(draftKey);
+    }
+
+    const order = await draft.finalize({
+      doctorId,
+      patientName: patientName.trim(),
+      patientAge: patientAge ? parseInt(patientAge, 10) : undefined,
+      patientGender: patientGender || undefined,
+      shade: shade || undefined,
+      materials,
+      workTypes,
+      selectedTeeth,
+      description: description || undefined,
+      completionDate: completionDate ? new Date(completionDate) : undefined,
+    });
+
+    if (!order?.id) {
+      throw new Error("ההזמנה נשמרה ללא מזהה");
+    }
+
+    if (pending.length > 0) {
+      await persistSlotUploads(order.id, pending, {
+        askVersionMode: (fileName, existingName, existingVersion) =>
+          uploadRef.current?.askVersionMode(fileName, existingName, existingVersion) ??
+          Promise.resolve("new_version"),
+      });
+    }
+
+    await uploadRef.current?.clear();
+    await refresh();
+    return order;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,57 +184,9 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
     }
     setSaving(true);
     try {
-      // Snapshot BEFORE createOrder — refresh must not wipe tile state mid-flow.
-      let pending = uploadRef.current?.getPendingUploads() ?? [];
-      if (pending.length === 0) {
-        pending = await loadPendingFromDraft(draftKey);
-      }
-
-      const order = await createOrder(
-        {
-          doctorId,
-          patientName: patientName.trim(),
-          patientAge: patientAge ? parseInt(patientAge, 10) : undefined,
-          patientGender: patientGender || undefined,
-          shade: shade || undefined,
-          materials,
-          workTypes,
-          selectedTeeth,
-          description: description || undefined,
-          completionDate: completionDate ? new Date(completionDate) : undefined,
-        },
-        { skipRefresh: pending.length > 0 },
-      );
-
-      if (!order?.id) {
-        throw new Error("ההזמנה נוצרה ללא מזהה — לא ניתן לשמור קבצים");
-      }
-
-      if (pending.length > 0) {
-        const { uploaded } = await persistSlotUploads(order.id, pending, {
-          askVersionMode: (fileName, existingName, existingVersion) =>
-            uploadRef.current?.askVersionMode(fileName, existingName, existingVersion) ??
-            Promise.resolve("new_version"),
-        });
-        await uploadRef.current?.clear();
-        setSuccess(
-          uploaded > 0
-            ? `ההזמנה נשמרה · ${uploaded} קבצים נשמרו בהצלחה בשרת`
-            : "ההזמנה נשמרה",
-        );
-      }
-
-      await refresh();
-
-      setPatientName("");
-      setPatientAge("");
-      setPatientGender("");
-      setShade("");
-      setMaterials([]);
-      setWorkTypes([]);
-      setSelectedTeeth([]);
-      setDescription("");
-      setCompletionDate("");
+      const order = await saveOrder();
+      setSuccess("ההזמנה נשמרה");
+      resetForm();
       onCreated?.(order.serialNumber);
     } catch (err) {
       console.error("[doctor-order] submit failed", err);
@@ -224,16 +302,81 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
           <div>
             <Label>תמונות וסריקות</Label>
             <div className="mt-2">
-              <OrderUploadTiles ref={uploadRef} draftKey={draftKey} />
+              <OrderUploadTiles
+                ref={uploadRef}
+                draftKey={draftKey}
+                orderId={draft.orderId ?? undefined}
+                ensureOrderId={() => draft.ensureDraft(doctorId)}
+                onUploadStateChange={setUploadState}
+              />
             </div>
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
+          {draft.error && <p className="text-sm text-amber-700">{draft.error}</p>}
           {success && <p className="text-sm text-emerald-700 font-medium">{success}</p>}
+          <FmSaveUploadHint
+            state={
+              uploadState ?? {
+                total: 0,
+                queued: 0,
+                uploading: 0,
+                done: 0,
+                error: 0,
+                overallProgress: 0,
+                isUploading: false,
+                isComplete: true,
+                hasBlocking: false,
+                kindSummary: [],
+              }
+            }
+            hasAnyFiles={hasUploadFiles}
+          />
 
-          <Button type="submit" className="w-full" size="lg" disabled={saving}>
-            {saving ? "שומר ומעלה קבצים לשרת..." : "שלח הזמנה למעבדה"}
-          </Button>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <Button
+              type="submit"
+              className={cn(
+                "flex-1",
+                saveReady && hasUploadFiles && "bg-opal-gold hover:bg-opal-gold-dark text-white",
+              )}
+              size="lg"
+              disabled={saving || !saveReady}
+            >
+              {saving ? "שומר הזמנה..." : "שלח הזמנה למעבדה"}
+            </Button>
+            <TelegramOrderButton
+              className="flex-1"
+              disabled={saving || !saveReady}
+              onClick={async () => {
+                if (!patientName.trim()) {
+                  setError("יש למלא שם מטופל");
+                  return;
+                }
+                setSaving(true);
+                setError("");
+                try {
+                  const savedPatient = patientName.trim();
+                  const savedWork = workTypes;
+                  const order = await saveOrder();
+                  openTelegramOrderShare({
+                    serialNumber: order.serialNumber,
+                    patientName: savedPatient,
+                    doctorName,
+                    workTypes: savedWork,
+                    orderId: order.id,
+                  });
+                  setSuccess("ההזמנה נשמרה");
+                  resetForm();
+                  onCreated?.(order.serialNumber);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "שגיאה בשליחת ההזמנה");
+                } finally {
+                  setSaving(false);
+                }
+              }}
+            />
+          </div>
         </form>
       </CardContent>
     </Card>

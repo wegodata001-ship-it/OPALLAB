@@ -8,7 +8,7 @@ import type {
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
-const STANDARD_DAILY_HOURS = 8;
+const STANDARD_DAILY_HOURS = 9;
 const TZ = "Asia/Jerusalem";
 
 function startOfDay(d: Date): Date {

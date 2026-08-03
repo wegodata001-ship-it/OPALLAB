@@ -26,6 +26,7 @@ export const USER_ROLE_LABELS: Record<UserRole, string> = {
 };
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+  DRAFT: "טיוטה",
   RECEIVED: "חדשה",
   FILES_ATTACHED: "קבצים צורפו",
   DESIGN: "עיצוב",
@@ -40,6 +41,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
 };
 
 export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
+  DRAFT: "bg-slate-50 text-slate-500",
   RECEIVED: "bg-slate-100 text-slate-700",
   FILES_ATTACHED: "bg-blue-100 text-blue-700",
   DESIGN: "bg-purple-100 text-purple-700",
@@ -116,8 +118,8 @@ export const ATTENDANCE_METHOD_LABELS: Record<AttendanceMethod, string> = {
   MANUAL: "ידני",
   GEOFENCE_AUTO: "גיאופנס אוטומטי",
   WIFI: "רשת WiFi (ישן)",
-  GPS: "GPS + אימות סלפי (ישן)",
-  TRUSTED_DEVICE: "שער QR/NFC · מכשיר מאושר",
+  GPS: "GPS (ישן)",
+  TRUSTED_DEVICE: "שער QR · מכשיר מאושר",
 };
 
 export const WORKFLOW_STEPS: OrderStatus[] = [

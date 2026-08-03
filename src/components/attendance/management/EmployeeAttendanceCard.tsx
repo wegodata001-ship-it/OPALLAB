@@ -5,7 +5,6 @@ import { Drawer } from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
 import {
   attendanceExportUrl,
-  deleteAttendancePhoto,
   fetchAttendanceRecords,
   fetchEmployeeAttendanceStats,
 } from "@/lib/attendance/management/client";
@@ -16,18 +15,23 @@ import type {
   AttendanceLabGeo,
   AttendanceManagementRecord,
 } from "@/lib/attendance/management/types";
-import { AttendancePhotoModal, type AttendancePhotoItem } from "@/components/attendance/management/AttendancePhotoModal";
+import type { ConnectedDeviceRow } from "@/components/attendance/management/ConnectedDevicesTab";
 import { EmployeeAvatar } from "@/components/attendance/management/EmployeeAvatar";
 import { distanceMeters } from "@/lib/attendance/gate/geofence";
 import { googleMapsEmbedUrl, googleMapsUrl } from "@/lib/geocode";
 import { USER_ROLE_LABELS } from "@/lib/constants/labels";
-import { formatDate, formatTime, cn } from "@/lib/utils";
+import { formatDate, formatDateTime, formatTime, cn } from "@/lib/utils";
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   FileSpreadsheet,
   FileText,
+  ImageOff,
   Loader2,
+  LogIn,
+  LogOut,
   MapPin,
   Phone,
   Smartphone,
@@ -46,63 +50,171 @@ function rangeForPreset(preset: RangePreset): { from: string; to: string } {
   return { from: start.toISOString().slice(0, 10), to };
 }
 
-function mapsLink(lat?: number | null, lng?: number | null): string | null {
-  if (lat == null || lng == null) return null;
-  return googleMapsUrl(lat, lng);
-}
-
-function GeoBlock({
-  label,
+function MapsButton({
   lat,
   lng,
-  address,
-  labGeo,
 }: {
-  label: string;
   lat?: number | null;
   lng?: number | null;
-  address?: string | null;
-  labGeo: AttendanceLabGeo;
 }) {
-  if (lat == null || lng == null) {
-    return (
-      <p className="text-xs text-slate-400">
-        {label}: אין GPS
-      </p>
-    );
-  }
-  const dist =
-    labGeo.labLatitude != null && labGeo.labLongitude != null
-      ? Math.round(distanceMeters(lat, lng, labGeo.labLatitude, labGeo.labLongitude))
-      : null;
-  const outOfRange =
-    dist != null && labGeo.geofenceEnabled && dist > labGeo.geofenceRadiusMeters;
-  const link = mapsLink(lat, lng);
-
+  if (lat == null || lng == null) return null;
   return (
-    <div className="space-y-1 text-xs">
-      <p className="font-medium text-slate-700">{label}</p>
-      <p className="text-slate-600" dir="ltr">
-        {lat.toFixed(5)}, {lng.toFixed(5)}
-      </p>
-      {address && <p className="text-slate-500">{address}</p>}
-      {dist != null && (
-        <p className={cn(outOfRange ? "text-red-600 font-semibold" : "text-slate-500")}>
-          מרחק מהמעבדה: {dist}מ׳
-          {outOfRange ? " — מחוץ לרדיוס המותר" : ""}
-        </p>
+    <a
+      href={googleMapsUrl(lat, lng)}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-100"
+    >
+      <ExternalLink className="h-3.5 w-3.5" />
+      פתח ב־Google Maps
+    </a>
+  );
+}
+
+function PunchCard({
+  kind,
+  at,
+  address,
+  lat,
+  lng,
+}: {
+  kind: "in" | "out";
+  at?: Date | string | null;
+  address?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+}) {
+  const isIn = kind === "in";
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border p-4 space-y-3",
+        isIn ? "border-emerald-200 bg-emerald-50/40" : "border-sky-200 bg-sky-50/40",
       )}
-      {link && (
-        <a
-          href={link}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-sky-700 hover:underline"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          פתח במפות
-        </a>
+    >
+      <div className="flex items-center gap-2">
+        {isIn ? (
+          <LogIn className="h-5 w-5 text-emerald-600" />
+        ) : (
+          <LogOut className="h-5 w-5 text-sky-600" />
+        )}
+        <h4 className="font-bold text-slate-900">{isIn ? "כניסה" : "יציאה"}</h4>
+      </div>
+      {!at ? (
+        <p className="text-sm text-slate-500">לא בוצעה {isIn ? "כניסה" : "יציאה"}</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <div>
+              <p className="text-[11px] text-slate-500">שעה</p>
+              <p className="font-bold text-slate-900">{formatTime(at)}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-slate-500">תאריך</p>
+              <p className="font-bold text-slate-900">{formatDate(at)}</p>
+            </div>
+          </div>
+          <div>
+            <p className="text-[11px] text-slate-500 mb-1">כתובת (GPS)</p>
+            <p className="text-sm text-slate-800">
+              {address?.trim() ||
+                (lat != null && lng != null
+                  ? `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+                  : "לא זמינה")}
+            </p>
+            {lat != null && lng != null && (
+              <p className="text-[11px] text-slate-400 mt-1 font-mono" dir="ltr">
+                {lat.toFixed(5)}, {lng.toFixed(5)}
+              </p>
+            )}
+          </div>
+          <MapsButton lat={lat} lng={lng} />
+        </>
       )}
+    </div>
+  );
+}
+
+function PhotoPlaceholder({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 py-10 px-4 text-center">
+      <ImageOff className="h-10 w-10 text-slate-300 mb-2" />
+      <p className="text-sm text-slate-500">{label}</p>
+    </div>
+  );
+}
+
+function TechnicalDetails({ record }: { record: AttendanceManagementRecord }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-2xl border border-slate-200 overflow-hidden">
+      <button
+        type="button"
+        className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 text-sm font-semibold text-slate-800"
+        onClick={() => setOpen((v) => !v)}
+      >
+        מידע טכני
+        {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+      </button>
+      {open && (
+        <div className="p-4 space-y-2 text-xs text-slate-600 bg-white">
+          <TechRow label="כתובת IP" value={record.ipAddress || "—"} ltr />
+          <TechRow label="מערכת הפעלה" value={record.checkInDeviceOs || "—"} />
+          <TechRow
+            label="סוג מכשיר"
+            value={record.checkInDeviceType || record.deviceInfo || "—"}
+          />
+          <TechRow label="דפדפן" value={record.checkInDeviceBrowser || "—"} />
+          <TechRow label="מזהה מכשיר מהימן" value={record.trustedDeviceId || "—"} ltr />
+          <TechRow label="מקור הפעולה" value="QR" />
+          <TechRow
+            label="שיטה"
+            value={record.method === "TRUSTED_DEVICE" ? "מכשיר מאושר" : record.method}
+          />
+          {record.notes && <TechRow label="הערות" value={record.notes} />}
+          <div>
+            <p className="text-slate-500 mb-1">User Agent</p>
+            <p className="break-all rounded-lg bg-slate-50 p-2 font-mono" dir="ltr">
+              {record.checkInUserAgent || "—"}
+            </p>
+          </div>
+          {(record.isLate || !record.gpsValid) && (
+            <div className="pt-2 space-y-1">
+              {record.isLate && (
+                <p className="text-amber-700 flex items-center gap-1">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  איחור בכניסה
+                </p>
+              )}
+              {!record.gpsValid && (
+                <p className="text-red-600 flex items-center gap-1">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  GPS לא תקין
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TechRow({
+  label,
+  value,
+  ltr,
+}: {
+  label: string;
+  value: string;
+  ltr?: boolean;
+}) {
+  return (
+    <div className="flex justify-between gap-3 border-b border-slate-50 pb-1.5">
+      <span className="text-slate-500">{label}</span>
+      <span className={cn("font-medium text-slate-800", ltr && "font-mono")} dir={ltr ? "ltr" : undefined}>
+        {value}
+      </span>
     </div>
   );
 }
@@ -123,12 +235,10 @@ export function EmployeeAttendanceCard({
   const [preset, setPreset] = useState<RangePreset>("month");
   const [records, setRecords] = useState<AttendanceManagementRecord[]>([]);
   const [stats, setStats] = useState<AttendanceEmployeeStats | null>(null);
+  const [devices, setDevices] = useState<ConnectedDeviceRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [photoModal, setPhotoModal] = useState<{ photos: AttendancePhotoItem[]; index: number } | null>(
-    null,
-  );
-  const [busyDevice, setBusyDevice] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [busyDevice, setBusyDevice] = useState<string | null>(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
 
   const range = useMemo(() => rangeForPreset(preset), [preset]);
@@ -137,7 +247,7 @@ export function EmployeeAttendanceCard({
     if (!row) return;
     setLoading(true);
     try {
-      const [result, employeeStats] = await Promise.all([
+      const [result, employeeStats, devicesRes] = await Promise.all([
         fetchAttendanceRecords({
           userId: row.employee.id,
           from: range.from,
@@ -151,13 +261,26 @@ export function EmployeeAttendanceCard({
           from: range.from,
           to: range.to,
         }),
+        fetch(
+          `/api/attendance/trusted-devices?userId=${encodeURIComponent(row.employee.id)}`,
+          { credentials: "include", cache: "no-store" },
+        ).then((r) => r.json()),
       ]);
-      if (result.mode === "records") setRecords(result.records);
-      else setRecords([]);
+      if (result.mode === "records") {
+        setRecords(result.records);
+        setSelectedId(result.records[0]?.id ?? null);
+      } else {
+        setRecords([]);
+        setSelectedId(null);
+      }
       setStats(employeeStats);
+      setDevices(
+        devicesRes?.success ? (devicesRes.data?.devices as ConnectedDeviceRow[]) ?? [] : [],
+      );
     } catch {
       setRecords([]);
       setStats(null);
+      setDevices([]);
     } finally {
       setLoading(false);
     }
@@ -167,101 +290,42 @@ export function EmployeeAttendanceCard({
     if (open && row) void load();
   }, [open, row, load]);
 
-  const gallery = useMemo(() => {
-    const items: AttendancePhotoItem[] = [];
-    for (const r of records) {
-      if (r.checkInPhotoUrl || r.checkInPhotoPath) {
-        items.push({
-          url: r.checkInPhotoUrl,
-          label: `כניסה ${formatDate(r.checkIn)} ${formatTime(r.checkIn)}`,
-          recordId: r.id,
-          kind: "check-in",
-        });
-      }
-      if (r.checkOutPhotoUrl || r.checkOutPhotoPath) {
-        items.push({
-          url: r.checkOutPhotoUrl,
-          label: `יציאה ${r.checkOut ? `${formatDate(r.checkOut)} ${formatTime(r.checkOut)}` : ""}`,
-          recordId: r.id,
-          kind: "check-out",
-        });
-      }
-    }
-    return items;
-  }, [records]);
+  const selected = records.find((r) => r.id === selectedId) ?? records[0] ?? null;
 
   const mapUrl = useMemo(() => {
-    const withGps = records.find(
-      (r) =>
-        (r.checkInLatitude ?? r.latitude) != null &&
-        (r.checkInLongitude ?? r.longitude) != null,
-    );
-    if (!withGps) return null;
-    const inLat = withGps.checkInLatitude ?? withGps.latitude;
-    const inLng = withGps.checkInLongitude ?? withGps.longitude;
-    return mapEmbed(
-      inLat,
-      inLng,
-      withGps.checkOutLatitude,
-      withGps.checkOutLongitude,
-    );
-  }, [records]);
+    if (!selected) return null;
+    const inLat = selected.checkInLatitude ?? selected.latitude;
+    const inLng = selected.checkInLongitude ?? selected.longitude;
+    return mapEmbed(inLat, inLng, selected.checkOutLatitude, selected.checkOutLongitude);
+  }, [selected]);
 
-  const deviceAction = async (action: "reset" | "delete" | "approve") => {
-    if (!row?.deviceId) return;
-    setBusyDevice(true);
+  const deviceAction = async (
+    deviceId: string,
+    action: "reset" | "delete" | "approve" | "block",
+  ) => {
+    setBusyDevice(deviceId);
     try {
       if (action === "delete") {
         if (!confirm("למחוק את המכשיר המאושר? העובד יידרש להירשם מחדש.")) return;
-        await fetch(`/api/attendance/trusted-devices?deviceId=${encodeURIComponent(row.deviceId)}`, {
-          method: "DELETE",
-          credentials: "include",
-        });
+        await fetch(
+          `/api/attendance/trusted-devices?deviceId=${encodeURIComponent(deviceId)}`,
+          { method: "DELETE", credentials: "include" },
+        );
       } else {
-        const status = action === "reset" ? "REVOKED" : "ACTIVE";
+        const status =
+          action === "reset" ? "REVOKED" : action === "block" ? "BLOCKED" : "ACTIVE";
         await fetch("/api/attendance/trusted-devices", {
           method: "PATCH",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceId: row.deviceId, status }),
+          body: JSON.stringify({ deviceId, status }),
         });
       }
       onDevicesChanged?.();
+      await load();
     } finally {
-      setBusyDevice(false);
+      setBusyDevice(null);
     }
-  };
-
-  const openPhotos = (record: AttendanceManagementRecord, kind: "check-in" | "check-out") => {
-    const photos: AttendancePhotoItem[] = [];
-    if (record.checkInPhotoUrl || record.checkInPhotoPath) {
-      photos.push({
-        url: record.checkInPhotoUrl,
-        label: "תמונת כניסה",
-        recordId: record.id,
-        kind: "check-in",
-      });
-    }
-    if (record.checkOutPhotoUrl || record.checkOutPhotoPath) {
-      photos.push({
-        url: record.checkOutPhotoUrl,
-        label: "תמונת יציאה",
-        recordId: record.id,
-        kind: "check-out",
-      });
-    }
-    const index = Math.max(
-      0,
-      photos.findIndex((p) => p.kind === kind),
-    );
-    if (photos.length) setPhotoModal({ photos, index });
-  };
-
-  const removePhoto = async (recordId: string, kind: "check-in" | "check-out") => {
-    if (!confirm("למחוק את התמונה מהרשומה?")) return;
-    await deleteAttendancePhoto(recordId, kind);
-    await load();
-    setPhotoModal(null);
   };
 
   if (!row) return null;
@@ -272,6 +336,9 @@ export function EmployeeAttendanceCard({
     to: range.to,
   };
 
+  const inLat = selected?.checkInLatitude ?? selected?.latitude;
+  const inLng = selected?.checkInLongitude ?? selected?.longitude;
+
   return (
     <>
       <Drawer
@@ -280,7 +347,8 @@ export function EmployeeAttendanceCard({
         title={`כרטסת נוכחות — ${emp.name}`}
         className="max-w-3xl"
       >
-        <div className="space-y-6">
+        <div className="space-y-5">
+          {/* Profile */}
           <section className="flex items-start gap-3">
             <EmployeeAvatar name={emp.name} color={emp.color} />
             <div className="flex-1 min-w-0">
@@ -294,90 +362,90 @@ export function EmployeeAttendanceCard({
                   {emp.phone}
                 </p>
               )}
-              <div className="mt-2 text-xs text-slate-600 flex flex-wrap gap-x-3 gap-y-1">
-                <span className="inline-flex items-center gap-1">
-                  <Smartphone className="h-3.5 w-3.5" />
-                  {row.deviceStatus === "NONE"
-                    ? "אין מכשיר מאושר"
-                    : `${row.deviceLabel || "מכשיר"} · ${row.deviceOs || "—"} · ${row.deviceBrowser || "—"}`}
-                </span>
-                <span>
-                  סטטוס:{" "}
-                  {row.deviceStatus === "ACTIVE"
-                    ? "מאושר"
-                    : row.deviceStatus === "BLOCKED"
-                      ? "חסום"
-                      : row.deviceStatus === "REVOKED"
-                        ? "בוטל"
-                        : "ללא"}
-                </span>
-              </div>
-              {row.deviceId && (
-                <div className="flex flex-wrap gap-2 mt-3">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busyDevice}
-                    onClick={() => void deviceAction("reset")}
-                  >
-                    איפוס מכשיר
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busyDevice}
-                    onClick={() => void deviceAction("approve")}
-                  >
-                    אישור מחדש
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="text-red-600"
-                    disabled={busyDevice}
-                    onClick={() => void deviceAction("delete")}
-                  >
-                    מחיקת מכשיר
-                  </Button>
-                </div>
-              )}
             </div>
           </section>
 
+          {/* Approved devices */}
+          <section className="rounded-2xl border border-slate-200 p-4 space-y-3">
+            <h3 className="font-bold text-slate-900 flex items-center gap-2">
+              <Smartphone className="h-4 w-4 text-opal-gold" />
+              מכשירים מאושרים
+            </h3>
+            {devices.length === 0 ? (
+              <p className="text-sm text-slate-500">אין מכשירים מאושרים לעובד זה</p>
+            ) : (
+              <div className="space-y-2">
+                {devices.map((d) => (
+                  <div
+                    key={d.id}
+                    className="rounded-xl border bg-slate-50 px-3 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                  >
+                    <div>
+                      <p className="font-semibold text-slate-900">
+                        {d.label || d.deviceType || "מכשיר"}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {d.os || "—"} · {d.browser || "—"} ·{" "}
+                        {d.status === "ACTIVE"
+                          ? "מאושר"
+                          : d.status === "BLOCKED"
+                            ? "חסום"
+                            : "בוטל"}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        נרשם {formatDate(d.registeredAt)}
+                        {d.lastUsedAt
+                          ? ` · כניסה אחרונה ${formatDateTime(d.lastUsedAt)}`
+                          : ""}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busyDevice === d.id || d.status === "ACTIVE"}
+                        onClick={() => void deviceAction(d.id, "approve")}
+                      >
+                        אישור מחדש
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busyDevice === d.id}
+                        onClick={() => void deviceAction(d.id, "reset")}
+                      >
+                        איפוס
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-red-600"
+                        disabled={busyDevice === d.id}
+                        onClick={() => void deviceAction(d.id, "delete")}
+                      >
+                        מחיקה
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           {stats && (
-            <section className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <section className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {[
                 { label: "ימי עבודה", value: stats.workDays },
                 { label: "שעות עבודה", value: stats.totalHours },
                 { label: "שעות נוספות", value: stats.overtimeHours },
                 { label: "איחורים", value: stats.lateCount },
                 { label: "יציאות מוקדמות", value: stats.earlyLeaveCount },
-                { label: "ללא יציאה", value: stats.openWithoutCheckout },
-                { label: "חסר GPS", value: stats.missingGpsCount },
-                { label: "חסרה תמונה", value: stats.missingPhotoCount },
-                { label: "מחוץ לאזור", value: stats.outOfGeofenceCount },
               ].map((s) => (
-                <div key={s.label} className="rounded-lg border bg-slate-50 px-3 py-2">
+                <div key={s.label} className="rounded-xl border bg-white px-3 py-2">
                   <p className="text-[11px] text-slate-500">{s.label}</p>
                   <p className="text-lg font-bold text-slate-900">{s.value}</p>
                 </div>
               ))}
-            </section>
-          )}
-
-          {mapUrl && (
-            <section className="space-y-2">
-              <h3 className="font-semibold text-slate-800 flex items-center gap-2">
-                <MapPin className="h-4 w-4 text-opal-gold" />
-                מפת נוכחות אחרונה
-              </h3>
-              <iframe
-                title="מפת נוכחות"
-                src={mapUrl}
-                className="w-full h-48 rounded-xl border"
-                loading="lazy"
-                referrerPolicy="no-referrer-when-downgrade"
-              />
             </section>
           )}
 
@@ -430,137 +498,111 @@ export function EmployeeAttendanceCard({
             ) : records.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-6">אין רשומות בטווח שנבחר</p>
             ) : (
-              <div className="space-y-2">
-                {records.map((r) => {
-                  const expanded = expandedId === r.id;
-                  const hours = r.durationHours != null ? r.durationHours.toFixed(1) : r.checkOut ? "—" : "פעיל";
-                  const status = r.checkOut ? (r.isLate ? "יצא · איחור" : "נסגרה") : "פתוחה";
-                  return (
-                    <div key={r.id} className="rounded-xl border border-slate-200 overflow-hidden">
-                      <button
-                        type="button"
-                        className="w-full text-right px-3 py-2.5 hover:bg-slate-50 grid grid-cols-2 sm:grid-cols-5 gap-1 text-xs sm:text-sm"
-                        onClick={() => setExpandedId(expanded ? null : r.id)}
-                      >
-                        <span>{formatDate(r.checkIn)}</span>
-                        <span>כניסה {formatTime(r.checkIn)}</span>
-                        <span>{r.checkOut ? `יציאה ${formatTime(r.checkOut)}` : "—"}</span>
-                        <span>{hours} שע׳</span>
-                        <span className={cn(r.isLate && "text-amber-700", !r.checkOut && "text-emerald-700")}>
-                          {status}
-                        </span>
-                      </button>
-                      {expanded && (
-                        <div className="border-t bg-slate-50/80 p-3 space-y-4 text-sm">
-                          <div className="grid sm:grid-cols-2 gap-4">
-                            <GeoBlock
-                              label="📍 כניסה"
-                              lat={r.checkInLatitude ?? r.latitude}
-                              lng={r.checkInLongitude ?? r.longitude}
-                              address={r.checkInAddress}
-                              labGeo={labGeo}
-                            />
-                            <GeoBlock
-                              label="📍 יציאה"
-                              lat={r.checkOutLatitude}
-                              lng={r.checkOutLongitude}
-                              address={r.checkOutAddress}
-                              labGeo={labGeo}
-                            />
-                          </div>
+              <>
+                <div className="flex gap-1 overflow-x-auto pb-1">
+                  {records.map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => setSelectedId(r.id)}
+                      className={cn(
+                        "shrink-0 rounded-lg border px-3 py-1.5 text-xs",
+                        selectedId === r.id
+                          ? "border-opal-gold bg-opal-gold/10 font-semibold"
+                          : "border-slate-200 hover:bg-slate-50",
+                      )}
+                    >
+                      {formatDate(r.checkIn)} · {formatTime(r.checkIn)}
+                    </button>
+                  ))}
+                </div>
 
-                          <div className="grid grid-cols-2 gap-3">
-                            <PhotoCell
-                              label="תמונת כניסה"
-                              url={r.checkInPhotoUrl}
-                              has={Boolean(r.checkInPhotoUrl || r.checkInPhotoPath)}
-                              onOpen={() => openPhotos(r, "check-in")}
-                              onDelete={() => void removePhoto(r.id, "check-in")}
-                            />
-                            <PhotoCell
-                              label="תמונת יציאה"
-                              url={r.checkOutPhotoUrl}
-                              has={Boolean(r.checkOutPhotoUrl || r.checkOutPhotoPath)}
-                              onOpen={() => openPhotos(r, "check-out")}
-                              onDelete={() => void removePhoto(r.id, "check-out")}
-                            />
-                          </div>
+                {selected && (
+                  <div className="space-y-4">
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <PunchCard
+                        kind="in"
+                        at={selected.checkIn}
+                        address={selected.checkInAddress}
+                        lat={inLat}
+                        lng={inLng}
+                      />
+                      <PunchCard
+                        kind="out"
+                        at={selected.checkOut}
+                        address={selected.checkOutAddress}
+                        lat={selected.checkOutLatitude}
+                        lng={selected.checkOutLongitude}
+                      />
+                    </div>
 
-                          <div className="rounded-lg border bg-white p-3 space-y-1 text-xs text-slate-600">
-                            <p className="font-semibold text-slate-800 mb-1">Audit</p>
-                            <p>זמן כניסה: {formatDate(r.checkIn)} {formatTime(r.checkIn)}</p>
-                            <p>
-                              זמן יציאה:{" "}
-                              {r.checkOut ? `${formatDate(r.checkOut)} ${formatTime(r.checkOut)}` : "—"}
+                    {/* GPS card */}
+                    <div className="rounded-2xl border border-slate-200 p-4 space-y-3">
+                      <h4 className="font-bold text-slate-900 flex items-center gap-2">
+                        <MapPin className="h-4 w-4 text-opal-gold" />
+                        מיקום GPS
+                      </h4>
+                      {inLat != null && inLng != null ? (
+                        <>
+                          <p className="text-sm text-slate-800">
+                            {selected.checkInAddress?.trim() || "כתובת לא זמינה"}
+                          </p>
+                          <p className="text-xs font-mono text-slate-400" dir="ltr">
+                            {inLat.toFixed(5)}, {inLng.toFixed(5)}
+                          </p>
+                          {labGeo.labLatitude != null && labGeo.labLongitude != null && (
+                            <p className="text-xs text-slate-500">
+                              מרחק מהמעבדה:{" "}
+                              {Math.round(
+                                distanceMeters(
+                                  inLat,
+                                  inLng,
+                                  labGeo.labLatitude,
+                                  labGeo.labLongitude,
+                                ),
+                              )}
+                              מ׳
                             </p>
-                            <p>כתובת IP: {r.ipAddress || "—"}</p>
-                            <p>
-                              סוג מכשיר: {r.checkInDeviceType || r.deviceInfo || "—"}
-                            </p>
-                            <p>מערכת הפעלה: {r.checkInDeviceOs || "—"}</p>
-                            <p className="break-all">User Agent: {r.checkInUserAgent || "—"}</p>
-                            {r.notes && <p>הערות: {r.notes}</p>}
-                            {r.isLate && (
-                              <p className="text-amber-700 flex items-center gap-1">
-                                <AlertTriangle className="h-3.5 w-3.5" />
-                                חריגה: איחור בכניסה
-                              </p>
-                            )}
-                            {!r.gpsValid && (
-                              <p className="text-red-600 flex items-center gap-1">
-                                <AlertTriangle className="h-3.5 w-3.5" />
-                                חריגה: GPS לא תקין
-                              </p>
-                            )}
-                          </div>
-                        </div>
+                          )}
+                          <MapsButton lat={inLat} lng={inLng} />
+                          {mapUrl && (
+                            <iframe
+                              title="מפת נוכחות"
+                              src={mapUrl}
+                              className="w-full h-44 rounded-xl border mt-2"
+                              loading="lazy"
+                              referrerPolicy="no-referrer-when-downgrade"
+                            />
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-sm text-slate-500">אין נתוני GPS לרשומה זו</p>
                       )}
                     </div>
-                  );
-                })}
-              </div>
+
+                    {/* Photos — selfie removed from system */}
+                    <div className="rounded-2xl border border-slate-200 p-4 space-y-3">
+                      <h4 className="font-bold text-slate-900">תמונות</h4>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <p className="text-xs text-slate-500 mb-2">תמונת כניסה</p>
+                          <PhotoPlaceholder label="לא קיימת תמונת כניסה" />
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-500 mb-2">תמונת יציאה</p>
+                          <PhotoPlaceholder label="לא קיימת תמונת יציאה" />
+                        </div>
+                      </div>
+                    </div>
+
+                    <TechnicalDetails record={selected} />
+                  </div>
+                )}
+              </>
             )}
           </section>
-
-          {gallery.length > 0 && (
-            <section className="space-y-2">
-              <h3 className="font-semibold text-slate-800">גלריית תמונות</h3>
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                {gallery.map((g, i) => (
-                  <button
-                    key={`${g.recordId}-${g.kind}`}
-                    type="button"
-                    className="relative aspect-square rounded-lg overflow-hidden border bg-slate-100"
-                    onClick={() => setPhotoModal({ photos: gallery, index: i })}
-                  >
-                    {g.url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={g.url} alt={g.label} className="h-full w-full object-cover" />
-                    ) : (
-                      <span className="text-[10px] text-slate-500 flex items-center justify-center h-full">
-                        תמונה
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
         </div>
       </Drawer>
-
-      {photoModal && (
-        <AttendancePhotoModal
-          open
-          photos={photoModal.photos}
-          startIndex={photoModal.index}
-          allowDownload
-          onClose={() => setPhotoModal(null)}
-          onDelete={(photo) => {
-            if (photo.recordId && photo.kind) void removePhoto(photo.recordId, photo.kind);
-          }}
-        />
-      )}
 
       <AttendancePdfPreview
         open={Boolean(pdfPreviewUrl)}
@@ -584,46 +626,4 @@ function mapEmbed(
   if (inLat != null && inLng != null) return googleMapsEmbedUrl(inLat, inLng);
   if (outLat != null && outLng != null) return googleMapsEmbedUrl(outLat, outLng);
   return null;
-}
-
-function PhotoCell({
-  label,
-  url,
-  has,
-  onOpen,
-  onDelete,
-}: {
-  label: string;
-  url?: string | null;
-  has: boolean;
-  onOpen: () => void;
-  onDelete: () => void;
-}) {
-  if (!has) {
-    return (
-      <div className="rounded-lg border border-dashed p-3 text-xs text-slate-400 text-center">
-        {label}: אין
-      </div>
-    );
-  }
-  return (
-    <div className="rounded-lg border overflow-hidden bg-white">
-      <button type="button" className="block w-full" onClick={onOpen}>
-        {url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={url} alt={label} className="w-full h-28 object-cover" />
-        ) : (
-          <div className="h-28 flex items-center justify-center text-xs text-slate-500">{label}</div>
-        )}
-      </button>
-      <div className="flex justify-between px-2 py-1 text-[11px]">
-        <button type="button" className="text-sky-700" onClick={onOpen}>
-          הגדל
-        </button>
-        <button type="button" className="text-red-600" onClick={onDelete}>
-          מחק
-        </button>
-      </div>
-    </div>
-  );
 }

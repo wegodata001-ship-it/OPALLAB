@@ -20,13 +20,11 @@ export function attendancePdfUrl(
     scope?: "me" | "management";
     month?: number;
     year?: number;
-    includePhotos?: boolean;
   },
 ): string {
   const qs = toQueryString({
     ...query,
     scope: query.scope ?? "management",
-    includePhotos: query.includePhotos === false ? 0 : undefined,
   });
   return `/api/attendance/pdf?${qs}`;
 }

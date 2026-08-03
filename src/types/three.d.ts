@@ -1,7 +1,16 @@
 declare module "three";
 declare module "three/examples/jsm/controls/OrbitControls.js";
+declare module "three/examples/jsm/controls/TransformControls.js";
 declare module "three/examples/jsm/loaders/STLLoader.js";
 declare module "three/examples/jsm/loaders/OBJLoader.js";
 declare module "three/examples/jsm/loaders/PLYLoader.js";
 declare module "three/examples/jsm/loaders/MTLLoader.js";
 declare module "three/examples/jsm/loaders/GLTFLoader.js";
+declare module "three/examples/jsm/loaders/RGBELoader.js";
+declare module "three/examples/jsm/environments/RoomEnvironment.js";
+declare module "three/examples/jsm/postprocessing/EffectComposer.js";
+declare module "three/examples/jsm/postprocessing/RenderPass.js";
+declare module "three/examples/jsm/postprocessing/SSAOPass.js";
+declare module "three/examples/jsm/postprocessing/OutputPass.js";
+declare module "three/examples/jsm/postprocessing/ShaderPass.js";
+declare module "three/examples/jsm/shaders/FXAAShader.js";

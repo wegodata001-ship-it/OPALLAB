@@ -34,8 +34,25 @@ export function isPdfFile(file: File): boolean {
 export function isImageFile(file: File): boolean {
   const ext = getFileExtension(file.name);
   return (
-    ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"].includes(ext) ||
+    ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif"].includes(ext) ||
     file.type.startsWith("image/")
+  );
+}
+
+export function isVideoFile(file: File): boolean {
+  const ext = getFileExtension(file.name);
+  return (
+    ["mp4", "mov", "webm", "m4v", "avi", "mkv"].includes(ext) ||
+    file.type.startsWith("video/")
+  );
+}
+
+export function isRarFile(file: File): boolean {
+  const ext = getFileExtension(file.name);
+  return (
+    ext === "rar" ||
+    file.type === "application/vnd.rar" ||
+    file.type === "application/x-rar-compressed"
   );
 }
 

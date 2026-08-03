@@ -44,6 +44,7 @@ enum WorkType {
 }
 
 enum OrderStatus {
+  DRAFT
   RECEIVED
   FILES_ATTACHED
   DESIGN
@@ -185,7 +186,6 @@ model TrustedDevice {
   registeredAt          DateTime            @default(now())
   lastUsedAt            DateTime?
   lastIp                String?
-  registrationPhotoPath String?
   registrationLatitude  Float?
   registrationLongitude Float?
   createdAt             DateTime            @default(now())
@@ -248,7 +248,7 @@ model Patient {
 model Order {
   id                   String         @id @default(cuid())
   serialNumber         String         @unique
-  doctorId             String
+  doctorId             String?
   patientId            String
   entryDate            DateTime       @default(now())
   completionDate       DateTime?
@@ -267,7 +267,7 @@ model Order {
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
-  doctor             Doctor               @relation(fields: [doctorId], references: [id])
+  doctor             Doctor?              @relation(fields: [doctorId], references: [id])
   patient            Patient              @relation(fields: [patientId], references: [id])
   assignedDesigner   User?                @relation("AssignedDesigner", fields: [assignedDesignerId], references: [id])
   processingEmployee User?                @relation("ProcessingEmployee", fields: [processingEmployeeId], references: [id])
@@ -481,10 +481,6 @@ model AttendanceRecord {
   checkOutLongitude Float?
   checkOutAccuracy  Float?
   checkOutAddress   String?
-  checkInPhotoUrl   String?
-  checkOutPhotoUrl  String?
-  checkInPhotoPath  String?
-  checkOutPhotoPath String?
   checkInAddressCountry     String?
   checkInAddressCity        String?
   checkInAddressStreet      String?

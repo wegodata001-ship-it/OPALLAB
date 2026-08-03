@@ -34,10 +34,6 @@ export function detectAttendanceAnomalies(input: {
   checkOutLatitude?: number | null;
   checkOutLongitude?: number | null;
   checkInAccuracy?: number | null;
-  checkInPhotoPath?: string | null;
-  checkInPhotoUrl?: string | null;
-  checkOutPhotoPath?: string | null;
-  checkOutPhotoUrl?: string | null;
   isLate: boolean;
   durationHours: number | null;
   labGeo?: AttendanceLabGeo | null;
@@ -51,12 +47,9 @@ export function detectAttendanceAnomalies(input: {
   const anomalies: AttendanceAnomalyCode[] = [];
   const hasInGps = input.checkInLatitude != null && input.checkInLongitude != null;
   const hasOutGps = input.checkOutLatitude != null && input.checkOutLongitude != null;
-  const hasInPhoto = Boolean(input.checkInPhotoPath || input.checkInPhotoUrl);
-  const hasOutPhoto = Boolean(input.checkOutPhotoPath || input.checkOutPhotoUrl);
 
   if (!input.checkOut) anomalies.push("missing_checkout");
   if (!hasInGps && !hasOutGps) anomalies.push("missing_gps");
-  if (!hasInPhoto && !hasOutPhoto) anomalies.push("missing_photo");
   if (input.isLate) anomalies.push("late");
 
   let outOfGeofence = false;
@@ -89,7 +82,7 @@ export function detectAttendanceAnomalies(input: {
   if (isEarlyLeave) anomalies.push("early_leave");
 
   let complianceStatus: AttendanceComplianceStatus = "ok";
-  if (anomalies.includes("missing_checkout") || anomalies.includes("missing_gps") || anomalies.includes("missing_photo")) {
+  if (anomalies.includes("missing_checkout") || anomalies.includes("missing_gps")) {
     complianceStatus = "missing";
   } else if (anomalies.length > 0) {
     complianceStatus = "anomaly";
@@ -101,7 +94,6 @@ export function detectAttendanceAnomalies(input: {
 export const ANOMALY_LABELS: Record<AttendanceAnomalyCode, string> = {
   missing_checkout: "חסרה יציאה",
   missing_gps: "חסר GPS",
-  missing_photo: "חסרה תמונה",
   out_of_geofence: "מחוץ לאזור",
   late: "איחור",
   unusual_hours: "שעות חריגות",

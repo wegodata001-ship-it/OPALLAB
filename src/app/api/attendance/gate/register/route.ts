@@ -18,7 +18,6 @@ export async function POST(request: Request) {
       latitude?: number;
       longitude?: number;
       accuracy?: number;
-      photoPath?: string | null;
       device?: {
         browser?: string;
         os?: string;
@@ -33,7 +32,11 @@ export async function POST(request: Request) {
       throw new AppError("VALIDATION_ERROR", "מזהה מכשיר חסר", 400);
     }
     if (body.latitude == null || body.longitude == null) {
-      throw new AppError("VALIDATION_ERROR", "נדרש GPS לרישום מכשיר", 400);
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "יש לאשר הרשאת מיקום כדי לבצע רישום נוכחות.",
+        400,
+      );
     }
 
     const device = await registerTrustedDevice({
@@ -52,7 +55,6 @@ export async function POST(request: Request) {
         screenSize: body.device?.screenSize ?? "",
         timezone: body.device?.timezone ?? "",
       },
-      photoPath: body.photoPath,
       headers: request.headers,
     });
 

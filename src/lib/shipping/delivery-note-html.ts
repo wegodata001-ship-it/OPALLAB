@@ -52,8 +52,8 @@ export function buildDeliveryNoteHtml(input: {
         <table style="width:100%;border-collapse:collapse;margin-top:16px;direction:rtl" border="1" cellpadding="10">
           <tr><td style="text-align:right"><b>מספר תעודה</b></td><td style="text-align:right" dir="ltr">${note}</td></tr>
           <tr><td style="text-align:right"><b>מספר הזמנה</b></td><td style="text-align:right" dir="ltr">${order.serialNumber}</td></tr>
-          <tr><td style="text-align:right"><b>רופא</b></td><td style="text-align:right">${order.doctor.name}</td></tr>
-          <tr><td style="text-align:right"><b>מרפאה</b></td><td style="text-align:right">${order.doctor.clinic ?? order.doctor.address ?? "—"}</td></tr>
+          <tr><td style="text-align:right"><b>רופא</b></td><td style="text-align:right">${order.doctor?.name ?? "—"}</td></tr>
+          <tr><td style="text-align:right"><b>מרפאה</b></td><td style="text-align:right">${order.doctor?.clinic ?? order.doctor?.address ?? "—"}</td></tr>
           <tr><td style="text-align:right"><b>מטופל</b></td><td style="text-align:right">${order.patient.name}</td></tr>
           <tr><td style="text-align:right"><b>שיניים</b></td><td style="text-align:right" dir="ltr">${teeth}</td></tr>
           <tr><td style="text-align:right"><b>סוג עבודה</b></td><td style="text-align:right">${work}</td></tr>

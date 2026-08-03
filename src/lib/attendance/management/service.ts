@@ -1,11 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { mapAttendance } from "@/lib/mappers/prisma-to-app";
-import {
-  extractAttendanceStoragePath,
-  resolveAttendancePhotoUrl,
-  withSignedAttendancePhotos,
-} from "@/lib/attendance/verification/photo-url";
 import type { UserRole } from "@/lib/types";
 import type {
   AttendanceActiveRecord,
@@ -91,51 +86,40 @@ function mapEmployee(user: {
   };
 }
 
-async function enrichRecord(
+function enrichRecord(
   record: ReturnType<typeof mapAttendance>,
   user: Parameters<typeof mapEmployee>[0],
   labGeo?: AttendanceLabGeo | null,
-): Promise<AttendanceManagementRecord> {
-  const signed = await withSignedAttendancePhotos(record);
-  const end = signed.checkOut ?? new Date();
-  const durationHours = (end.getTime() - signed.checkIn.getTime()) / 3_600_000;
-  const closedHours = signed.checkOut ? durationHours : null;
-  const lat = signed.checkInLatitude ?? signed.latitude;
-  const lng = signed.checkInLongitude ?? signed.longitude;
-  const isLate = isLateCheckIn(signed.checkIn);
+): AttendanceManagementRecord {
+  const end = record.checkOut ?? new Date();
+  const durationHours = (end.getTime() - record.checkIn.getTime()) / 3_600_000;
+  const closedHours = record.checkOut ? durationHours : null;
+  const lat = record.checkInLatitude ?? record.latitude;
+  const lng = record.checkInLongitude ?? record.longitude;
+  const isLate = isLateCheckIn(record.checkIn);
   const flags = detectAttendanceAnomalies({
-    checkOut: signed.checkOut,
+    checkOut: record.checkOut,
     checkInLatitude: lat,
     checkInLongitude: lng,
-    checkOutLatitude: signed.checkOutLatitude,
-    checkOutLongitude: signed.checkOutLongitude,
-    checkInAccuracy: signed.checkInAccuracy,
-    checkInPhotoPath: signed.checkInPhotoPath,
-    checkInPhotoUrl: signed.checkInPhotoUrl,
-    checkOutPhotoPath: signed.checkOutPhotoPath,
-    checkOutPhotoUrl: signed.checkOutPhotoUrl,
+    checkOutLatitude: record.checkOutLatitude,
+    checkOutLongitude: record.checkOutLongitude,
+    checkInAccuracy: record.checkInAccuracy,
     isLate,
     durationHours: closedHours,
     labGeo,
   });
   return {
-    ...signed,
+    ...record,
     employee: mapEmployee(user),
     durationHours: closedHours,
     isLate,
-    gpsValid: isGpsValid(lat, lng, signed.checkInAccuracy),
-    hasPhoto: Boolean(
-      signed.checkInPhotoUrl ||
-        signed.checkOutPhotoUrl ||
-        signed.checkInPhotoPath ||
-        signed.checkOutPhotoPath,
-    ),
+    gpsValid: isGpsValid(lat, lng, record.checkInAccuracy),
     anomalies: flags.anomalies,
     complianceStatus: flags.complianceStatus,
     outOfGeofence: flags.outOfGeofence,
     isEarlyLeave: flags.isEarlyLeave,
     isOvertime: flags.isOvertime,
-    channelLabel: methodChannelLabel(signed.method, signed.nfcTagId),
+    channelLabel: methodChannelLabel(record.method, record.nfcTagId),
   };
 }
 
@@ -238,24 +222,6 @@ function buildRecordWhere(query: AttendanceManagementQuery, lateIds: string[] | 
           { checkInAccuracy: { gt: GPS_MAX_ACCURACY } },
         ],
       },
-    ];
-  }
-
-  if (query.photo === "has") {
-    where.OR = [
-      { checkInPhotoUrl: { not: null } },
-      { checkOutPhotoUrl: { not: null } },
-      { checkInPhotoPath: { not: null } },
-      { checkOutPhotoPath: { not: null } },
-    ];
-  }
-  if (query.photo === "none") {
-    where.AND = [
-      ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
-      { checkInPhotoUrl: null },
-      { checkOutPhotoUrl: null },
-      { checkInPhotoPath: null },
-      { checkOutPhotoPath: null },
     ];
   }
 
@@ -409,23 +375,6 @@ export async function getEmployeeAttendanceRoster(): Promise<AttendanceEmployeeR
   });
 }
 
-export async function clearAttendancePhoto(
-  recordId: string,
-  kind: AttendancePhotoKind,
-): Promise<void> {
-  if (kind === "check-in") {
-    await prisma.attendanceRecord.update({
-      where: { id: recordId },
-      data: { checkInPhotoPath: null, checkInPhotoUrl: null },
-    });
-    return;
-  }
-  await prisma.attendanceRecord.update({
-    where: { id: recordId },
-    data: { checkOutPhotoPath: null, checkOutPhotoUrl: null },
-  });
-}
-
 export async function getActiveAttendanceRecords(
   query: AttendanceManagementQuery = {},
 ): Promise<AttendanceActiveRecord[]> {
@@ -445,15 +394,13 @@ export async function getActiveAttendanceRecords(
 
   const now = Date.now();
   const labGeo = await getAttendanceLabGeo();
-  return Promise.all(
-    rows.map(async (row) => {
-      const base = await enrichRecord(mapAttendance(row), row.user, labGeo);
-      return {
-        ...base,
-        liveDurationMs: now - base.checkIn.getTime(),
-      };
-    }),
-  );
+  return rows.map((row) => {
+    const base = enrichRecord(mapAttendance(row), row.user, labGeo);
+    return {
+      ...base,
+      liveDurationMs: now - base.checkIn.getTime(),
+    };
+  });
 }
 
 export async function getNotCheckedInEmployees(
@@ -510,9 +457,7 @@ export async function getAttendanceRecords(
     ]);
 
     return {
-      records: await Promise.all(
-        rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo)),
-      ),
+      records: rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo)),
       total,
       page,
       limit,
@@ -529,9 +474,7 @@ export async function getAttendanceRecords(
     take: MAX_EXPORT,
   });
 
-  let records = await Promise.all(
-    rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo)),
-  );
+  let records = rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo));
   if (query.overtimeOnly) records = records.filter((r) => r.isOvertime);
   if (query.anomaliesOnly) records = records.filter((r) => r.complianceStatus !== "ok");
   if (query.compliance) {
@@ -566,9 +509,7 @@ export async function getEmployeeAttendanceStats(
     take: MAX_EXPORT,
   });
 
-  const records = await Promise.all(
-    rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo)),
-  );
+  const records = rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo));
 
   const workDayKeys = new Set(
     records.map((r) =>
@@ -589,7 +530,6 @@ export async function getEmployeeAttendanceStats(
     earlyLeaveCount: records.filter((r) => r.isEarlyLeave).length,
     openWithoutCheckout: records.filter((r) => !r.checkOut).length,
     missingGpsCount: records.filter((r) => r.anomalies.includes("missing_gps")).length,
-    missingPhotoCount: records.filter((r) => r.anomalies.includes("missing_photo")).length,
     outOfGeofenceCount: records.filter((r) => r.outOfGeofence).length,
   };
 }
@@ -609,7 +549,6 @@ export async function getAttendanceRecordsForExport(
       durationHours: null,
       isLate: false,
       gpsValid: false,
-      hasPhoto: false,
       anomalies: ["missing_checkout" as const],
       complianceStatus: "missing" as const,
       outOfGeofence: false,
@@ -620,8 +559,6 @@ export async function getAttendanceRecordsForExport(
     }));
   }
 
-  const result = await getAttendanceRecords(exportQuery);
-  // Re-fetch full export set without page limit quirks
   const lateIds = await lateRecordIds(exportQuery);
   const where = buildRecordWhere(exportQuery, lateIds);
   const labGeo = await getAttendanceLabGeo();
@@ -634,15 +571,12 @@ export async function getAttendanceRecordsForExport(
     take: MAX_EXPORT,
   });
 
-  let records = await Promise.all(
-    rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo)),
-  );
+  let records = rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo));
   if (exportQuery.overtimeOnly) records = records.filter((r) => r.isOvertime);
   if (exportQuery.anomaliesOnly) records = records.filter((r) => r.complianceStatus !== "ok");
   if (exportQuery.compliance) {
     records = records.filter((r) => r.complianceStatus === exportQuery.compliance);
   }
-  void result;
   return records;
 }
 
@@ -656,34 +590,4 @@ export async function getAttendanceRecordById(id: string): Promise<AttendanceMan
   });
   if (!row) return null;
   return enrichRecord(mapAttendance(row), row.user, labGeo);
-}
-
-export type AttendancePhotoKind = "check-in" | "check-out";
-
-/** Fresh Signed URL for attendance photo (private `users` bucket). */
-export async function getAttendancePhotoSignedUrl(
-  recordId: string,
-  kind: AttendancePhotoKind,
-): Promise<{ url: string; path: string } | null> {
-  const row = await prisma.attendanceRecord.findUnique({
-    where: { id: recordId },
-    select: {
-      checkInPhotoPath: true,
-      checkOutPhotoPath: true,
-      checkInPhotoUrl: true,
-      checkOutPhotoUrl: true,
-    },
-  });
-  if (!row) return null;
-
-  const photoPath = kind === "check-in" ? row.checkInPhotoPath : row.checkOutPhotoPath;
-  const photoUrl = kind === "check-in" ? row.checkInPhotoUrl : row.checkOutPhotoUrl;
-  const url = await resolveAttendancePhotoUrl(photoPath, photoUrl);
-  if (!url) return null;
-
-  const path =
-    photoPath?.trim() ||
-    extractAttendanceStoragePath(photoUrl) ||
-    "";
-  return { url, path };
 }

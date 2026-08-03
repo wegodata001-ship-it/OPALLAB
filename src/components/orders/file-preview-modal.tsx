@@ -11,6 +11,7 @@ import {
 } from "@/lib/file-utils";
 import { Button } from "@/components/ui/button";
 import { ModelViewer3D } from "@/components/orders/model-viewer-3d";
+import { OPAL3DViewer } from "@/components/viewer/OPAL3DViewer";
 import {
   X,
   Download,
@@ -22,6 +23,8 @@ import {
   FileWarning,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+const V2_PREF_KEY = "opal-viewer-v2-preview";
 
 interface FilePreviewModalProps {
   file: OrderFile | null;
@@ -36,7 +39,17 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [isScanViewer, setIsScanViewer] = useState(false);
+  /** Parallel Babylon V2 — off by default; old Three.js viewer stays primary. */
+  const [useViewerV2, setUseViewerV2] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    try {
+      setUseViewerV2(localStorage.getItem(V2_PREF_KEY) === "1");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const previewKind = file ? getPreviewKind(file.mimeType, file.fileName) : "none";
   const folderId = file ? getOrderFileFolderId(file) : "";
@@ -145,6 +158,34 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
                 <RefreshCw className="h-4 w-4" />
               </Button>
             )}
+            {(previewKind === "model3d" || previewKind === "zip") && (
+              <Button
+                variant={useViewerV2 ? "default" : "outline"}
+                size="sm"
+                title={
+                  useViewerV2
+                    ? "OPAL 3D Viewer V2 (Babylon) פעיל — לחץ לחזרה ל-Viewer הישן"
+                    : "הפעל OPAL 3D Viewer V2 (Babylon) לבדיקה מקבילה"
+                }
+                onClick={() => {
+                  setUseViewerV2((v) => {
+                    const next = !v;
+                    try {
+                      localStorage.setItem(V2_PREF_KEY, next ? "1" : "0");
+                    } catch {
+                      /* ignore */
+                    }
+                    setLoading(true);
+                    setError(false);
+                    setRefreshKey((k) => k + 1);
+                    return next;
+                  });
+                }}
+              >
+                <Box className="h-4 w-4" />
+                {useViewerV2 ? "V2" : "V1"}
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -219,27 +260,42 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
           )}
 
           {(previewKind === "model3d" || previewKind === "zip") && !error && (
-            <ModelViewer3D
-              key={refreshKey}
-              fileId={file.id}
-              fileSize={file.fileSize ?? undefined}
-              url={viewUrl ?? undefined}
-              fileName={file.fileName}
-              companions={relatedFiles
-                .filter((f) => f.id !== file.id)
-                .map((f) => ({
-                  fileId: f.id,
-                  fileSize: f.fileSize ?? undefined,
-                  url: buildFileViewUrl(f.orderId, getOrderFileFolderId(f)),
-                  fileName: f.fileName,
-                  role: inferJawRole(f.fileName, f.slotKey),
-                }))}
-              onLoaded={() => setLoading(false)}
-              onError={() => {
-                setLoading(false);
-                setError(true);
-              }}
-            />
+            useViewerV2 ? (
+              <OPAL3DViewer
+                key={`v2-${refreshKey}`}
+                fileId={file.id}
+                fileSize={file.fileSize ?? undefined}
+                url={viewUrl ?? undefined}
+                fileName={file.fileName}
+                onLoaded={() => setLoading(false)}
+                onError={() => {
+                  setLoading(false);
+                  setError(true);
+                }}
+              />
+            ) : (
+              <ModelViewer3D
+                key={refreshKey}
+                fileId={file.id}
+                fileSize={file.fileSize ?? undefined}
+                url={viewUrl ?? undefined}
+                fileName={file.fileName}
+                companions={relatedFiles
+                  .filter((f) => f.id !== file.id)
+                  .map((f) => ({
+                    fileId: f.id,
+                    fileSize: f.fileSize ?? undefined,
+                    url: buildFileViewUrl(f.orderId, getOrderFileFolderId(f)),
+                    fileName: f.fileName,
+                    role: inferJawRole(f.fileName, f.slotKey),
+                  }))}
+                onLoaded={() => setLoading(false)}
+                onError={() => {
+                  setLoading(false);
+                  setError(true);
+                }}
+              />
+            )
           )}
 
           {previewKind === "dcm" && (

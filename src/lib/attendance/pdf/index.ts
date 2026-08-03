@@ -1,2 +1,6 @@
-export { buildAttendancePdf, type AttendancePdfMeta } from "@/lib/attendance/pdf/build-attendance-pdf";
-export { computeAttendanceReportKpis } from "@/lib/attendance/pdf/metrics";
+export { computeAttendanceReportKpis, type AttendanceReportKpis } from "@/lib/attendance/pdf/metrics";
+export {
+  generateAttendancePdfReport,
+  attendancePdfResponse,
+  type AttendancePdfRequest,
+} from "@/lib/attendance/pdf/generate-report";

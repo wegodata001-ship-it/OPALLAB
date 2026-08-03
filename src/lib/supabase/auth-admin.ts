@@ -10,7 +10,11 @@ export async function createAuthUser(email: string, password: string): Promise<s
   });
 
   if (error || !data.user) {
-    throw new AppError("INTERNAL_ERROR", `יצירת משתמש Auth נכשלה: ${error?.message ?? "unknown"}`, 500);
+    const msg = error?.message ?? "unknown";
+    if (/already|registered|exists|duplicate/i.test(msg)) {
+      throw new AppError("VALIDATION_ERROR", `כתובת האימייל כבר קיימת במערכת ההתחברות`, 409);
+    }
+    throw new AppError("INTERNAL_ERROR", `יצירת משתמש Auth נכשלה: ${msg}`, 500);
   }
 
   return data.user.id;

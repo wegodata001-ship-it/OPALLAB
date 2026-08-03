@@ -26,10 +26,7 @@ import { ANOMALY_LABELS } from "@/lib/attendance/management/status";
 import { AttendanceQrPanel } from "@/components/attendance/gate/AttendanceQrPanel";
 import { EmployeeAttendanceCard } from "@/components/attendance/management/EmployeeAttendanceCard";
 import { EmployeeAvatar } from "@/components/attendance/management/EmployeeAvatar";
-import {
-  AttendancePhotoModal,
-  type AttendancePhotoItem,
-} from "@/components/attendance/management/AttendancePhotoModal";
+import { ConnectedDevicesTab } from "@/components/attendance/management/ConnectedDevicesTab";
 import { USER_ROLE_LABELS } from "@/lib/constants/labels";
 import { googleMapsUrl } from "@/lib/geocode";
 import { formatDate, formatDateTime, formatTime, cn } from "@/lib/utils";
@@ -48,9 +45,10 @@ import {
   FileText,
   MapPin,
   Eye,
+  Smartphone,
 } from "lucide-react";
 
-type TabId = "records" | "employees";
+type TabId = "records" | "employees" | "devices";
 
 function defaultDateRange() {
   const now = new Date();
@@ -100,10 +98,12 @@ function GpsLink({
   lat,
   lng,
   label,
+  address,
 }: {
   lat?: number | null;
   lng?: number | null;
   label: string;
+  address?: string | null;
 }) {
   if (lat == null || lng == null) {
     return <span className="text-xs text-slate-400">—</span>;
@@ -113,44 +113,20 @@ function GpsLink({
       href={googleMapsUrl(lat, lng)}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex items-center gap-1 text-xs text-sky-700 hover:underline"
+      className="inline-flex flex-col items-start gap-0.5 text-xs text-sky-700 hover:underline max-w-[140px]"
       onClick={(e) => e.stopPropagation()}
-      title={`${lat.toFixed(5)}, ${lng.toFixed(5)}`}
+      title={address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`}
     >
-      <MapPin className="h-3.5 w-3.5" />
-      {label}
-    </a>
-  );
-}
-
-function PhotoCell({
-  url,
-  has,
-  onOpen,
-}: {
-  url?: string | null;
-  has: boolean;
-  onOpen: () => void;
-}) {
-  if (!has) return <span className="text-xs text-slate-400">—</span>;
-  return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        onOpen();
-      }}
-      className="rounded-md border overflow-hidden hover:ring-2 ring-opal-gold/50 bg-slate-50"
-    >
-      {url ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={url} alt="" className="h-10 w-10 object-cover block" />
-      ) : (
-        <span className="h-10 w-10 flex items-center justify-center text-[10px] text-slate-500">
-          📷
+      <span className="inline-flex items-center gap-1">
+        <MapPin className="h-3.5 w-3.5 shrink-0" />
+        {label}
+      </span>
+      {address?.trim() && (
+        <span className="text-[10px] text-slate-500 line-clamp-2 text-right w-full">
+          {address.trim()}
         </span>
       )}
-    </button>
+    </a>
   );
 }
 
@@ -173,10 +149,6 @@ export default function AttendanceManagementPage() {
   const [selected, setSelected] = useState<AttendanceEmployeeRosterRow | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [photoModal, setPhotoModal] = useState<{
-    photos: AttendancePhotoItem[];
-    index: number;
-  } | null>(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
 
   const [filters, setFilters] = useState<AttendanceManagementQuery>(() => ({
@@ -256,29 +228,6 @@ export default function AttendanceManagementPage() {
     if (row) setSelected(row);
   };
 
-  const openRecordPhotos = (r: AttendanceManagementRecord, kind: "check-in" | "check-out") => {
-    const photos: AttendancePhotoItem[] = [];
-    if (r.checkInPhotoUrl || r.checkInPhotoPath) {
-      photos.push({
-        url: r.checkInPhotoUrl,
-        label: `כניסה · ${r.employee.name}`,
-        recordId: r.id,
-        kind: "check-in",
-      });
-    }
-    if (r.checkOutPhotoUrl || r.checkOutPhotoPath) {
-      photos.push({
-        url: r.checkOutPhotoUrl,
-        label: `יציאה · ${r.employee.name}`,
-        recordId: r.id,
-        kind: "check-out",
-      });
-    }
-    if (!photos.length) return;
-    const index = Math.max(0, photos.findIndex((p) => p.kind === kind));
-    setPhotoModal({ photos, index });
-  };
-
   const setDeviceStatus = async (
     deviceId: string,
     status: "ACTIVE" | "BLOCKED" | "REVOKED",
@@ -324,7 +273,7 @@ export default function AttendanceManagementPage() {
       <Header title="ניהול נוכחות" />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-slate-500">בקרת נוכחות מלאה — דיווחים, תמונות, GPS וחריגות</p>
+        <p className="text-sm text-slate-500">בקרת נוכחות מלאה — דיווחים, GPS, מכשירים וחריגות</p>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => setQrOpen((v) => !v)}>
             <QrCode className="h-4 w-4 ml-1" />
@@ -378,13 +327,23 @@ export default function AttendanceManagementPage() {
             </Button>
             <Button
               size="sm"
+              variant={tab === "devices" ? "default" : "outline"}
+              onClick={() => setTab("devices")}
+            >
+              <Smartphone className="h-4 w-4 ml-1" />
+              מכשירים מחוברים
+            </Button>
+            <Button
+              size="sm"
               variant={tab === "employees" ? "default" : "outline"}
               onClick={() => setTab("employees")}
             >
-              עובדים ומכשירים
+              עובדים
             </Button>
           </div>
 
+          {tab !== "devices" && (
+          <>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3">
             <div>
               <Label className="text-xs">עובד</Label>
@@ -521,8 +480,22 @@ export default function AttendanceManagementPage() {
               PDF כללי
             </Button>
           </div>
+          </>
+          )}
         </CardContent>
       </Card>
+
+      {tab === "devices" && (
+        <Card>
+          <CardContent className="p-4 sm:p-6">
+            <ConnectedDevicesTab
+              onOpenEmployee={(userId) => {
+                openEmployee(userId);
+              }}
+            />
+          </CardContent>
+        </Card>
+      )}
 
       {tab === "records" && (
         <Card>
@@ -538,7 +511,7 @@ export default function AttendanceManagementPage() {
             ) : records.length === 0 ? (
               <p className="text-center text-sm text-slate-500 py-12">אין דיווחים בטווח שנבחר</p>
             ) : (
-              <table className="w-full text-sm min-w-[1100px]">
+              <table className="w-full text-sm min-w-[1000px]">
                 <thead className="bg-slate-50 text-slate-500">
                   <tr>
                     <th className="text-right font-medium px-3 py-3">עובד</th>
@@ -546,7 +519,6 @@ export default function AttendanceManagementPage() {
                     <th className="text-right font-medium px-3 py-3">כניסה</th>
                     <th className="text-right font-medium px-3 py-3">יציאה</th>
                     <th className="text-right font-medium px-3 py-3">שעות</th>
-                    <th className="text-right font-medium px-3 py-3">תמונות</th>
                     <th className="text-right font-medium px-3 py-3">GPS</th>
                     <th className="text-right font-medium px-3 py-3">ערוץ</th>
                     <th className="text-right font-medium px-3 py-3">סטטוס</th>
@@ -580,30 +552,18 @@ export default function AttendanceManagementPage() {
                         {r.durationHours != null ? `${r.durationHours.toFixed(1)}` : "פתוח"}
                       </td>
                       <td className="px-3 py-2.5">
-                        <div className="flex gap-1">
-                          <PhotoCell
-                            url={r.checkInPhotoUrl}
-                            has={Boolean(r.checkInPhotoUrl || r.checkInPhotoPath)}
-                            onOpen={() => openRecordPhotos(r, "check-in")}
-                          />
-                          <PhotoCell
-                            url={r.checkOutPhotoUrl}
-                            has={Boolean(r.checkOutPhotoUrl || r.checkOutPhotoPath)}
-                            onOpen={() => openRecordPhotos(r, "check-out")}
-                          />
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5">
                         <div className="flex flex-col gap-1">
                           <GpsLink
                             lat={r.checkInLatitude ?? r.latitude}
                             lng={r.checkInLongitude ?? r.longitude}
                             label="כניסה"
+                            address={r.checkInAddress}
                           />
                           <GpsLink
                             lat={r.checkOutLatitude}
                             lng={r.checkOutLongitude}
                             label="יציאה"
+                            address={r.checkOutAddress}
                           />
                         </div>
                       </td>
@@ -749,16 +709,6 @@ export default function AttendanceManagementPage() {
         onClose={() => setSelected(null)}
         onDevicesChanged={() => void loadShell()}
       />
-
-      {photoModal && (
-        <AttendancePhotoModal
-          open
-          photos={photoModal.photos}
-          startIndex={photoModal.index}
-          allowDownload
-          onClose={() => setPhotoModal(null)}
-        />
-      )}
 
       <AttendancePdfPreview
         open={Boolean(pdfPreviewUrl)}

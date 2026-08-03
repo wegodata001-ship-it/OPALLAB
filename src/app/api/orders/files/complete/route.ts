@@ -1,5 +1,6 @@
 import { AppError } from "@/lib/errors/app-error";
 import { jsonError, jsonOk, parseJsonBody } from "@/lib/api/response";
+import { withServerTiming } from "@/lib/api/with-timing";
 import { assertCanUploadOrderFile, requireSessionUser } from "@/lib/rbac";
 import { completeOrderFileUpload } from "@/lib/orders/order-file-upload";
 import type { OrderFileCategory } from "@/lib/orders/order-file-taxonomy";
@@ -21,6 +22,7 @@ function decodePngDataUrl(dataUrl: string | undefined | null): Buffer | null {
 }
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
   try {
     const user = await requireSessionUser();
     await assertCanUploadOrderFile(user);
@@ -77,11 +79,14 @@ export async function POST(request: Request) {
       thumbnailBuffer: decodePngDataUrl(body.thumbnailDataUrl),
     });
 
-    return jsonOk({
-      file,
-      message: "הקובץ נשמר בהצלחה.",
-    });
+    return withServerTiming(
+      jsonOk({
+        file,
+        message: "הקובץ נשמר בהצלחה.",
+      }),
+      startedAt,
+    );
   } catch (error) {
-    return jsonError(error);
+    return withServerTiming(jsonError(error), startedAt);
   }
 }

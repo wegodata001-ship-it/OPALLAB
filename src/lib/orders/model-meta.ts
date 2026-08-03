@@ -25,6 +25,8 @@ export type ModelPerfTimings = {
   firstByteMs?: number;
   streamMs?: number;
   parseMs: number;
+  /** Sidecar MTL/texture fetch+decode (OBJ packs). */
+  textureMs?: number;
   geometryMs?: number;
   materialMs?: number;
   bboxMs?: number;

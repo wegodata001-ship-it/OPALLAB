@@ -3,10 +3,11 @@
 import { useState } from "react";
 import type { OrderWithRelations, MaterialType, WorkType, Gender } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input, Label, Textarea, Select } from "@/components/ui/input";
+import { Input, Label, Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DentalChart } from "@/components/DentalChart";
 import { ShadePicker } from "@/components/orders/shade-picker";
+import { TelegramOrderButton } from "@/components/orders/telegram-order-button";
 import { MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS } from "@/lib/constants/labels";
 import { useApp } from "@/providers/AppProvider";
 import { cn } from "@/lib/utils";
@@ -19,7 +20,7 @@ interface OrderEditFormProps {
 
 export function OrderEditForm({ order, onDone }: OrderEditFormProps) {
   const { doctors, updateOrder } = useApp();
-  const [doctorName, setDoctorName] = useState(order.doctor.name);
+  const [doctorName, setDoctorName] = useState(order.doctor?.name ?? "");
   const [patientName, setPatientName] = useState(order.patient.name);
   const [patientAge, setPatientAge] = useState(order.patient.age?.toString() ?? "");
   const [patientGender, setPatientGender] = useState<Gender | "">(order.patient.gender ?? "");
@@ -109,9 +110,19 @@ export function OrderEditForm({ order, onDone }: OrderEditFormProps) {
         <DentalChart selectedTeeth={selectedTeeth} onChange={setSelectedTeeth} />
         <div><Label>תיאור</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} /></div>
         <div><Label>הערות פנימיות</Label><Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} /></div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button onClick={handleSave}><Save className="h-4 w-4" />שמירה</Button>
           <Button variant="outline" onClick={onDone}>ביטול</Button>
+          <TelegramOrderButton
+            size="md"
+            order={{
+              serialNumber: order.serialNumber,
+              patientName,
+              doctorName: doctorName || order.doctor?.name || "—",
+              workTypes,
+              orderId: order.id,
+            }}
+          />
         </div>
       </CardContent>
     </Card>

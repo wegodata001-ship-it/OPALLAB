@@ -4,6 +4,18 @@ import { getFileExtension } from "@/lib/file-utils";
 export const MODEL3D_EXTS = ["stl", "obj", "ply", "glb", "gltf"] as const;
 export type Model3DExt = (typeof MODEL3D_EXTS)[number];
 
+/** Sidecar files that must travel with OBJ for full material fidelity. */
+export const MATERIAL_COMPANION_EXTS = [
+  "mtl",
+  "png",
+  "jpg",
+  "jpeg",
+  "bmp",
+  "webp",
+  "tif",
+  "tiff",
+] as const;
+
 export type ZipVirtualFs = Map<string, Uint8Array>;
 
 export type LoadedModelBundle = {
@@ -12,6 +24,17 @@ export type LoadedModelBundle = {
   buffer: ArrayBuffer;
   companions: ZipVirtualFs;
 };
+
+export function isMaterialCompanionName(fileName: string): boolean {
+  const ext = getFileExtension(fileName);
+  return (MATERIAL_COMPANION_EXTS as readonly string[]).includes(ext);
+}
+
+/** Prefer rich Object3D path (keeps MTL / textures / GLTF materials). */
+export function needsRichSceneLoad(fileName: string): boolean {
+  const ext = getFileExtension(fileName);
+  return ext === "obj" || ext === "glb" || ext === "gltf" || ext === "zip";
+}
 
 function isModelExt(ext: string): ext is Model3DExt {
   return (MODEL3D_EXTS as readonly string[]).includes(ext);
@@ -129,9 +152,10 @@ export async function createThreeObjectFromBundle(
       geometry,
       new THREE.MeshStandardMaterial({
         color: 0xc9a227,
-        metalness: 0.15,
-        roughness: 0.55,
+        metalness: 0.08,
+        roughness: 0.45,
         side: THREE.DoubleSide,
+        envMapIntensity: 1.1,
       }),
     );
   }
@@ -147,8 +171,9 @@ export async function createThreeObjectFromBundle(
         color: hasColor ? 0xffffff : 0xc9a227,
         vertexColors: hasColor,
         metalness: 0.08,
-        roughness: 0.65,
+        roughness: 0.55,
         side: THREE.DoubleSide,
+        envMapIntensity: 1.1,
       }),
     );
   }
@@ -159,7 +184,13 @@ export async function createThreeObjectFromBundle(
     const gltf = await new Promise<{ scene: unknown }>((resolve, reject) => {
       loader.parse(buffer, "", resolve, reject);
     });
-    return gltf.scene;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const scene = gltf.scene as any;
+    scene.traverse((child: { isMesh?: boolean; material?: unknown }) => {
+      if (!child.isMesh) return;
+      child.material = upgradeMaterialsToPbr(THREE, child.material);
+    });
+    return scene;
   }
 
   if (ext === "obj") {
@@ -171,48 +202,30 @@ export async function createThreeObjectFromBundle(
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let materials: any = null;
+    let textureCount = 0;
+
     if (mtlRef && companions.size) {
-      const mtlBytes =
-        companions.get(mtlRef) ||
-        companions.get(basename(mtlRef).toLowerCase()) ||
-        companions.get(normalizeZipPath(mtlRef));
+      const mtlBytes = lookupCompanion(companions, mtlRef);
       if (mtlBytes) {
         const mtlText = new TextDecoder().decode(mtlBytes);
         const mtlLoader = new MTLLoader();
         materials = mtlLoader.parse(mtlText, "");
         materials.preload();
 
+        const mapsByMaterial = parseMtlDiffuseMaps(mtlText);
         const mats = materials.materials || {};
-        for (const match of mtlText.matchAll(/^\s*map_Kd\s+(.+)\s*$/gim)) {
-          const texPath = match[1].trim().replace(/\\/g, "/");
-          const texBytes =
-            companions.get(texPath) || companions.get(basename(texPath).toLowerCase());
+        for (const [matName, texPath] of mapsByMaterial) {
+          const texBytes = lookupCompanion(companions, texPath);
           if (!texBytes) continue;
-          const texCopy = new Uint8Array(texBytes.byteLength);
-          texCopy.set(texBytes);
-          const blob = new Blob([texCopy]);
-          const url = URL.createObjectURL(blob);
-          const texture = await new Promise((resolve) => {
-            new THREE.TextureLoader().load(
-              url,
-              (t: unknown) => {
-                URL.revokeObjectURL(url);
-                resolve(t);
-              },
-              undefined,
-              () => {
-                URL.revokeObjectURL(url);
-                resolve(null);
-              },
-            );
-          });
+          const texture = await loadTextureFromBytes(THREE, texBytes);
           if (!texture) continue;
-          for (const mat of Object.values(mats) as Array<{
-            map?: unknown;
-            needsUpdate?: boolean;
-          }>) {
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.anisotropy = 8;
+          const mat = mats[matName];
+          if (mat) {
             mat.map = texture;
             mat.needsUpdate = true;
+            textureCount += 1;
           }
         }
       }
@@ -227,15 +240,117 @@ export async function createThreeObjectFromBundle(
       if (!materials) {
         child.material = new THREE.MeshStandardMaterial({
           color: 0xc9a227,
-          metalness: 0.15,
-          roughness: 0.55,
+          metalness: 0.08,
+          roughness: 0.45,
           side: THREE.DoubleSide,
+          envMapIntensity: 1.1,
         });
+      } else {
+        child.material = upgradeMaterialsToPbr(THREE, child.material);
       }
     });
 
+    object.userData = { ...(object.userData || {}), textureCount, hasMtl: Boolean(materials) };
     return object;
   }
 
   throw new Error(`פורמט .${ext} אינו נתמך ב־Viewer`);
+}
+
+function lookupCompanion(companions: ZipVirtualFs, path: string): Uint8Array | undefined {
+  const normalized = normalizeZipPath(path.trim());
+  return (
+    companions.get(normalized) ||
+    companions.get(basename(normalized).toLowerCase()) ||
+    companions.get(normalized.toLowerCase())
+  );
+}
+
+/** Map material name → diffuse texture path from MTL text. */
+function parseMtlDiffuseMaps(mtlText: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let current: string | null = null;
+  for (const raw of mtlText.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const newmtl = line.match(/^newmtl\s+(.+)$/i);
+    if (newmtl) {
+      current = newmtl[1]!.trim();
+      continue;
+    }
+    const mapKd = line.match(/^map_Kd\s+(.+)$/i);
+    if (mapKd && current) {
+      const tokens = mapKd[1]!.trim().replace(/\\/g, "/").split(/\s+/);
+      const texPath = tokens[tokens.length - 1]!;
+      out.set(current, texPath);
+    }
+  }
+  return out;
+}
+
+async function loadTextureFromBytes(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  THREE: any,
+  bytes: Uint8Array,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any> {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  const blob = new Blob([copy]);
+  const url = URL.createObjectURL(blob);
+  try {
+    return await new Promise((resolve) => {
+      new THREE.TextureLoader().load(
+        url,
+        (t: unknown) => resolve(t),
+        undefined,
+        () => resolve(null),
+      );
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** Convert Phong/Lambert (MTLLoader default) → MeshStandardMaterial for IBL/PBR. */
+function upgradeMaterialsToPbr(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  THREE: any,
+  material: unknown,
+): unknown {
+  const list = Array.isArray(material) ? material : [material];
+  const upgraded = list.map((mat) => {
+    if (!mat) {
+      return new THREE.MeshStandardMaterial({
+        color: 0xc9a227,
+        metalness: 0.08,
+        roughness: 0.45,
+        side: THREE.DoubleSide,
+        envMapIntensity: 1.1,
+      });
+    }
+    if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+      mat.envMapIntensity = mat.envMapIntensity ?? 1.1;
+      mat.side = THREE.DoubleSide;
+      return mat;
+    }
+    const std = new THREE.MeshStandardMaterial({
+      color: mat.color?.clone?.() ?? new THREE.Color(0xc9a227),
+      map: mat.map ?? null,
+      normalMap: mat.normalMap ?? null,
+      emissive: mat.emissive?.clone?.() ?? new THREE.Color(0x000000),
+      emissiveMap: mat.emissiveMap ?? null,
+      opacity: mat.opacity ?? 1,
+      transparent: Boolean(mat.transparent || (mat.opacity != null && mat.opacity < 1)),
+      metalness: 0.08,
+      roughness: 0.45,
+      side: THREE.DoubleSide,
+      envMapIntensity: 1.1,
+      vertexColors: Boolean(mat.vertexColors),
+      name: mat.name,
+    });
+    mat.dispose?.();
+    return std;
+  });
+  return Array.isArray(material) ? upgraded : upgraded[0];
 }

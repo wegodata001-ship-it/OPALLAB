@@ -54,9 +54,16 @@ export async function registerTrustedDevice(input: {
   deviceKey: string;
   gps: GateGps;
   device: GateDeviceInfo;
-  photoPath?: string | null;
   headers: Headers;
 }) {
+  await writeAuditLog({
+    userId: input.userId,
+    action: "enrollment_started",
+    entityType: "TrustedDevice",
+    entityId: input.deviceKey,
+    details: { source: "QR" },
+  });
+
   const existing = await prisma.trustedDevice.findUnique({ where: { deviceKey: input.deviceKey } });
   if (existing && existing.userId !== input.userId) {
     throw new AppError(
@@ -87,6 +94,19 @@ export async function registerTrustedDevice(input: {
     }
   }
 
+  await writeAuditLog({
+    userId: input.userId,
+    action: "gps_verified",
+    entityType: "TrustedDevice",
+    entityId: input.deviceKey,
+    details: {
+      source: "QR",
+      latitude: input.gps.latitude,
+      longitude: input.gps.longitude,
+      accuracy: input.gps.accuracy,
+    },
+  });
+
   const ip = clientIp(input.headers);
   const label = [input.device.deviceType, input.device.os, input.device.browser]
     .filter(Boolean)
@@ -108,7 +128,6 @@ export async function registerTrustedDevice(input: {
       registeredAt: new Date(),
       lastUsedAt: new Date(),
       lastIp: ip,
-      registrationPhotoPath: input.photoPath ?? null,
       registrationLatitude: input.gps.latitude,
       registrationLongitude: input.gps.longitude,
     },
@@ -123,10 +142,25 @@ export async function registerTrustedDevice(input: {
       timezone: input.device.timezone,
       lastUsedAt: new Date(),
       lastIp: ip,
-      registrationPhotoPath: input.photoPath ?? undefined,
       registrationLatitude: input.gps.latitude,
       registrationLongitude: input.gps.longitude,
       registeredAt: new Date(),
+    },
+  });
+
+  await writeAuditLog({
+    userId: input.userId,
+    action: "trusted_device_registered",
+    entityType: "TrustedDevice",
+    entityId: device.id,
+    details: {
+      source: "QR",
+      deviceKeyPreview: `${input.deviceKey.slice(0, 8)}…`,
+      ip,
+      os: input.device.os,
+      browser: input.device.browser,
+      latitude: input.gps.latitude,
+      longitude: input.gps.longitude,
     },
   });
 
@@ -139,7 +173,6 @@ export async function punchViaTrustedDevice(input: {
   device: GateDeviceInfo;
   headers: Headers;
   intendedAction: "check-in" | "check-out";
-  photoPath?: string | null;
 }): Promise<{
   action: "check-in" | "check-out";
   userName: string;
@@ -191,6 +224,20 @@ export async function punchViaTrustedDevice(input: {
     }
   }
 
+  await writeAuditLog({
+    userId: device.userId,
+    action: "gps_verified",
+    entityType: "TrustedDevice",
+    entityId: device.id,
+    details: {
+      source: "QR",
+      latitude: input.gps.latitude,
+      longitude: input.gps.longitude,
+      accuracy: input.gps.accuracy,
+      intendedAction: input.intendedAction,
+    },
+  });
+
   const ip = clientIp(input.headers);
   const meta = {
     latitude: input.gps.latitude,
@@ -199,7 +246,6 @@ export async function punchViaTrustedDevice(input: {
     device: input.device,
     trustedDeviceId: device.id,
     ipAddress: ip ?? undefined,
-    photoPath: input.photoPath ?? null,
   };
 
   const result = await appDataService.toggleAttendanceForUser(
@@ -216,20 +262,21 @@ export async function punchViaTrustedDevice(input: {
 
   await writeAuditLog({
     userId: device.userId,
-    action: result.action === "check-in" ? "ATTENDANCE_CHECK_IN" : "ATTENDANCE_CHECK_OUT",
+    action: result.action === "check-in" ? "check_in" : "check_out",
     entityType: "AttendanceRecord",
     entityId: result.recordId,
     details: {
       method: "TRUSTED_DEVICE",
+      source: "QR",
       deviceId: device.id,
       ip,
       latitude: input.gps.latitude,
       longitude: input.gps.longitude,
-      photoPath: input.photoPath ?? null,
       duplicate: result.duplicate,
       deviceLabel: device.label,
       os: input.device.os,
       browser: input.device.browser,
+      deviceType: input.device.deviceType,
     },
   });
 
@@ -243,8 +290,30 @@ export async function punchViaTrustedDevice(input: {
   };
 }
 
-export async function listTrustedDevices() {
+export type TrustedDeviceListItem = {
+  id: string;
+  userId: string;
+  userName: string;
+  username: string;
+  deviceKeyPreview: string;
+  deviceKey: string;
+  label: string | null;
+  browser: string | null;
+  os: string | null;
+  deviceType: string | null;
+  status: "ACTIVE" | "BLOCKED" | "REVOKED";
+  registeredAt: Date;
+  lastUsedAt: Date | null;
+  lastIp: string | null;
+  lastPunchAt: Date | null;
+  userAgent: string | null;
+};
+
+export async function listTrustedDevices(opts?: {
+  userId?: string;
+}): Promise<TrustedDeviceListItem[]> {
   const devices = await prisma.trustedDevice.findMany({
+    where: opts?.userId ? { userId: opts.userId } : undefined,
     include: {
       user: { select: { id: true, name: true, username: true, role: true, isActive: true } },
       attendanceRecords: {
@@ -262,6 +331,7 @@ export async function listTrustedDevices() {
     userName: d.user.name,
     username: d.user.username,
     deviceKeyPreview: `${d.deviceKey.slice(0, 8)}…`,
+    deviceKey: d.deviceKey,
     label: d.label,
     browser: d.browser,
     os: d.os,
@@ -271,6 +341,7 @@ export async function listTrustedDevices() {
     lastUsedAt: d.lastUsedAt,
     lastIp: d.lastIp,
     lastPunchAt: d.attendanceRecords[0]?.checkIn ?? null,
+    userAgent: d.userAgent,
   }));
 }
 

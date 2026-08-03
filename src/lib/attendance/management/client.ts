@@ -17,7 +17,6 @@ function toQueryString(
     format?: string;
     userId?: string;
     scope?: "me" | "management";
-    includePhotos?: boolean | number;
   },
 ): string {
   const params = new URLSearchParams();
@@ -67,18 +66,6 @@ export async function fetchEmployeeAttendanceStats(
 ): Promise<AttendanceEmployeeStats> {
   const qs = toQueryString({ ...query, view: "employee-stats", userId });
   return getJson(`/api/attendance/management?${qs}`);
-}
-
-export async function deleteAttendancePhoto(
-  recordId: string,
-  kind: "check-in" | "check-out",
-): Promise<void> {
-  const res = await fetch(
-    `/api/attendance/management?id=${encodeURIComponent(recordId)}&kind=${kind}`,
-    { method: "DELETE", credentials: "include" },
-  );
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error?.message ?? "מחיקת התמונה נכשלה");
 }
 
 export async function fetchActiveAttendance(
@@ -132,15 +119,6 @@ export async function fetchAttendanceRecord(id: string): Promise<AttendanceManag
     `/api/attendance/management?view=record&id=${encodeURIComponent(id)}`,
   );
   return reviveRecord(row) as AttendanceManagementRecord;
-}
-
-export async function fetchAttendancePhotoUrl(
-  recordId: string,
-  kind: "check-in" | "check-out",
-): Promise<{ url: string; path: string }> {
-  return getJson(
-    `/api/attendance/management?view=photo&id=${encodeURIComponent(recordId)}&kind=${kind}`,
-  );
 }
 
 export function attendanceExportUrl(query: AttendanceManagementQuery, format: "csv" | "pdf"): string {
