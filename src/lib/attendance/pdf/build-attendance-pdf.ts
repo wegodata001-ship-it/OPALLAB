@@ -4,14 +4,21 @@ import { formatDate, formatTime } from "@/lib/utils";
 import { googleMapsUrl } from "@/lib/geocode";
 import { ANOMALY_LABELS } from "@/lib/attendance/management/status";
 import type { AttendanceManagementRecord } from "@/lib/attendance/management/types";
-import { ensureAttendancePdfFonts, loadLogoDataUrl } from "@/lib/attendance/pdf/fonts";
+import {
+  autoText,
+  createPdfBuffer,
+  loadLogoDataUrl,
+  ltrText,
+  PDF_DEFAULT_FONT,
+  rtlText,
+  visualText,
+} from "@/lib/pdf";
 import { computeAttendanceReportKpis } from "@/lib/attendance/pdf/metrics";
 import {
   loadAttendancePhotoThumbs,
   recordsHavePhotos,
   type AttendancePhotoThumbs,
 } from "@/lib/attendance/pdf/photos";
-import { ltrText, rtlText, visualText } from "@/lib/attendance/pdf/rtl";
 
 export type AttendancePdfMeta = {
   generatedAt: Date;
@@ -65,44 +72,34 @@ function durationLabel(r: AttendanceManagementRecord): string {
   return "—";
 }
 
+/** Short GPS cell — no long Maps URLs inside the table. */
 function gpsCell(
   lat?: number | null,
   lng?: number | null,
   address?: string | null,
 ): TableCell {
   if (lat == null || lng == null) {
-    return rtlText("—", { fontSize: 7 });
+    return autoText("—", { fontSize: 8 });
   }
-  const coords = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
   const link = googleMapsUrl(lat, lng);
   const lines: Content[] = [
-    { ...ltrText(coords, { fontSize: 6.5, link }), alignment: "right" },
+    rtlText("הצג מיקום", { fontSize: 8, link, color: "#0369a1" }),
   ];
   if (address?.trim()) {
-    lines.push(rtlText(address.trim(), { fontSize: 6.5 }));
+    lines.push(autoText(address.trim(), { fontSize: 7, color: "#64748b" }));
+  } else {
+    lines.push(
+      ltrText(`${lat.toFixed(4)}, ${lng.toFixed(4)}`, { fontSize: 7, color: "#94a3b8" }),
+    );
   }
-  lines.push(rtlText("Google Maps", { fontSize: 6, link, color: "#0369a1" }));
-  return { stack: lines, margin: [0, 1, 0, 1] };
-}
-
-function photoCell(dataUrl?: string): TableCell {
-  if (!dataUrl) return rtlText("—", { fontSize: 7 });
-  return { image: dataUrl, width: 28, height: 28, alignment: "center" };
-}
-
-function cell(text: string, fontSize = 7.5): TableCell {
-  if (!text || text === "—") return rtlText("—", { fontSize });
-  if (/^[\d./:\-\s,*]+$/.test(text) || /^[A-Za-z0-9@._+\-]+$/.test(text)) {
-    return { ...ltrText(text, { fontSize }), alignment: "right" };
-  }
-  return rtlText(text, { fontSize });
+  return { stack: lines, margin: [1, 2, 1, 2] };
 }
 
 function headerCell(text: string): TableCell {
   return {
-    ...rtlText(text, { bold: true, fontSize: 7.5 }),
+    ...rtlText(text, { bold: true, fontSize: 9 }),
     fillColor: "#f5ecd3",
-    margin: [2, 3, 2, 3],
+    margin: [4, 5, 4, 5],
   };
 }
 
@@ -114,7 +111,7 @@ function buildTable(
 ): Content {
   const showEmployee = meta.mode === "general";
   const headers: TableCell[] = [];
-  if (showEmployee) headers.push(headerCell("עובד"));
+  if (showEmployee) headers.push(headerCell("שם עובד"));
   headers.push(
     headerCell("תאריך"),
     headerCell("יום"),
@@ -122,50 +119,61 @@ function buildTable(
     headerCell("יציאה"),
     headerCell("שעות"),
     headerCell("סטטוס"),
-    headerCell("GPS כניסה"),
-    headerCell("GPS יציאה"),
-    headerCell("כתובת"),
+    headerCell("GPS"),
   );
   if (showPhotos) {
-    headers.push(headerCell("תמונת כניסה"), headerCell("תמונת יציאה"));
+    headers.push(headerCell("תמונות"));
   }
 
   const body: TableCell[][] = [headers];
 
   for (const r of records) {
-    const address =
-      r.checkInAddress?.trim() ||
-      r.checkOutAddress?.trim() ||
-      "";
     const row: TableCell[] = [];
     if (showEmployee) {
       row.push(
-        cell(
-          `${r.employee.name}\n${USER_ROLE_LABELS[r.employee.role] ?? ""}`,
-          7,
-        ),
+        {
+          stack: [
+            autoText(r.employee.name, { fontSize: 9, bold: true }),
+            autoText(USER_ROLE_LABELS[r.employee.role] ?? "", { fontSize: 7, color: "#64748b" }),
+          ],
+          margin: [2, 2, 2, 2],
+        },
       );
     }
     row.push(
-      cell(formatDate(r.checkIn), 7.5),
-      cell(weekdayHe(r.checkIn), 7),
-      cell(formatTime(r.checkIn), 7.5),
-      cell(r.checkOut ? formatTime(r.checkOut) : "—", 7.5),
-      cell(durationLabel(r), 7.5),
-      cell(statusLabel(r), 6.5),
-      gpsCell(r.checkInLatitude, r.checkInLongitude, r.checkInAddress),
-      gpsCell(r.checkOutLatitude, r.checkOutLongitude, r.checkOutAddress),
-      cell(address || "—", 6.5),
+      autoText(formatDate(r.checkIn), { fontSize: 9 }),
+      autoText(weekdayHe(r.checkIn), { fontSize: 8 }),
+      autoText(formatTime(r.checkIn), { fontSize: 9 }),
+      autoText(r.checkOut ? formatTime(r.checkOut) : "—", { fontSize: 9 }),
+      autoText(durationLabel(r), { fontSize: 9 }),
+      autoText(statusLabel(r), { fontSize: 8 }),
+      gpsCell(
+        r.checkInLatitude ?? r.checkOutLatitude,
+        r.checkInLongitude ?? r.checkOutLongitude,
+        r.checkInAddress ?? r.checkOutAddress,
+      ),
     );
     if (showPhotos) {
       const t = thumbs.get(r.id);
-      row.push(photoCell(t?.checkIn), photoCell(t?.checkOut));
+      const cols: Array<{ width: number; image: string; height: number }> = [];
+      if (t?.checkIn) cols.push({ width: 30, image: t.checkIn, height: 28 });
+      if (t?.checkOut) cols.push({ width: 30, image: t.checkOut, height: 28 });
+      row.push(
+        cols.length
+          ? { columns: cols, columnGap: 4 }
+          : autoText("—", { fontSize: 8 }),
+      );
     }
     body.push(row);
   }
 
-  const colCount = headers.length;
-  const widths = Array.from({ length: colCount }, () => "*");
+  const widths = showEmployee
+    ? showPhotos
+      ? [70, 55, 35, 40, 40, 40, "*", 55, 64]
+      : [80, 60, 40, 45, 45, 45, "*", 60]
+    : showPhotos
+      ? [55, 40, 45, 45, 45, "*", 60, 64]
+      : [60, 45, 50, 50, 50, "*", 70];
 
   return {
     table: {
@@ -175,14 +183,14 @@ function buildTable(
       dontBreakRows: true,
     },
     layout: {
-      hLineWidth: () => 0.4,
-      vLineWidth: () => 0.4,
+      hLineWidth: () => 0.5,
+      vLineWidth: () => 0.5,
       hLineColor: () => "#d4d4d8",
       vLineColor: () => "#d4d4d8",
-      paddingLeft: () => 3,
-      paddingRight: () => 3,
-      paddingTop: () => 2,
-      paddingBottom: () => 2,
+      paddingLeft: () => 5,
+      paddingRight: () => 5,
+      paddingTop: () => 4,
+      paddingBottom: () => 4,
     },
   };
 }
@@ -190,17 +198,13 @@ function buildTable(
 function kpiBox(label: string, value: string): Content {
   return {
     stack: [
-      rtlText(label, { fontSize: 7, color: "#64748b" }),
+      rtlText(label, { fontSize: 8, color: "#64748b" }),
       {
-        text: value,
-        font: "NotoSans",
-        fontSize: 12,
-        bold: true,
-        alignment: "right",
-        margin: [0, 2, 0, 0],
+        ...ltrText(value, { bold: true, fontSize: 13 }),
+        margin: [0, 3, 0, 0],
       },
     ],
-    margin: [4, 4, 4, 4],
+    margin: [6, 6, 6, 6],
   };
 }
 
@@ -208,8 +212,6 @@ export async function buildAttendancePdf(opts: {
   records: AttendanceManagementRecord[];
   meta: AttendancePdfMeta;
 }): Promise<{ buffer: Buffer; filename: string; contentType: "application/pdf" }> {
-  const pdfmake = ensureAttendancePdfFonts();
-
   const includePhotos = opts.meta.includePhotos !== false;
   const showPhotos = includePhotos && recordsHavePhotos(opts.records);
   const thumbs = await loadAttendancePhotoThumbs(opts.records, showPhotos);
@@ -231,48 +233,45 @@ export async function buildAttendancePdf(opts: {
       ? `${opts.meta.dateFrom} – ${opts.meta.dateTo}`
       : "הכל";
 
-  const headerStack: Content[] = [
+  const content: Content[] = [
     {
       columns: [
         {
           width: "*",
           stack: [
-            {
-              text: "OPAL LAB – Attendance Report",
-              font: "NotoSans",
+            rtlText("OPAL LAB – Attendance Report", {
               bold: true,
-              fontSize: 14,
-              alignment: "right",
+              fontSize: 16,
               color: "#a8861f",
-            },
-            rtlText(LAB_INFO.fullName, { fontSize: 9, color: "#475569" }),
-            rtlText(LAB_INFO.subtitle, { fontSize: 8, color: "#64748b" }),
+            }),
+            rtlText(LAB_INFO.fullName, { fontSize: 10, color: "#475569" }),
+            rtlText(LAB_INFO.subtitle, { fontSize: 9, color: "#64748b" }),
           ],
         },
         ...(logo
-          ? [{ width: 42, image: logo, fit: [40, 40] as [number, number], alignment: "left" as const }]
+          ? [{ width: 44, image: logo, fit: [42, 42] as [number, number], alignment: "left" as const }]
           : []),
       ],
-      columnGap: 10,
-      margin: [0, 0, 0, 8],
+      columnGap: 12,
+      margin: [0, 0, 0, 10],
     },
     {
-      canvas: [{ type: "line", x1: 0, y1: 0, x2: 760, y2: 0, lineWidth: 1.2, lineColor: "#c9a227" }],
-      margin: [0, 0, 0, 10],
+      canvas: [{ type: "line", x1: 0, y1: 0, x2: 780, y2: 0, lineWidth: 1.4, lineColor: "#c9a227" }],
+      margin: [0, 0, 0, 12],
     },
     {
       columns: [
-        rtlText(`תאריך הפקה: ${createdLabel}`, { fontSize: 8 }),
-        rtlText(`מפיק הדוח: ${opts.meta.generatedByName}`, { fontSize: 8 }),
-        rtlText(`טווח תאריכים: ${rangeLabel}`, { fontSize: 8 }),
+        rtlText(`תאריך הפקה: ${createdLabel}`, { fontSize: 9 }),
+        rtlText(`מפיק הדוח: ${opts.meta.generatedByName}`, { fontSize: 9 }),
+        rtlText(`טווח תאריכים: ${rangeLabel}`, { fontSize: 9 }),
         ...(opts.meta.employeeName
-          ? [rtlText(`עובד: ${opts.meta.employeeName}`, { fontSize: 8 })]
-          : [rtlText(opts.meta.mode === "general" ? "דוח כללי" : "דוח אישי", { fontSize: 8 })]),
+          ? [rtlText(`עובד: ${opts.meta.employeeName}`, { fontSize: 9 })]
+          : [rtlText(opts.meta.mode === "general" ? "דוח כללי" : "דוח אישי", { fontSize: 9 })]),
       ],
-      columnGap: 8,
-      margin: [0, 0, 0, 10],
+      columnGap: 10,
+      margin: [0, 0, 0, 12],
     },
-    rtlText("סיכום", { bold: true, fontSize: 11 }),
+    rtlText("סיכום", { bold: true, fontSize: 12 }),
     {
       columns: [
         kpiBox("סך שעות עבודה", String(kpis.totalHours)),
@@ -281,25 +280,22 @@ export async function buildAttendancePdf(opts: {
         kpiBox("שעות נוספות", String(kpis.overtimeHours)),
         kpiBox("איחורים", String(kpis.lateCount)),
         kpiBox("ימים שעבד", String(kpis.workDays)),
-        kpiBox(
-          "ימים חסרים",
-          kpis.missingDays == null ? "—" : String(kpis.missingDays),
-        ),
+        kpiBox("ימים חסרים", kpis.missingDays == null ? "—" : String(kpis.missingDays)),
       ],
-      margin: [0, 4, 0, 12],
+      margin: [0, 6, 0, 14],
     },
-    rtlText("טבלת נוכחות", { bold: true, fontSize: 11 }),
-    { text: " ", margin: [0, 2, 0, 0] },
+    rtlText("טבלת נוכחות", { bold: true, fontSize: 12 }),
+    { text: " ", margin: [0, 4, 0, 0] },
     buildTable(opts.records, opts.meta, thumbs, showPhotos),
   ];
 
   const docDefinition: TDocumentDefinitions = {
     pageSize: "A4",
     pageOrientation: "landscape",
-    pageMargins: [28, 48, 28, 36],
+    pageMargins: [28, 50, 28, 40],
     defaultStyle: {
-      font: "NotoHebrew",
-      fontSize: 8,
+      font: PDF_DEFAULT_FONT,
+      fontSize: 9,
       alignment: "right",
     },
     info: {
@@ -308,19 +304,19 @@ export async function buildAttendancePdf(opts: {
       creator: "OPAL LAB",
     },
     header: () => ({
-      margin: [28, 14, 28, 0],
+      margin: [28, 16, 28, 0],
       columns: [
         {
           text: visualText("דוח נוכחות"),
-          font: "NotoHebrew",
-          fontSize: 8,
+          font: PDF_DEFAULT_FONT,
+          fontSize: 9,
           color: "#64748b",
           alignment: "right",
         },
         {
           text: "OPAL LAB",
-          font: "NotoSans",
-          fontSize: 8,
+          font: PDF_DEFAULT_FONT,
+          fontSize: 9,
           bold: true,
           color: "#a8861f",
           alignment: "left",
@@ -328,35 +324,35 @@ export async function buildAttendancePdf(opts: {
       ],
     }),
     footer: (currentPage, pageCount) => ({
-      margin: [28, 0, 28, 16],
+      margin: [28, 0, 28, 18],
       columns: [
         {
           text: visualText("OPAL LAB"),
-          font: "NotoHebrew",
-          fontSize: 7,
+          font: PDF_DEFAULT_FONT,
+          fontSize: 8,
           color: "#94a3b8",
           alignment: "right",
         },
         {
           text: `${currentPage} / ${pageCount}`,
-          font: "NotoSans",
-          fontSize: 7,
+          font: PDF_DEFAULT_FONT,
+          fontSize: 8,
           color: "#94a3b8",
           alignment: "center",
         },
         {
           text: createdLabel,
-          font: "NotoSans",
-          fontSize: 7,
+          font: PDF_DEFAULT_FONT,
+          fontSize: 8,
           color: "#94a3b8",
           alignment: "left",
         },
       ],
     }),
-    content: headerStack,
+    content,
   };
 
-  const buffer = (await pdfmake.createPdf(docDefinition).getBuffer()) as Buffer;
+  const buffer = await createPdfBuffer(docDefinition);
   return {
     buffer,
     filename: stampFilename(opts.meta.generatedAt),

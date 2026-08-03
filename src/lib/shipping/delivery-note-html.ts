@@ -45,21 +45,21 @@ export function buildDeliveryNoteHtml(input: {
         </div>`;
 
   return `
-      <div style="font-family:Arial,sans-serif;direction:rtl;max-width:720px;margin:0 auto">
-        <h1 style="text-align:center;color:#0f172a">${LAB_INFO.name}</h1>
-        <h2 style="text-align:center">תעודת משלוח ${note}</h2>
-        <p style="text-align:center;color:#64748b">תאריך: ${formatDate(issued)}</p>
-        <table style="width:100%;border-collapse:collapse;margin-top:16px" border="1" cellpadding="8">
-          <tr><td><b>מספר תעודה</b></td><td>${note}</td></tr>
-          <tr><td><b>מספר הזמנה</b></td><td>${order.serialNumber}</td></tr>
-          <tr><td><b>רופא</b></td><td>${order.doctor.name}</td></tr>
-          <tr><td><b>מרפאה</b></td><td>${order.doctor.clinic ?? order.doctor.address ?? "—"}</td></tr>
-          <tr><td><b>מטופל</b></td><td>${order.patient.name}</td></tr>
-          <tr><td><b>שיניים</b></td><td>${teeth}</td></tr>
-          <tr><td><b>סוג עבודה</b></td><td>${work}</td></tr>
-          <tr><td><b>כמות</b></td><td>1</td></tr>
-          <tr><td><b>הערות</b></td><td>${order.description ?? order.notes ?? "—"}</td></tr>
-          <tr><td><b>שליח</b></td><td>${courierLabel ?? "—"}</td></tr>
+      <div style="font-family:'Rubik','Noto Sans Arabic',Arial,sans-serif;direction:rtl;unicode-bidi:embed;max-width:720px;margin:0 auto;text-align:right;line-height:1.55">
+        <h1 style="text-align:center;color:#0f172a;font-weight:700">${LAB_INFO.name}</h1>
+        <h2 style="text-align:center;font-weight:700">תעודת משלוח ${note}</h2>
+        <p style="text-align:center;color:#64748b">תאריך: <span dir="ltr" style="unicode-bidi:embed">${formatDate(issued)}</span></p>
+        <table style="width:100%;border-collapse:collapse;margin-top:16px;direction:rtl" border="1" cellpadding="10">
+          <tr><td style="text-align:right"><b>מספר תעודה</b></td><td style="text-align:right" dir="ltr">${note}</td></tr>
+          <tr><td style="text-align:right"><b>מספר הזמנה</b></td><td style="text-align:right" dir="ltr">${order.serialNumber}</td></tr>
+          <tr><td style="text-align:right"><b>רופא</b></td><td style="text-align:right">${order.doctor.name}</td></tr>
+          <tr><td style="text-align:right"><b>מרפאה</b></td><td style="text-align:right">${order.doctor.clinic ?? order.doctor.address ?? "—"}</td></tr>
+          <tr><td style="text-align:right"><b>מטופל</b></td><td style="text-align:right">${order.patient.name}</td></tr>
+          <tr><td style="text-align:right"><b>שיניים</b></td><td style="text-align:right" dir="ltr">${teeth}</td></tr>
+          <tr><td style="text-align:right"><b>סוג עבודה</b></td><td style="text-align:right">${work}</td></tr>
+          <tr><td style="text-align:right"><b>כמות</b></td><td style="text-align:right" dir="ltr">1</td></tr>
+          <tr><td style="text-align:right"><b>הערות</b></td><td style="text-align:right">${order.description ?? order.notes ?? "—"}</td></tr>
+          <tr><td style="text-align:right"><b>שליח</b></td><td style="text-align:right">${courierLabel ?? "—"}</td></tr>
         </table>
         ${signatureBlock}
         ${labLine}
