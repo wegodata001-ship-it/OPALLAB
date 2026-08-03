@@ -26,7 +26,13 @@ export function shippingLog(
     | "db:start"
     | "db:end"
     | "ui:updated"
-    | "error",
+    | "error"
+    | "CREATE_PDF"
+    | "UPLOAD_PDF"
+    | "GENERATE_PUBLIC_URL"
+    | "OPEN_WHATSAPP"
+    | "SUCCESS"
+    | "ERROR",
   action: string,
   detail?: Record<string, unknown>,
 ): void {

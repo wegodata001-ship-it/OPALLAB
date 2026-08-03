@@ -1,104 +1,114 @@
 import {
   Color3,
+  Material,
   PBRMaterial,
   StandardMaterial,
+  VertexBuffer,
   type AbstractMesh,
-  type Material,
   type Scene,
 } from "@babylonjs/core";
-import type { ModelFormat, ViewerRenderMode } from "./types";
+import type { ModelFormat, SceneLayerId, ViewerRenderMode } from "./types";
+import { LAYER_COLORS, hexToColor3Components } from "./Utils";
 
-const DENTAL_ALBEDO = new Color3(0.92, 0.9, 0.86);
+function colorOf(layer: SceneLayerId): Color3 {
+  const [r, g, b] = hexToColor3Components(LAYER_COLORS[layer]);
+  return new Color3(r, g, b);
+}
 
-export function createDefaultPbr(scene: Scene, name: string): PBRMaterial {
-  const mat = new PBRMaterial(name, scene);
-  mat.albedoColor = DENTAL_ALBEDO.clone();
-  mat.metallic = 0.05;
-  mat.roughness = 0.45;
-  mat.environmentIntensity = 0.7;
+export function createMaterialForMesh(
+  scene: Scene,
+  name: string,
+  format: ModelFormat,
+  layer: SceneLayerId,
+  mesh: AbstractMesh,
+): Material {
+  const base = colorOf(layer);
+
+  if (format === "ply" && hasVertexColors(mesh)) {
+    const mat = new StandardMaterial(`${name}_ply`, scene);
+    mat.diffuseColor = Color3.White();
+    mat.specularColor = new Color3(0.08, 0.08, 0.08);
+    mat.emissiveColor = Color3.Black();
+    mat.backFaceCulling = false;
+    mat.freeze();
+    return mat;
+  }
+
+  if (format === "glb" || format === "gltf") {
+    // Keep native materials when present
+    if (mesh.material) return mesh.material;
+  }
+
+  if (format === "obj") {
+    const mat = new StandardMaterial(`${name}_obj`, scene);
+    mat.diffuseColor = base;
+    mat.specularColor = new Color3(0.12, 0.12, 0.12);
+    mat.ambientColor = base.scale(0.35);
+    mat.backFaceCulling = false;
+    mat.freeze();
+    return mat;
+  }
+
+  // STL / default → dental PBR
+  const mat = new PBRMaterial(`${name}_pbr`, scene);
+  mat.albedoColor = base;
+  mat.metallic = layer === "implant" ? 0.85 : 0.05;
+  mat.roughness = layer === "implant" ? 0.35 : layer === "gingiva" ? 0.55 : 0.42;
+  mat.environmentIntensity = 0.85;
   mat.backFaceCulling = false;
-  mat.twoSidedLighting = true;
+  mat.freeze();
   return mat;
 }
 
-/**
- * Apply materials per format rules.
- * PLY keeps vertex colors when present.
- */
-export function applyFormatMaterials(
-  meshes: AbstractMesh[],
-  scene: Scene,
-  format: ModelFormat,
-): void {
+function hasVertexColors(mesh: AbstractMesh): boolean {
+  const data = mesh.getVerticesData(VertexBuffer.ColorKind);
+  return !!data && data.length > 0;
+}
+
+export function applyRenderMode(meshes: AbstractMesh[], mode: ViewerRenderMode): void {
   for (const mesh of meshes) {
-    if (!mesh.getTotalVertices?.() || mesh.getTotalVertices() === 0) continue;
-
-    const hasVertexColors = Boolean(
-      mesh.getVerticesData?.("color") ||
-        mesh.isVerticesDataPresent?.("color"),
-    );
-
-    if (format === "ply" && hasVertexColors) {
-      // Vertex colors are sampled when COLOR buffer is present (StandardMaterial).
-      const std = new StandardMaterial(`${mesh.name}_ply_vc`, scene);
-      std.diffuseColor = Color3.White();
-      std.specularColor = new Color3(0.1, 0.1, 0.1);
-      std.backFaceCulling = false;
-      std.sideOrientation = 0;
-      mesh.material = std;
-      continue;
-    }
-
-    if (format === "obj") {
-      // Keep authored materials when present; otherwise PBR dental default
-      if (mesh.material && !(mesh.material instanceof StandardMaterial && !mesh.material.diffuseTexture)) {
-        if (mesh.material instanceof StandardMaterial || mesh.material instanceof PBRMaterial) {
-          mesh.material.backFaceCulling = false;
-          continue;
+    const mats = collectMaterials(mesh);
+    for (const mat of mats) {
+      if (mode === "wireframe") {
+        mat.wireframe = true;
+        mat.alpha = 1;
+        mat.transparencyMode = Material.MATERIAL_OPAQUE;
+      } else if (mode === "transparent") {
+        mat.wireframe = false;
+        mat.alpha = 0.45;
+        mat.transparencyMode = Material.MATERIAL_ALPHABLEND;
+      } else if (mode === "xray") {
+        mat.wireframe = false;
+        mat.alpha = 0.22;
+        mat.transparencyMode = Material.MATERIAL_ALPHABLEND;
+        if (mat instanceof PBRMaterial) {
+          mat.emissiveColor = mat.albedoColor.scale(0.15);
+        }
+      } else {
+        mat.wireframe = false;
+        mat.alpha = 1;
+        mat.transparencyMode = Material.MATERIAL_OPAQUE;
+        if (mat instanceof PBRMaterial) {
+          mat.emissiveColor = Color3.Black();
         }
       }
-      if (!mesh.material) {
-        mesh.material = createDefaultPbr(scene, `${mesh.name}_obj_pbr`);
-      }
-      continue;
-    }
-
-    // STL / GLB / GLTF / default → PBR
-    if (format === "stl" || !mesh.material) {
-      mesh.material = createDefaultPbr(scene, `${mesh.name}_pbr`);
-    } else if (mesh.material instanceof PBRMaterial) {
-      mesh.material.backFaceCulling = false;
-      mesh.material.twoSidedLighting = true;
+      mat.markAsDirty(Material.MiscDirtyFlag);
     }
   }
 }
 
-export function applyRenderMode(
-  meshes: AbstractMesh[],
-  mode: ViewerRenderMode,
-): void {
-  for (const mesh of meshes) {
-    const mat = mesh.material as Material | null;
-    if (!mat) continue;
+function collectMaterials(mesh: AbstractMesh): Material[] {
+  if (!mesh.material) return [];
+  const multi = mesh.material as Material & { subMaterials?: (Material | null)[] };
+  if (Array.isArray(multi.subMaterials)) {
+    return multi.subMaterials.filter((m): m is Material => !!m);
+  }
+  return [mesh.material];
+}
 
-    mat.wireframe = mode === "wireframe";
-
-    if (mat instanceof PBRMaterial) {
-      if (mode === "transparent" || mode === "xray") {
-        mat.alpha = mode === "xray" ? 0.25 : 0.45;
-        mat.transparencyMode = PBRMaterial.PBRMATERIAL_ALPHABLEND;
-      } else {
-        mat.alpha = 1;
-        mat.transparencyMode = PBRMaterial.PBRMATERIAL_OPAQUE;
-      }
-    } else if (mat instanceof StandardMaterial) {
-      if (mode === "transparent" || mode === "xray") {
-        mat.alpha = mode === "xray" ? 0.25 : 0.45;
-        mat.transparencyMode = 2; // ALPHABLEND
-      } else {
-        mat.alpha = 1;
-        mat.transparencyMode = 0;
-      }
-    }
+export function setMeshVisibility(meshes: AbstractMesh[], visible: boolean): void {
+  for (const m of meshes) {
+    m.setEnabled(visible);
+    m.isVisible = visible;
   }
 }

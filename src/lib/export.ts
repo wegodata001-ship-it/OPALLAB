@@ -1,11 +1,20 @@
 import { LAB_INFO } from "@/lib/constants/labels";
+import { normalizeWhatsAppPhone } from "@/lib/shipping/phone";
 
-export function shareWhatsApp(text: string, phone?: string) {
+/** Open WhatsApp chat. Returns false if the popup was blocked. */
+export function shareWhatsApp(text: string, phone?: string): boolean {
+  const digits = phone ? normalizeWhatsAppPhone(phone) : null;
   const encoded = encodeURIComponent(text);
-  const url = phone
-    ? `https://wa.me/${phone.replace(/\D/g, "")}?text=${encoded}`
+  const url = digits
+    ? `https://wa.me/${digits}?text=${encoded}`
     : `https://wa.me/?text=${encoded}`;
-  window.open(url, "_blank");
+  return openWhatsAppUrl(url);
+}
+
+/** Open a prebuilt wa.me URL. Returns false if blocked by the browser. */
+export function openWhatsAppUrl(url: string): boolean {
+  const win = window.open(url, "_blank", "noopener,noreferrer");
+  return !!win;
 }
 
 export function downloadTextAsFile(content: string, filename: string) {

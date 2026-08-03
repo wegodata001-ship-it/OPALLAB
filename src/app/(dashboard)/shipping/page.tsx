@@ -10,8 +10,7 @@ import { useApp } from "@/providers/AppProvider";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { formatDateTime } from "@/lib/utils";
 import { filterByDateRange } from "@/lib/date-filter";
-import { printHtml, shareWhatsApp } from "@/lib/export";
-import { LAB_INFO } from "@/lib/constants/labels";
+import { openWhatsAppUrl, printHtml } from "@/lib/export";
 import type { DateRange, OrderWithRelations, Shipment } from "@/lib/types";
 import {
   Package,
@@ -36,6 +35,8 @@ import {
 } from "@/lib/shipping/delivery-note-html";
 import { apiDelete, apiPost, apiPut } from "@/lib/api/client";
 import { shippingLog, shippingTimed } from "@/lib/shipping/action-log";
+
+type WhatsAppPhase = "idle" | "pdf" | "upload" | "open" | "done" | "error";
 
 function getDeviceId(): string {
   if (typeof window === "undefined") return "";
@@ -78,7 +79,90 @@ export default function ShippingPage() {
   const [archiveBusy, setArchiveBusy] = useState<string | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirmSuccess, setConfirmSuccess] = useState<string | null>(null);
+  const [waBusyId, setWaBusyId] = useState<string | null>(null);
+  const [waPhase, setWaPhase] = useState<WhatsAppPhase>("idle");
+  const [waMessage, setWaMessage] = useState<string | null>(null);
   const actionLock = useRef<Set<string>>(new Set());
+
+  const shareShipmentWhatsApp = useCallback(async (shipmentId: string) => {
+    if (waBusyId) return;
+    shippingLog("click", "whatsapp", { shipmentId });
+    setWaBusyId(shipmentId);
+    setWaPhase("pdf");
+    setWaMessage("יוצר PDF...");
+    const timer = shippingTimed("whatsapp");
+    try {
+      shippingLog("api:start", "whatsapp", { shipmentId });
+
+      const data = await apiPost<{
+        phone: string;
+        pdfPublicUrl: string;
+        message: string;
+        waUrl: string;
+        created: boolean;
+        serialNumber: string;
+      }>(`/api/shipments/${shipmentId}/whatsapp`);
+
+      setWaPhase("upload");
+      setWaMessage(data.created ? "מעלה..." : "קישור PDF מוכן...");
+      shippingLog("GENERATE_PUBLIC_URL", "whatsapp", {
+        shipmentId,
+        pdfPublicUrl: data.pdfPublicUrl,
+        created: data.created,
+      });
+
+      setWaPhase("open");
+      setWaMessage("פותח WhatsApp...");
+      shippingLog("OPEN_WHATSAPP", "whatsapp", { shipmentId, phone: data.phone });
+
+      const opened = openWhatsAppUrl(data.waUrl);
+      if (!opened) {
+        shippingLog("ERROR", "whatsapp", { shipmentId, reason: "popup-blocked" });
+        void apiPost(`/api/shipments/${shipmentId}/whatsapp/audit`, {
+          action: "ERROR",
+          details: { phase: "OPEN_WHATSAPP", reason: "popup-blocked", waUrl: data.waUrl },
+        });
+        setWaPhase("error");
+        setWaMessage("WhatsApp נחסם על ידי הדפדפן. אפשרו חלונות קופצים ונסו שוב.");
+        // Fallback: navigate so the user still gets the ready message + PDF link
+        window.setTimeout(() => {
+          window.location.assign(data.waUrl);
+        }, 400);
+        timer.end("error", { reason: "popup-blocked" });
+        return;
+      }
+
+      void apiPost(`/api/shipments/${shipmentId}/whatsapp/audit`, {
+        action: "OPEN_WHATSAPP",
+        details: { phone: data.phone, pdfPublicUrl: data.pdfPublicUrl },
+      });
+      void apiPost(`/api/shipments/${shipmentId}/whatsapp/audit`, {
+        action: "SUCCESS",
+        details: { pdfPublicUrl: data.pdfPublicUrl },
+      });
+
+      shippingLog("SUCCESS", "whatsapp", { shipmentId });
+      setWaPhase("done");
+      setWaMessage("בוצע בהצלחה.");
+      timer.end("ui:updated", { pdfPublicUrl: data.pdfPublicUrl });
+      window.setTimeout(() => {
+        setWaPhase("idle");
+        setWaMessage(null);
+      }, 3500);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "שליחת WhatsApp נכשלה";
+      shippingLog("ERROR", "whatsapp", { shipmentId, message });
+      void apiPost(`/api/shipments/${shipmentId}/whatsapp/audit`, {
+        action: "ERROR",
+        details: { message },
+      });
+      setWaPhase("error");
+      setWaMessage(message);
+      timer.end("error", { message });
+    } finally {
+      setWaBusyId(null);
+    }
+  }, [waBusyId]);
 
   const withActionLock = useCallback(async <T,>(key: string, fn: () => Promise<T>): Promise<T | undefined> => {
     if (actionLock.current.has(key)) {
@@ -545,6 +629,20 @@ export default function ShippingPage() {
       ) : (
         <>
           <DateRangeFilter value={dateRange} onChange={setDateRange} className="mb-4" />
+          {waMessage && (
+            <div
+              className={cn(
+                "mb-3 rounded-xl border px-3 py-2 text-sm",
+                waPhase === "error"
+                  ? "border-red-200 bg-red-50 text-red-800"
+                  : waPhase === "done"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : "border-slate-200 bg-slate-50 text-slate-700",
+              )}
+            >
+              {waMessage}
+            </div>
+          )}
           <div className="space-y-3">
             {archivedShipments.map((s) => {
               const locked = Boolean(s.lockedAt);
@@ -580,13 +678,24 @@ export default function ShippingPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() =>
-                            shareWhatsApp(
-                              `תעודת משלוח ${s.deliveryNote}\n${LAB_INFO.name}\n${s.order?.serialNumber}`,
-                            )
-                          }
+                          disabled={waBusyId === s.id}
+                          onClick={() => void shareShipmentWhatsApp(s.id)}
+                          title="שליחת תעודת משלוח ב-WhatsApp עם קישור PDF"
                         >
-                          WhatsApp
+                          {waBusyId === s.id ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              {waPhase === "pdf"
+                                ? "יוצר PDF..."
+                                : waPhase === "upload"
+                                  ? "מעלה..."
+                                  : waPhase === "open"
+                                    ? "פותח..."
+                                    : "WhatsApp"}
+                            </>
+                          ) : (
+                            "WhatsApp"
+                          )}
                         </Button>
                         {!locked && (
                           <Button

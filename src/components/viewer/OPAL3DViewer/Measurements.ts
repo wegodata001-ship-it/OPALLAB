@@ -1,122 +1,93 @@
 import {
   Color3,
+  LinesMesh,
   MeshBuilder,
+  PointerEventTypes,
   StandardMaterial,
   Vector3,
   type AbstractMesh,
-  type LinesMesh,
+  type Observer,
+  type PointerInfo,
   type Scene,
 } from "@babylonjs/core";
 
 export type MeasurementTool = {
-  enabled: boolean;
-  enable: () => void;
-  disable: () => void;
+  setEnabled: (on: boolean) => void;
   clear: () => void;
   dispose: () => void;
-  getLastDistanceMm: () => number | null;
 };
 
-/**
- * Simple pick-two-points distance measurement (scene units × scale ≈ mm for dental scans).
- * Scale factor assumes models are auto-scaled; we report relative units labeled mm after denormalizing via mesh bounding size if possible.
- */
 export function createMeasurementTool(
   scene: Scene,
   getMeshes: () => AbstractMesh[],
-  onDistance?: (mm: number | null) => void,
+  onDistance: (mm: number | null) => void,
 ): MeasurementTool {
   let enabled = false;
-  let first: Vector3 | null = null;
-  let line: LinesMesh | null = null;
-  let lastMm: number | null = null;
+  let points: Vector3[] = [];
   const markers: AbstractMesh[] = [];
-
-  const mat = new StandardMaterial("measureMat", scene);
-  mat.emissiveColor = new Color3(0.95, 0.75, 0.15);
-  mat.disableLighting = true;
+  let line: LinesMesh | null = null;
+  let obs: Observer<PointerInfo> | null = null;
 
   const clear = () => {
-    first = null;
-    lastMm = null;
-    onDistance?.(null);
-    line?.dispose();
-    line = null;
     for (const m of markers) m.dispose();
     markers.length = 0;
+    line?.dispose();
+    line = null;
+    points = [];
+    onDistance(null);
   };
 
   const addMarker = (p: Vector3) => {
-    const s = MeshBuilder.CreateSphere(
-      `mpt_${markers.length}`,
-      { diameter: 0.03 },
-      scene,
-    );
-    s.position = p.clone();
+    const s = MeshBuilder.CreateSphere(`m${markers.length}`, { diameter: 0.6 }, scene);
+    s.position.copyFrom(p);
+    const mat = new StandardMaterial(`mMat${markers.length}`, scene);
+    mat.emissiveColor = new Color3(1, 0.75, 0.2);
+    mat.disableLighting = true;
     s.material = mat;
     s.isPickable = false;
     markers.push(s);
   };
 
-  const observer = scene.onPointerObservable.add((info) => {
-    if (!enabled) return;
-    if (info.type !== 1 /* POINTERDOWN */) return;
-    if (info.event.button !== 0) return;
-
-    const pick = scene.pick(
-      scene.pointerX,
-      scene.pointerY,
-      (m) => getMeshes().includes(m as AbstractMesh),
-    );
-    if (!pick?.hit || !pick.pickedPoint) return;
-
-    const p = pick.pickedPoint.clone();
-    if (!first) {
-      clear();
-      first = p;
-      addMarker(p);
-      return;
-    }
-
-    addMarker(p);
+  const drawLine = () => {
     line?.dispose();
+    if (points.length < 2) return;
     line = MeshBuilder.CreateLines(
       "measureLine",
-      { points: [first, p] },
+      { points: [points[0], points[1]], updatable: false },
       scene,
     );
-    line.color = new Color3(0.95, 0.75, 0.15);
+    line.color = new Color3(1, 0.85, 0.2);
+  };
 
-    const distScene = Vector3.Distance(first, p);
-    // Reverse auto-scale heuristically: models scaled to ~2 units max dim
-    const meshes = getMeshes();
-    let mm = distScene * 10; // default guess
-    if (meshes.length) {
-      // If original dental scans are typically tens of mm, report scene*50 as rough mm
-      mm = Math.round(distScene * 50 * 10) / 10;
+  const onPointer = (info: PointerInfo) => {
+    if (!enabled) return;
+    if (info.type !== PointerEventTypes.POINTERTAP) return;
+    const pick = scene.pick(scene.pointerX, scene.pointerY, (m) =>
+      getMeshes().includes(m),
+    );
+    if (!pick?.hit || !pick.pickedPoint) return;
+    if (points.length >= 2) clear();
+    points.push(pick.pickedPoint.clone());
+    addMarker(pick.pickedPoint);
+    if (points.length === 2) {
+      drawLine();
+      const dist = Vector3.Distance(points[0], points[1]);
+      onDistance(Math.round(dist * 100) / 100);
     }
-    lastMm = mm;
-    onDistance?.(mm);
-    first = null;
-  });
+  };
+
+  obs = scene.onPointerObservable.add(onPointer);
 
   return {
-    get enabled() {
-      return enabled;
-    },
-    enable: () => {
-      enabled = true;
-    },
-    disable: () => {
-      enabled = false;
-      clear();
+    setEnabled: (on) => {
+      enabled = on;
+      if (!on) clear();
     },
     clear,
     dispose: () => {
-      scene.onPointerObservable.remove(observer);
       clear();
-      mat.dispose();
+      if (obs) scene.onPointerObservable.remove(obs);
+      obs = null;
     },
-    getLastDistanceMm: () => lastMm,
   };
 }

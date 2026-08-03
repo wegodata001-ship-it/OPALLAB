@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -13,7 +13,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ModelViewer3D } from "@/components/orders/model-viewer-3d";
+import { OPAL3DViewer, type SceneAsset } from "@/components/viewer/OPAL3DViewer";
 import { cn } from "@/lib/utils";
 import type { FmFile } from "@/lib/file-manager-v2/types";
 
@@ -33,6 +33,19 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
   const file = index != null ? files[index] : null;
   const hasPrev = index != null && index > 0;
   const hasNext = index != null && index < files.length - 1;
+
+  const sceneFiles = useMemo((): SceneAsset[] => {
+    return files
+      .filter((f) => f.kind === "model3d")
+      .map((f) => ({
+        id: f.fileId || f.id,
+        fileName: f.fileName,
+        file: f.localFile ?? null,
+        fileId: f.fileId,
+        fileSize: f.fileSize,
+        primary: file ? f.id === file.id : false,
+      }));
+  }, [files, file]);
 
   useEffect(() => {
     setZoom(1);
@@ -59,6 +72,9 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
   }, [index, hasNext, onNavigate]);
 
   if (index == null || !file) return null;
+
+  const canViewModel =
+    file.kind === "model3d" && (file.localFile || file.fileId || sceneFiles.length > 0);
 
   return (
     <div className="fixed inset-0 z-[220] flex items-center justify-center">
@@ -119,14 +135,18 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
             </button>
           )}
 
-          {file.kind === "model3d" && file.localFile && (
-            <ModelViewer3D
+          {canViewModel && (
+            <OPAL3DViewer
+              key={`fm-v3-${file.id}`}
+              sceneFiles={sceneFiles.length ? sceneFiles : undefined}
               file={file.localFile}
               fileName={file.fileName}
+              fileId={file.fileId}
+              fileSize={file.fileSize}
               className={fullscreen ? "min-h-[calc(100vh-80px)] w-full" : "min-h-[420px] w-full"}
             />
           )}
-          {file.kind === "model3d" && !file.localFile && file.previewUrl && (
+          {file.kind === "model3d" && !canViewModel && file.previewUrl && (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={file.previewUrl} alt="" className="max-h-[70vh] object-contain" />
           )}

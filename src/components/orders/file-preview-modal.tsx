@@ -10,8 +10,7 @@ import {
   isDentalScanHtml,
 } from "@/lib/file-utils";
 import { Button } from "@/components/ui/button";
-import { ModelViewer3D } from "@/components/orders/model-viewer-3d";
-import { OPAL3DViewer } from "@/components/viewer/OPAL3DViewer";
+import { OPAL3DViewer, type SceneAsset } from "@/components/viewer/OPAL3DViewer";
 import {
   X,
   Download,
@@ -24,46 +23,58 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const V2_PREF_KEY = "opal-viewer-v2-preview";
-
 interface FilePreviewModalProps {
   file: OrderFile | null;
-  /** Related scan files (Upper/Lower/Bite) shown together in the 3D viewer. */
+  /** All mesh files for the order — loaded together as a dental scene. */
+  sceneFiles?: OrderFile[];
+  /** @deprecated use sceneFiles */
   relatedFiles?: OrderFile[];
   onClose: () => void;
 }
 
-export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePreviewModalProps) {
+export function FilePreviewModal({
+  file,
+  sceneFiles = [],
+  relatedFiles = [],
+  onClose,
+}: FilePreviewModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [isScanViewer, setIsScanViewer] = useState(false);
-  /** Parallel Babylon V2 — off by default; old Three.js viewer stays primary. */
-  const [useViewerV2, setUseViewerV2] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-
-  useEffect(() => {
-    try {
-      setUseViewerV2(localStorage.getItem(V2_PREF_KEY) === "1");
-    } catch {
-      /* ignore */
-    }
-  }, []);
 
   const previewKind = file ? getPreviewKind(file.mimeType, file.fileName) : "none";
   const folderId = file ? getOrderFileFolderId(file) : "";
   const viewUrl = useMemo(() => {
     if (!file || previewKind === "none" || previewKind === "plx" || previewKind === "dcm") return null;
-    // Prefer file id key without trailing name — works with structured Orders/… paths.
     return buildFileViewUrl(file.orderId, folderId);
   }, [file, folderId, previewKind]);
 
   const downloadUrl = file?.dataUrl ?? viewUrl;
 
+  const dentalScene = useMemo((): SceneAsset[] => {
+    if (!file) return [];
+    const pool = sceneFiles.length ? sceneFiles : relatedFiles.length ? relatedFiles : [file];
+    const byId = new Map<string, OrderFile>();
+    for (const f of pool) byId.set(f.id, f);
+    if (!byId.has(file.id)) byId.set(file.id, file);
+    return [...byId.values()].map((f) => ({
+      id: f.id,
+      fileName: f.fileName,
+      fileId: f.id,
+      fileSize: f.fileSize ?? undefined,
+      url: buildFileViewUrl(f.orderId, getOrderFileFolderId(f)),
+      slotKey: f.slotKey,
+      category: f.category,
+      primary: f.id === file.id,
+    }));
+  }, [file, sceneFiles, relatedFiles]);
+
   useEffect(() => {
     if (!file) return;
-    setLoading(previewKind !== "zip" && previewKind !== "plx");
+    setLoading(previewKind !== "zip" && previewKind !== "plx" && previewKind !== "model3d");
     setError(false);
     setIsScanViewer(false);
     setRefreshKey((k) => k + 1);
@@ -109,9 +120,12 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
 
   if (!file) return null;
 
-  const title = isScanViewer && previewKind === "html"
-    ? "צפייה בסריקה תלת־ממדית"
-    : file.fileName;
+  const title =
+    isScanViewer && previewKind === "html"
+      ? "צפייה בסריקה תלת־ממדית"
+      : previewKind === "model3d" || previewKind === "zip"
+        ? "OPAL Dental Scene"
+        : file.fileName;
 
   const modalClass = cn(
     "bg-white shadow-2xl flex flex-col transition-all",
@@ -134,8 +148,13 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
           <div className="min-w-0">
             <p className="font-bold text-slate-900 truncate">{title}</p>
             <p className="text-xs text-slate-400 flex items-center gap-1.5">
-              {isScanViewer && previewKind === "html" && <Box className="h-3.5 w-3.5 text-opal-gold" />}
+              {(previewKind === "model3d" || previewKind === "zip" || isScanViewer) && (
+                <Box className="h-3.5 w-3.5 text-opal-gold" />
+              )}
               {FILE_TYPE_LABELS[file.fileType]}
+              {(previewKind === "model3d" || previewKind === "zip") && dentalScene.length > 1
+                ? ` · ${dentalScene.length} meshes`
+                : ""}
             </p>
           </div>
           <div className="flex gap-1.5 shrink-0">
@@ -158,34 +177,6 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
                 <RefreshCw className="h-4 w-4" />
               </Button>
             )}
-            {(previewKind === "model3d" || previewKind === "zip") && (
-              <Button
-                variant={useViewerV2 ? "default" : "outline"}
-                size="sm"
-                title={
-                  useViewerV2
-                    ? "OPAL 3D Viewer V2 (Babylon) פעיל — לחץ לחזרה ל-Viewer הישן"
-                    : "הפעל OPAL 3D Viewer V2 (Babylon) לבדיקה מקבילה"
-                }
-                onClick={() => {
-                  setUseViewerV2((v) => {
-                    const next = !v;
-                    try {
-                      localStorage.setItem(V2_PREF_KEY, next ? "1" : "0");
-                    } catch {
-                      /* ignore */
-                    }
-                    setLoading(true);
-                    setError(false);
-                    setRefreshKey((k) => k + 1);
-                    return next;
-                  });
-                }}
-              >
-                <Box className="h-4 w-4" />
-                {useViewerV2 ? "V2" : "V1"}
-              </Button>
-            )}
             <Button
               variant="outline"
               size="sm"
@@ -201,7 +192,7 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
         </div>
 
         <div className="flex-1 overflow-hidden relative bg-slate-50 min-h-0">
-          {loading && previewKind !== "zip" && previewKind !== "plx" && !error && (
+          {loading && previewKind !== "zip" && previewKind !== "plx" && previewKind !== "model3d" && !error && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-50/90">
               <div className="text-center">
                 <div className="h-10 w-10 mx-auto animate-spin rounded-full border-4 border-opal-gold border-t-transparent" />
@@ -260,42 +251,19 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
           )}
 
           {(previewKind === "model3d" || previewKind === "zip") && !error && (
-            useViewerV2 ? (
-              <OPAL3DViewer
-                key={`v2-${refreshKey}`}
-                fileId={file.id}
-                fileSize={file.fileSize ?? undefined}
-                url={viewUrl ?? undefined}
-                fileName={file.fileName}
-                onLoaded={() => setLoading(false)}
-                onError={() => {
-                  setLoading(false);
-                  setError(true);
-                }}
-              />
-            ) : (
-              <ModelViewer3D
-                key={refreshKey}
-                fileId={file.id}
-                fileSize={file.fileSize ?? undefined}
-                url={viewUrl ?? undefined}
-                fileName={file.fileName}
-                companions={relatedFiles
-                  .filter((f) => f.id !== file.id)
-                  .map((f) => ({
-                    fileId: f.id,
-                    fileSize: f.fileSize ?? undefined,
-                    url: buildFileViewUrl(f.orderId, getOrderFileFolderId(f)),
-                    fileName: f.fileName,
-                    role: inferJawRole(f.fileName, f.slotKey),
-                  }))}
-                onLoaded={() => setLoading(false)}
-                onError={() => {
-                  setLoading(false);
-                  setError(true);
-                }}
-              />
-            )
+            <OPAL3DViewer
+              key={`v3-${refreshKey}`}
+              sceneFiles={dentalScene}
+              fileId={file.id}
+              fileSize={file.fileSize ?? undefined}
+              url={viewUrl ?? undefined}
+              fileName={file.fileName}
+              onLoaded={() => setLoading(false)}
+              onError={() => {
+                setLoading(false);
+                setError(true);
+              }}
+            />
           )}
 
           {previewKind === "dcm" && (
@@ -307,7 +275,10 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
                 </p>
                 {downloadUrl && (
                   <a href={downloadUrl} download={file.fileName} className="inline-block mt-4">
-                    <Button><Download className="h-4 w-4" />הורדה</Button>
+                    <Button>
+                      <Download className="h-4 w-4" />
+                      הורדה
+                    </Button>
                   </a>
                 )}
               </div>
@@ -321,7 +292,10 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
                 <p className="text-sm text-slate-500 mt-2">אין Viewer ייעודי — ניתן להוריד את הקובץ</p>
                 {downloadUrl && (
                   <a href={downloadUrl} download={file.fileName} className="inline-block mt-4">
-                    <Button><Download className="h-4 w-4" />הורדה</Button>
+                    <Button>
+                      <Download className="h-4 w-4" />
+                      הורדה
+                    </Button>
                   </a>
                 )}
               </div>
@@ -333,7 +307,11 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
               <div>
                 <p>אין תצוגה מקדימה לקובץ זה</p>
                 {downloadUrl && (
-                  <a href={downloadUrl} download={file.fileName} className="text-opal-gold-dark underline text-sm mt-2 inline-block">
+                  <a
+                    href={downloadUrl}
+                    download={file.fileName}
+                    className="text-opal-gold-dark underline text-sm mt-2 inline-block"
+                  >
                     הורדת קובץ
                   </a>
                 )}
@@ -344,18 +322,4 @@ export function FilePreviewModal({ file, relatedFiles = [], onClose }: FilePrevi
       </div>
     </div>
   );
-}
-
-function inferJawRole(
-  fileName: string,
-  slotKey?: string | null,
-): "upper" | "lower" | "bite" | "other" {
-  if (slotKey === "UpperScan") return "upper";
-  if (slotKey === "LowerScan") return "lower";
-  if (slotKey === "BiteScan") return "bite";
-  const lower = fileName.toLowerCase().replace(/[\s_-]+/g, "");
-  if (lower.includes("upper") || lower.includes("maxilla") || lower.includes("עליון")) return "upper";
-  if (lower.includes("lower") || lower.includes("mandible") || lower.includes("תחתון")) return "lower";
-  if (lower.includes("bite") || lower.includes("סגר")) return "bite";
-  return "other";
 }

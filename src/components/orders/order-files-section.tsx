@@ -10,7 +10,6 @@ import {
   getPreviewKind,
   isPreviewable,
 } from "@/lib/file-utils";
-import { isMaterialCompanionName } from "@/lib/orders/load-model3d";
 import { FilePreviewModal } from "@/components/orders/file-preview-modal";
 import { FileModelThumb } from "@/components/orders/file-model-thumb";
 import { useApp } from "@/providers/AppProvider";
@@ -62,16 +61,6 @@ function categoryOf(file: OrderFile): OrderFileCategory {
   return (file.category as OrderFileCategory) || "Other";
 }
 
-function isScanSlot(file: OrderFile): boolean {
-  return (
-    file.slotKey === "UpperScan" ||
-    file.slotKey === "LowerScan" ||
-    file.slotKey === "BiteScan" ||
-    getPreviewKind(file.mimeType, file.fileName) === "model3d" ||
-    getPreviewKind(file.mimeType, file.fileName) === "zip"
-  );
-}
-
 export function OrderFilesSection({
   files,
   onUpload,
@@ -113,29 +102,14 @@ export function OrderFilesSection({
     return map;
   }, [visible]);
 
-  const relatedForPreview = useMemo(() => {
-    if (!preview || !isScanSlot(preview)) return [];
-    const previewBase = preview.fileName.replace(/\.[^.]+$/, "").toLowerCase();
-    const scans = visible.filter(
-      (f) =>
-        f.isCurrent !== false &&
-        isScanSlot(f) &&
-        (f.slotKey === "UpperScan" ||
-          f.slotKey === "LowerScan" ||
-          f.slotKey === "BiteScan" ||
-          f.id === preview.id),
-    );
-    // OBJ sidecars (MTL / PNG / JPG…) uploaded alongside the mesh
-    const sidecars = visible.filter((f) => {
-      if (f.isCurrent === false || f.id === preview.id) return false;
-      if (!isMaterialCompanionName(f.fileName)) return false;
-      const base = f.fileName.replace(/\.[^.]+$/, "").toLowerCase();
-      const ext = getFileExtension(preview.fileName);
-      return ext === "obj" || base.includes(previewBase) || previewBase.includes(base);
+  /** Full dental scene — all current mesh files on the order (Exocad-style). */
+  const sceneFilesForPreview = useMemo(() => {
+    if (!preview) return [];
+    const meshExt = new Set(["stl", "obj", "ply", "glb", "gltf", "zip"]);
+    return visible.filter((f) => {
+      if (f.isCurrent === false) return false;
+      return meshExt.has(getFileExtension(f.fileName));
     });
-    const byId = new Map<string, OrderFile>();
-    for (const f of [...scans, ...sidecars]) byId.set(f.id, f);
-    return [...byId.values()];
   }, [preview, visible]);
 
   const handleFiles = useCallback(
@@ -509,7 +483,7 @@ export function OrderFilesSection({
 
       <FilePreviewModal
         file={preview}
-        relatedFiles={relatedForPreview}
+        sceneFiles={sceneFilesForPreview}
         onClose={() => setPreview(null)}
       />
     </>

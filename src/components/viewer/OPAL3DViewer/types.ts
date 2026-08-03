@@ -11,19 +11,58 @@ export type ViewerCameraPreset =
   | "back"
   | "iso";
 
-export type ModelFormat = "stl" | "obj" | "ply" | "glb" | "gltf" | "step" | "iges" | "unknown";
+export type ModelFormat =
+  | "stl"
+  | "obj"
+  | "ply"
+  | "glb"
+  | "gltf"
+  | "zip"
+  | "unknown";
 
-export type OPAL3DViewerSource = {
+/** Dental scene layer — Exocad-style visibility groups. */
+export type SceneLayerId =
+  | "upper"
+  | "lower"
+  | "gingiva"
+  | "bite"
+  | "stl"
+  | "obj"
+  | "ply"
+  | "scanBodies"
+  | "implant"
+  | "temporary"
+  | "final"
+  | "pdf"
+  | "radiograph"
+  | "other";
+
+export type SceneAsset = {
+  id: string;
+  fileName: string;
   url?: string;
   file?: File | null;
-  fileName: string;
   fileId?: string;
   fileSize?: number;
+  slotKey?: string | null;
+  category?: string | null;
+  /** Prefer this asset when focusing after load. */
+  primary?: boolean;
+};
+
+export type SceneLayerState = {
+  id: SceneLayerId;
+  label: string;
+  visible: boolean;
+  count: number;
 };
 
 export type OPAL3DViewerProps = {
+  /** Full dental scene — all meshes for the order/slot set. */
+  sceneFiles?: SceneAsset[];
+  /** Legacy single-file props (merged into sceneFiles). */
   url?: string;
-  fileName: string;
+  fileName?: string;
   file?: File | null;
   fileId?: string;
   fileSize?: number;
@@ -31,6 +70,7 @@ export type OPAL3DViewerProps = {
   onError?: (message: string) => void;
   onLoaded?: () => void;
   showToolbar?: boolean;
+  showLayers?: boolean;
 };
 
 export type LoadProgress = {
