@@ -45,9 +45,32 @@ export interface AttendanceManagementKpis {
   presentNow: number;
   finishedToday: number;
   notCheckedInToday: number;
+  lateToday: number;
   hoursToday: number;
   hoursMonth: number;
   avgHoursPerEmployee: number;
+}
+
+export type TrustedDeviceStatusLabel = "NONE" | "ACTIVE" | "BLOCKED" | "REVOKED";
+
+export interface AttendanceEmployeeRosterRow {
+  employee: AttendanceEmployeeSummary;
+  deviceId: string | null;
+  deviceStatus: TrustedDeviceStatusLabel;
+  deviceLabel: string | null;
+  deviceOs: string | null;
+  deviceBrowser: string | null;
+  deviceType: string | null;
+  lastCheckIn: string | null;
+  lastCheckOut: string | null;
+  isPresent: boolean;
+}
+
+export interface AttendanceLabGeo {
+  labLatitude: number | null;
+  labLongitude: number | null;
+  geofenceRadiusMeters: number;
+  geofenceEnabled: boolean;
 }
 
 export interface AttendanceManagementRecordsResult {

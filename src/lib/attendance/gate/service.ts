@@ -137,7 +137,14 @@ export async function punchViaTrustedDevice(input: {
   gps: GateGps;
   device: GateDeviceInfo;
   headers: Headers;
-}): Promise<{ action: "check-in" | "check-out"; userName: string; userId: string }> {
+}): Promise<{
+  action: "check-in" | "check-out";
+  userName: string;
+  userId: string;
+  durationHours: number | null;
+  duplicate: boolean;
+  recordId: string;
+}> {
   const device = await prisma.trustedDevice.findUnique({
     where: { deviceKey: input.deviceKey },
     include: { user: true },
@@ -182,7 +189,6 @@ export async function punchViaTrustedDevice(input: {
   }
 
   const ip = clientIp(input.headers);
-  const open = await appDataService.getOpenAttendanceRecord(device.userId);
   const meta = {
     latitude: input.gps.latitude,
     longitude: input.gps.longitude,
@@ -192,21 +198,25 @@ export async function punchViaTrustedDevice(input: {
     ipAddress: ip ?? undefined,
   };
 
-  if (open) {
-    await appDataService.checkOut(device.userId, "TRUSTED_DEVICE", meta);
-    await prisma.trustedDevice.update({
-      where: { id: device.id },
-      data: { lastUsedAt: new Date(), lastIp: ip },
-    });
-    return { action: "check-out", userName: device.user.name, userId: device.userId };
-  }
+  const result = await appDataService.toggleAttendanceForUser(
+    device.userId,
+    "TRUSTED_DEVICE",
+    meta,
+  );
 
-  await appDataService.checkIn(device.userId, "TRUSTED_DEVICE", meta);
   await prisma.trustedDevice.update({
     where: { id: device.id },
     data: { lastUsedAt: new Date(), lastIp: ip },
   });
-  return { action: "check-in", userName: device.user.name, userId: device.userId };
+
+  return {
+    action: result.action,
+    userName: device.user.name,
+    userId: device.userId,
+    durationHours: result.durationHours,
+    duplicate: result.duplicate,
+    recordId: result.recordId,
+  };
 }
 
 export async function listTrustedDevices() {

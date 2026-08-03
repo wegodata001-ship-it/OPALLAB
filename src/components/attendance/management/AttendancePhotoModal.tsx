@@ -31,6 +31,8 @@ interface AttendancePhotoModalProps {
   startIndex?: number;
   /** Owner-only download */
   allowDownload?: boolean;
+  /** Admin delete callback for current photo */
+  onDelete?: (photo: AttendancePhotoItem) => void;
 }
 
 export function AttendancePhotoModal({
@@ -39,6 +41,7 @@ export function AttendancePhotoModal({
   photos,
   startIndex = 0,
   allowDownload = false,
+  onDelete,
 }: AttendancePhotoModalProps) {
   const [mounted, setMounted] = useState(false);
   const [index, setIndex] = useState(startIndex);
@@ -261,6 +264,18 @@ export function AttendancePhotoModal({
                   title="הורדה"
                 >
                   <Download className="h-4 w-4" />
+                </Button>
+              )}
+              {onDelete && current.recordId && current.kind && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-red-600"
+                  onClick={() => onDelete(current)}
+                  title="מחיקה"
+                >
+                  מחק תמונה
                 </Button>
               )}
             </div>

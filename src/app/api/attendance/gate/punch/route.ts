@@ -48,12 +48,17 @@ export async function POST(request: Request) {
       headers: request.headers,
     });
 
+    const durationLabel =
+      result.action === "check-out" && result.durationHours != null
+        ? ` · משך עבודה: ${result.durationHours.toFixed(1)} שע׳`
+        : "";
+
     return jsonOk({
       ...result,
       message:
         result.action === "check-in"
           ? `שלום ${result.userName} — כניסה נרשמה בהצלחה`
-          : `${result.userName} — יציאה נרשמה בהצלחה`,
+          : `${result.userName} — יציאה נרשמה בהצלחה${durationLabel}`,
     });
   } catch (error) {
     return jsonError(error);

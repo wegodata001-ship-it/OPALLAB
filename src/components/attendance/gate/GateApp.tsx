@@ -1,12 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { LAB_INFO } from "@/lib/constants/labels";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { useApp } from "@/providers/AppProvider";
 import { getOrCreateDeviceKey } from "@/lib/attendance/gate/device-key";
+import {
+  peekGatePunchResult,
+  resetGatePunchLock,
+  runGatePunchOnce,
+  type GatePunchAction,
+} from "@/lib/attendance/gate/punch-lock";
 import { captureGpsForVerification } from "@/lib/attendance/verification/gps";
 import { captureDeviceInfo } from "@/lib/attendance/verification/device";
 import {
@@ -19,7 +24,7 @@ import {
 import { uploadVerificationPhoto } from "@/lib/attendance/verification/upload";
 import { AttendanceVerificationError } from "@/lib/attendance/verification/types";
 import { permissionHelpText } from "@/lib/attendance/gate/open-settings";
-import { CheckCircle2, Loader2, MapPin, Camera, Shield, AlertTriangle } from "lucide-react";
+import { CheckCircle2, Loader2, LogIn, LogOut, MapPin, Camera, Shield, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type Phase =
@@ -35,7 +40,6 @@ type Phase =
   | "error";
 
 export function GateApp() {
-  useSearchParams(); // keep Suspense boundary stable for /attendance/checkin
   const { login, currentUser, isAuthenticated, logout } = useApp();
 
   const [phase, setPhase] = useState<Phase>("booting");
@@ -45,11 +49,13 @@ export function GateApp() {
   const [password, setPassword] = useState("");
   const [userName, setUserName] = useState("");
   const [deviceKey, setDeviceKey] = useState("");
+  const [lastAction, setLastAction] = useState<GatePunchAction | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const bootOnceRef = useRef(false);
 
   const failPermission = useCallback((msg: string) => {
     setMessage(msg);
@@ -68,67 +74,119 @@ export function GateApp() {
     setVideoReady(false);
   }, []);
 
-  const runPunch = useCallback(async (key: string) => {
-    setPhase("punching");
-    setMessage("מזהה מכשיר ומבקש מיקום...");
-    try {
-      const gps = await captureGpsForVerification();
-      const device = captureDeviceInfo();
-      const res = await fetch("/api/attendance/gate/punch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          deviceKey: key,
-          latitude: gps.latitude,
-          longitude: gps.longitude,
-          accuracy: gps.accuracy,
-          device,
-        }),
-      });
-      const json = (await res.json()) as {
-        success?: boolean;
-        data?: { action: string; userName: string; message: string };
-        error?: { message?: string; details?: { code?: string } | null };
-      };
-
-      if (!json.success) {
-        const code =
-          json.error?.details && typeof json.error.details === "object"
-            ? json.error.details.code
-            : undefined;
-        if (code === "DEVICE_UNKNOWN" || code === "DEVICE_REVOKED" || res.status === 404) {
-          setPhase("need_register");
-          setMessage(json.error?.message || "נדרשת הרשמה חד-פעמית למכשיר זה");
-          return;
-        }
-        if (code === "GPS_REQUIRED" || json.error?.message?.includes("מיקום")) {
-          failPermission(json.error?.message || "נדרש אישור GPS");
-          return;
-        }
-        setPhase("error");
-        setMessage(json.error?.message || "רישום הנוכחות נכשל");
-        return;
-      }
-
-      setUserName(json.data?.userName ?? "");
-      setMessage(json.data?.message ?? "הנוכחות נרשמה");
+  const applyPunchSuccess = useCallback(
+    (data: { action: GatePunchAction; userName: string; message: string }) => {
+      setLastAction(data.action);
+      setUserName(data.userName);
+      setMessage(data.message);
       setPhase("success");
-    } catch (err) {
-      if (err instanceof AttendanceVerificationError && err.step === "gps") {
-        failPermission(err.message);
+    },
+    [],
+  );
+
+  const runPunch = useCallback(
+    async (key: string) => {
+      setPhase("punching");
+      setMessage("מזהה מכשיר ומבקש מיקום...");
+
+      const existing = peekGatePunchResult();
+      if (existing) {
+        applyPunchSuccess(existing);
         return;
       }
-      setPhase("error");
-      setMessage(err instanceof Error ? err.message : "שגיאה ברישום נוכחות");
-    }
-  }, [failPermission]);
+
+      try {
+        const result = await runGatePunchOnce(async () => {
+          const gps = await captureGpsForVerification();
+          const device = captureDeviceInfo();
+          const res = await fetch("/api/attendance/gate/punch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              deviceKey: key,
+              latitude: gps.latitude,
+              longitude: gps.longitude,
+              accuracy: gps.accuracy,
+              device,
+            }),
+          });
+          const json = (await res.json()) as {
+            success?: boolean;
+            data?: {
+              action: GatePunchAction;
+              userName: string;
+              message: string;
+            };
+            error?: { message?: string; details?: { code?: string } | null };
+          };
+
+          if (!json.success || !json.data?.action) {
+            const code =
+              json.error?.details && typeof json.error.details === "object"
+                ? json.error.details.code
+                : undefined;
+            const err = new Error(json.error?.message || "רישום הנוכחות נכשל") as Error & {
+              code?: string;
+              status?: number;
+            };
+            err.code = code;
+            err.status = res.status;
+            throw err;
+          }
+
+          return {
+            action: json.data.action,
+            userName: json.data.userName,
+            message: json.data.message,
+          };
+        });
+
+        applyPunchSuccess(result);
+      } catch (err) {
+        const code =
+          err && typeof err === "object" && "code" in err
+            ? String((err as { code?: string }).code)
+            : undefined;
+        const status =
+          err && typeof err === "object" && "status" in err
+            ? Number((err as { status?: number }).status)
+            : undefined;
+
+        if (code === "DEVICE_UNKNOWN" || code === "DEVICE_REVOKED" || status === 404) {
+          resetGatePunchLock();
+          setPhase("need_register");
+          setMessage(err instanceof Error ? err.message : "נדרשת הרשמה חד-פעמית למכשיר זה");
+          return;
+        }
+        if (
+          code === "GPS_REQUIRED" ||
+          (err instanceof AttendanceVerificationError && err.step === "gps") ||
+          (err instanceof Error && err.message.includes("מיקום"))
+        ) {
+          resetGatePunchLock();
+          failPermission(err instanceof Error ? err.message : "נדרש אישור GPS");
+          return;
+        }
+        resetGatePunchLock();
+        setPhase("error");
+        setMessage(err instanceof Error ? err.message : "שגיאה ברישום נוכחות");
+      }
+    },
+    [applyPunchSuccess, failPermission],
+  );
 
   const bootstrap = useCallback(async () => {
     setPhase("booting");
     cleanupCamera();
     const key = getOrCreateDeviceKey();
     setDeviceKey(key);
+
+    const already = peekGatePunchResult();
+    if (already) {
+      applyPunchSuccess(already);
+      return;
+    }
 
     try {
       const res = await fetch("/api/attendance/gate/lookup", {
@@ -170,9 +228,12 @@ export function GateApp() {
       setPhase("error");
       setMessage("לא ניתן להתחבר לשרת");
     }
-  }, [runPunch, cleanupCamera]);
+  }, [runPunch, cleanupCamera, applyPunchSuccess]);
 
   useEffect(() => {
+    // Hard guard against React remount double-bootstrap within the same page load.
+    if (bootOnceRef.current) return;
+    bootOnceRef.current = true;
     void bootstrap();
   }, [bootstrap]);
 
@@ -346,11 +407,41 @@ export function GateApp() {
           )}
 
           {phase === "success" && (
-            <CardBox className="border-emerald-500/40 bg-emerald-500/10">
-              <CheckCircle2 className="h-14 w-14 text-emerald-400 mx-auto" />
-              <p className="text-center text-xl font-bold mt-3">{userName}</p>
-              <p className="text-center text-emerald-200 mt-2">{message}</p>
-              <Button className="w-full mt-6" variant="outline" onClick={() => void bootstrap()}>
+            <CardBox
+              className={
+                lastAction === "check-out"
+                  ? "border-sky-500/40 bg-sky-500/10"
+                  : "border-emerald-500/40 bg-emerald-500/10"
+              }
+            >
+              {lastAction === "check-out" ? (
+                <LogOut className="h-14 w-14 text-sky-300 mx-auto" />
+              ) : lastAction === "check-in" ? (
+                <LogIn className="h-14 w-14 text-emerald-400 mx-auto" />
+              ) : (
+                <CheckCircle2 className="h-14 w-14 text-emerald-400 mx-auto" />
+              )}
+              <p className="text-center text-sm font-semibold tracking-wide mt-3 text-white/70">
+                {lastAction === "check-out" ? "יציאה" : lastAction === "check-in" ? "כניסה" : "נוכחות"}
+              </p>
+              <p className="text-center text-xl font-bold mt-1">{userName}</p>
+              <p
+                className={cn(
+                  "text-center mt-2",
+                  lastAction === "check-out" ? "text-sky-100" : "text-emerald-200",
+                )}
+              >
+                {message}
+              </p>
+              <Button
+                className="w-full mt-6"
+                variant="outline"
+                onClick={() => {
+                  resetGatePunchLock();
+                  bootOnceRef.current = false;
+                  void bootstrap();
+                }}
+              >
                 סריקה נוספת
               </Button>
             </CardBox>

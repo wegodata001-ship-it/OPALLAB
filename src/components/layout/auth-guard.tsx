@@ -19,8 +19,9 @@ const PATH_MODULE: Record<string, AppModule> = {
   "/my-work": "my-work",
   "/my-attendance": "my-attendance",
   "/attendance-management": "attendance-management",
-  "/trusted-devices": "trusted-devices",
-  "/system": "trusted-devices",
+  // Legacy URLs redirect into attendance-management
+  "/trusted-devices": "attendance-management",
+  "/system": "attendance-management",
 };
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {

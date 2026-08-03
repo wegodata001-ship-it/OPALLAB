@@ -9,13 +9,16 @@ import {
 import type { UserRole } from "@/lib/types";
 import type {
   AttendanceActiveRecord,
+  AttendanceEmployeeRosterRow,
   AttendanceEmployeeSummary,
+  AttendanceLabGeo,
   AttendanceManagementKpis,
   AttendanceManagementQuery,
   AttendanceManagementRecord,
   AttendanceManagementRecordsResult,
   AttendanceNotCheckedInRow,
 } from "@/lib/attendance/management/types";
+import { getLabGateSettings } from "@/lib/attendance/gate/lab-location";
 
 const LATE_HOUR = 9;
 const GPS_MAX_ACCURACY = 100;
@@ -289,6 +292,7 @@ export async function getAttendanceKpis(): Promise<AttendanceManagementKpis> {
 
   const checkedInTodayIds = new Set(todayRecords.map((r) => r.userId));
   const notCheckedInToday = employees.filter((e) => !checkedInTodayIds.has(e.id)).length;
+  const lateToday = todayRecords.filter((r) => isLateCheckIn(r.checkIn)).length;
 
   const sumHours = (records: { checkIn: Date; checkOut: Date | null }[]) =>
     records.reduce((sum, r) => {
@@ -304,10 +308,89 @@ export async function getAttendanceKpis(): Promise<AttendanceManagementKpis> {
     presentNow,
     finishedToday,
     notCheckedInToday,
+    lateToday,
     hoursToday: Math.round(hoursToday * 10) / 10,
     hoursMonth: Math.round(hoursMonth * 10) / 10,
     avgHoursPerEmployee: Math.round(avgHoursPerEmployee * 10) / 10,
   };
+}
+
+export async function getAttendanceLabGeo(): Promise<AttendanceLabGeo> {
+  const lab = await getLabGateSettings();
+  return {
+    labLatitude: lab.labLatitude,
+    labLongitude: lab.labLongitude,
+    geofenceRadiusMeters: lab.geofenceRadiusMeters,
+    geofenceEnabled: lab.geofenceEnabled,
+  };
+}
+
+/** One row per active non-doctor employee with latest trusted device + last punch. */
+export async function getEmployeeAttendanceRoster(): Promise<AttendanceEmployeeRosterRow[]> {
+  const [users, devices, openRecords, recentRecords] = await Promise.all([
+    prisma.user.findMany({
+      where: { role: { not: "DOCTOR" }, isActive: true },
+      select: { id: true, name: true, phone: true, role: true, roles: true, color: true },
+      orderBy: { name: "asc" },
+    }),
+    prisma.trustedDevice.findMany({
+      orderBy: [{ lastUsedAt: "desc" }, { registeredAt: "desc" }],
+    }),
+    prisma.attendanceRecord.findMany({
+      where: { checkOut: null, user: { role: { not: "DOCTOR" }, isActive: true } },
+      select: { userId: true },
+    }),
+    prisma.attendanceRecord.findMany({
+      where: { user: { role: { not: "DOCTOR" }, isActive: true } },
+      orderBy: { checkIn: "desc" },
+      take: 500,
+      select: { userId: true, checkIn: true, checkOut: true },
+    }),
+  ]);
+
+  const deviceByUser = new Map<string, (typeof devices)[number]>();
+  for (const d of devices) {
+    if (!deviceByUser.has(d.userId)) deviceByUser.set(d.userId, d);
+  }
+  const presentIds = new Set(openRecords.map((r) => r.userId));
+  const lastByUser = new Map<string, (typeof recentRecords)[number]>();
+  for (const r of recentRecords) {
+    if (!lastByUser.has(r.userId)) lastByUser.set(r.userId, r);
+  }
+
+  return users.map((user) => {
+    const device = deviceByUser.get(user.id);
+    const last = lastByUser.get(user.id);
+    return {
+      employee: mapEmployee(user),
+      deviceId: device?.id ?? null,
+      deviceStatus: device?.status ?? "NONE",
+      deviceLabel: device?.label ?? null,
+      deviceOs: device?.os ?? null,
+      deviceBrowser: device?.browser ?? null,
+      deviceType: device?.deviceType ?? null,
+      lastCheckIn: last?.checkIn?.toISOString() ?? null,
+      lastCheckOut: last?.checkOut?.toISOString() ?? null,
+      isPresent: presentIds.has(user.id),
+    };
+  });
+}
+
+export async function clearAttendancePhoto(
+  recordId: string,
+  kind: AttendancePhotoKind,
+): Promise<void> {
+  if (kind === "check-in") {
+    await prisma.attendanceRecord.update({
+      where: { id: recordId },
+      data: { checkInPhotoPath: null, checkInPhotoUrl: null },
+    });
+    return;
+  }
+  await prisma.attendanceRecord.update({
+    where: { id: recordId },
+    data: { checkOutPhotoPath: null, checkOutPhotoUrl: null },
+  });
 }
 
 export async function getActiveAttendanceRecords(

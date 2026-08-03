@@ -1423,6 +1423,177 @@ export class AppDataService {
     });
   }
 
+  /**
+   * Atomic check-in / check-out toggle for one employee.
+   * Locks the User row and mutates attendance in the same transaction so parallel
+   * QR punches cannot create two open check-ins or flip out→in on a double submit.
+   */
+  async toggleAttendanceForUser(
+    userId: string,
+    method: AttendanceMethod,
+    meta?: import("@/lib/types").AttendanceCheckInMeta,
+    opts?: { duplicateWindowMs?: number },
+  ): Promise<{
+    action: "check-in" | "check-out";
+    userId: string;
+    recordId: string;
+    checkIn: Date;
+    checkOut: Date | null;
+    durationHours: number | null;
+    duplicate: boolean;
+  }> {
+    // Only collapses near-simultaneous duplicate requests (remount / retry),
+    // not a normal second QR scan a few seconds later.
+    const duplicateWindowMs = opts?.duplicateWindowMs ?? 3_500;
+    const { reverseGeocodeDetailed } = await import("@/lib/geocode");
+    const prismaMethod = toPrismaAttendanceMethod(method);
+    const device = meta?.device;
+    const now = new Date();
+
+    let geo = {
+      formatted: null as string | null,
+      country: null as string | null,
+      city: null as string | null,
+      street: null as string | null,
+      houseNumber: null as string | null,
+    };
+    if (meta?.latitude != null && meta?.longitude != null) {
+      geo = await reverseGeocodeDetailed(meta.latitude, meta.longitude);
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+
+    return prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
+
+      const openRecords = await tx.attendanceRecord.findMany({
+        where: { userId, checkOut: null },
+        orderBy: { checkIn: "desc" },
+      });
+
+      const latest = await tx.attendanceRecord.findFirst({
+        where: { userId },
+        orderBy: { checkIn: "desc" },
+        select: { id: true, checkIn: true, checkOut: true },
+      });
+
+      // Duplicate punch right after check-out → return check-out, do not open again.
+      if (
+        openRecords.length === 0 &&
+        latest?.checkOut &&
+        now.getTime() - latest.checkOut.getTime() < duplicateWindowMs
+      ) {
+        const durationHours =
+          (latest.checkOut.getTime() - latest.checkIn.getTime()) / 3_600_000;
+        return {
+          action: "check-out" as const,
+          userId,
+          recordId: latest.id,
+          checkIn: latest.checkIn,
+          checkOut: latest.checkOut,
+          durationHours,
+          duplicate: true,
+        };
+      }
+
+      if (openRecords.length > 0) {
+        const [active, ...legacyOpenRecords] = openRecords;
+        const exitIpNote = meta?.ipAddress ? `IP יציאה: ${meta.ipAddress}` : null;
+        const notes = [active.notes, exitIpNote].filter(Boolean).join(" · ") || null;
+
+        await tx.attendanceRecord.update({
+          where: { id: active.id },
+          data: {
+            checkOut: now,
+            method: prismaMethod,
+            checkOutLatitude: meta?.latitude ?? null,
+            checkOutLongitude: meta?.longitude ?? null,
+            checkOutAccuracy: meta?.accuracy ?? null,
+            checkOutAddress: geo.formatted,
+            checkOutAddressCountry: geo.country,
+            checkOutAddressCity: geo.city,
+            checkOutAddressStreet: geo.street,
+            checkOutAddressHouseNumber: geo.houseNumber,
+            checkOutPhotoUrl: meta?.photoUrl ?? null,
+            checkOutPhotoPath: meta?.photoPath ?? null,
+            checkOutDeviceBrowser: device?.browser ?? null,
+            checkOutDeviceOs: device?.os ?? null,
+            checkOutDeviceType: device?.deviceType ?? null,
+            checkOutUserAgent: device?.userAgent ?? null,
+            checkOutScreenSize: device?.screenSize ?? null,
+            checkOutTimezone: device?.timezone ?? null,
+            deviceInfo: device
+              ? `${device.browser} · ${device.os} · ${device.deviceType}`
+              : active.deviceInfo,
+            notes,
+          },
+        });
+
+        if (legacyOpenRecords.length > 0) {
+          await tx.attendanceRecord.updateMany({
+            where: { id: { in: legacyOpenRecords.map((r) => r.id) } },
+            data: { checkOut: now },
+          });
+        }
+
+        const durationHours =
+          (now.getTime() - active.checkIn.getTime()) / 3_600_000;
+        return {
+          action: "check-out" as const,
+          userId,
+          recordId: active.id,
+          checkIn: active.checkIn,
+          checkOut: now,
+          durationHours,
+          duplicate: false,
+        };
+      }
+
+      const created = await tx.attendanceRecord.create({
+        data: {
+          userId,
+          checkIn: now,
+          method: prismaMethod,
+          trustedDeviceId: meta?.trustedDeviceId ?? null,
+          ipAddress: meta?.ipAddress ?? null,
+          nfcTagId: user?.nfcTagId ?? null,
+          latitude: meta?.latitude ?? null,
+          longitude: meta?.longitude ?? null,
+          checkInLatitude: meta?.latitude ?? null,
+          checkInLongitude: meta?.longitude ?? null,
+          checkInAccuracy: meta?.accuracy ?? null,
+          checkInAddress: geo.formatted,
+          checkInAddressCountry: geo.country,
+          checkInAddressCity: geo.city,
+          checkInAddressStreet: geo.street,
+          checkInAddressHouseNumber: geo.houseNumber,
+          checkInPhotoUrl: meta?.photoUrl ?? null,
+          checkInPhotoPath: meta?.photoPath ?? null,
+          checkInDeviceBrowser: device?.browser ?? null,
+          checkInDeviceOs: device?.os ?? null,
+          checkInDeviceType: device?.deviceType ?? null,
+          checkInUserAgent: device?.userAgent ?? null,
+          checkInScreenSize: device?.screenSize ?? null,
+          checkInTimezone: device?.timezone ?? null,
+          deviceInfo: device
+            ? `${device.browser} · ${device.os} · ${device.deviceType}`
+            : meta?.deviceInfo ?? null,
+          notes: meta?.fileName ? `תמונה: ${meta.fileName}` : null,
+        },
+      });
+
+      return {
+        action: "check-in" as const,
+        userId,
+        recordId: created.id,
+        checkIn: created.checkIn,
+        checkOut: null,
+        durationHours: null,
+        duplicate: false,
+      };
+    });
+  }
+
   async getUserByNfcTag(nfcTagId: string) {
     const tag = nfcTagId.trim();
     if (!tag) return null;
@@ -1435,18 +1606,22 @@ export class AppDataService {
   async toggleAttendanceByNfc(
     nfcTagId: string,
     meta?: import("@/lib/types").AttendanceCheckInMeta,
-  ): Promise<{ action: "check-in" | "check-out"; userId: string; userName: string }> {
+  ): Promise<{
+    action: "check-in" | "check-out";
+    userId: string;
+    userName: string;
+    durationHours?: number | null;
+  }> {
     const user = await this.getUserByNfcTag(nfcTagId);
     if (!user) throw new AppError("NOT_FOUND", "כרטיס NFC לא משויך לעובד פעיל", 404);
 
-    const open = await this.getOpenAttendanceRecord(user.id);
-    if (open) {
-      await this.checkOut(user.id, "NFC", meta);
-      return { action: "check-out", userId: user.id, userName: user.name };
-    }
-    await this.checkIn(user.id, "NFC", meta);
-    // Persist the scanned tag on the record if user's tag matches
-    return { action: "check-in", userId: user.id, userName: user.name };
+    const result = await this.toggleAttendanceForUser(user.id, "NFC", meta);
+    return {
+      action: result.action,
+      userId: user.id,
+      userName: user.name,
+      durationHours: result.durationHours,
+    };
   }
 
   async checkIn(
@@ -1570,7 +1745,12 @@ export class AppDataService {
         deviceInfo: device
           ? `${device.browser} · ${device.os} · ${device.deviceType}`
           : active.deviceInfo,
-        notes: active.notes ?? (meta?.fileName ? `תמונה: ${meta.fileName}` : null),
+        notes: [
+          active.notes ?? (meta?.fileName ? `תמונה: ${meta.fileName}` : null),
+          meta?.ipAddress ? `IP יציאה: ${meta.ipAddress}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ") || null,
       },
     });
 

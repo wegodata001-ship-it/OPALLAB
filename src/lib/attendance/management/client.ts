@@ -1,5 +1,7 @@
 import type {
   AttendanceActiveRecord,
+  AttendanceEmployeeRosterRow,
+  AttendanceLabGeo,
   AttendanceManagementKpis,
   AttendanceManagementQuery,
   AttendanceManagementRecord,
@@ -35,6 +37,25 @@ async function getJson<T>(path: string): Promise<T> {
 
 export async function fetchAttendanceKpis(): Promise<AttendanceManagementKpis> {
   return getJson("/api/attendance/management?view=kpis");
+}
+
+export async function fetchAttendanceRoster(): Promise<{
+  roster: AttendanceEmployeeRosterRow[];
+  labGeo: AttendanceLabGeo;
+}> {
+  return getJson("/api/attendance/management?view=roster");
+}
+
+export async function deleteAttendancePhoto(
+  recordId: string,
+  kind: "check-in" | "check-out",
+): Promise<void> {
+  const res = await fetch(
+    `/api/attendance/management?id=${encodeURIComponent(recordId)}&kind=${kind}`,
+    { method: "DELETE", credentials: "include" },
+  );
+  const json = await res.json();
+  if (!json.success) throw new Error(json.error?.message ?? "מחיקת התמונה נכשלה");
 }
 
 export async function fetchActiveAttendance(

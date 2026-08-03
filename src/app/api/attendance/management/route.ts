@@ -2,12 +2,15 @@ import { NextRequest } from "next/server";
 import { requireSessionUserId } from "@/lib/auth/session";
 import { requireAttendanceManager } from "@/lib/attendance/management/auth";
 import {
+  clearAttendancePhoto,
   getActiveAttendanceRecords,
   getAttendanceKpis,
+  getAttendanceLabGeo,
   getAttendancePhotoSignedUrl,
   getAttendanceRecordById,
   getAttendanceRecords,
   getAttendanceRecordsForExport,
+  getEmployeeAttendanceRoster,
   type AttendancePhotoKind,
 } from "@/lib/attendance/management/service";
 import type { AttendanceManagementQuery } from "@/lib/attendance/management/types";
@@ -46,6 +49,14 @@ export async function GET(request: NextRequest) {
 
     if (view === "kpis") {
       return jsonOk(await getAttendanceKpis());
+    }
+
+    if (view === "roster") {
+      const [roster, labGeo] = await Promise.all([
+        getEmployeeAttendanceRoster(),
+        getAttendanceLabGeo(),
+      ]);
+      return jsonOk({ roster, labGeo });
     }
 
     if (view === "active") {
@@ -103,6 +114,26 @@ export async function GET(request: NextRequest) {
     }
 
     return jsonOk(await getAttendanceRecords(query));
+  } catch (error) {
+    return jsonError(error);
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const userId = await requireSessionUserId();
+    await requireAttendanceManager(userId);
+
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get("id");
+    const kind = searchParams.get("kind") as AttendancePhotoKind | null;
+    if (!id) throw new AppError("VALIDATION_ERROR", "חסר מזהה רשומה", 400);
+    if (kind !== "check-in" && kind !== "check-out") {
+      throw new AppError("VALIDATION_ERROR", "סוג תמונה לא תקין", 400);
+    }
+
+    await clearAttendancePhoto(id, kind);
+    return jsonOk({ ok: true });
   } catch (error) {
     return jsonError(error);
   }
