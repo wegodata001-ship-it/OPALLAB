@@ -54,6 +54,10 @@ import {
   uploadOrderFileWithProgress,
   type UploadVersionMode,
 } from "@/lib/orders/upload-with-progress";
+import {
+  persistSlotUploads,
+  type PendingSlotUpload,
+} from "@/lib/orders/persist-slot-uploads";
 
 type TileItem = {
   file: File;
@@ -69,17 +73,18 @@ type SlotState = {
   items: TileItem[];
 };
 
-export type PendingSlotUpload = {
-  slotId: OrderUploadSlotId;
-  file: File;
-  notes: string;
-};
+export type { PendingSlotUpload };
 
 export type OrderUploadTilesHandle = {
   getPendingUploads: () => PendingSlotUpload[];
-  uploadAll: (orderId: string) => Promise<void>;
+  uploadAll: (orderId: string, pending?: PendingSlotUpload[]) => Promise<void>;
   clear: () => Promise<void>;
   hasFiles: () => boolean;
+  askVersionMode: (
+    fileName: string,
+    existingName: string,
+    existingVersion: number,
+  ) => Promise<UploadVersionMode | null>;
 };
 
 interface OrderUploadTilesProps {
@@ -238,6 +243,7 @@ export const OrderUploadTiles = forwardRef<OrderUploadTilesHandle, OrderUploadTi
     const [viewer, setViewer] = useState<{ slotId: OrderUploadSlotId; index: number } | null>(null);
     const [dragOver, setDragOver] = useState<OrderUploadSlotId | null>(null);
     const [focusedSlot, setFocusedSlot] = useState<OrderUploadSlotId | null>(null);
+    const [toast, setToast] = useState<string | null>(null);
 
     const galleryInputRef = useRef<HTMLInputElement>(null);
     const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -403,7 +409,9 @@ export const OrderUploadTiles = forwardRef<OrderUploadTilesHandle, OrderUploadTi
                 items[targetIndex] = { ...cur, progress: 100, status: "uploaded" };
                 return { ...prev, [slotId]: { items } };
               });
+              setToast("הקובץ נשמר בהצלחה");
             } catch (err) {
+              console.error("[order-upload-tiles] immediate upload failed", err);
               setSlots((prev) => {
                 const items = [...prev[slotId].items];
                 const cur = items[targetIndex];
@@ -415,12 +423,23 @@ export const OrderUploadTiles = forwardRef<OrderUploadTilesHandle, OrderUploadTi
                 };
                 return { ...prev, [slotId]: { items } };
               });
+              setToast(
+                err instanceof Error
+                  ? `הקובץ לא נשמר: ${err.message}`
+                  : "הקובץ לא נשמר בשרת",
+              );
             }
           }
         }
       },
       [orderId, setSlotItems, uploadOne, mergeWithNameConflicts],
     );
+
+    useEffect(() => {
+      if (!toast) return;
+      const t = window.setTimeout(() => setToast(null), 3500);
+      return () => window.clearTimeout(t);
+    }, [toast]);
 
     useImperativeHandle(
       ref,
@@ -430,58 +449,99 @@ export const OrderUploadTiles = forwardRef<OrderUploadTilesHandle, OrderUploadTi
           for (const def of ORDER_UPLOAD_SLOTS) {
             for (const item of slotsRef.current[def.id].items) {
               if (item.status === "error") continue;
-              out.push({ slotId: def.id, file: item.file, notes: slotNotes(def.id) });
+              // Copy File reference — parent must snapshot before any remount.
+              out.push({
+                slotId: def.id,
+                file: item.file,
+                notes: slotNotes(def.id),
+              });
             }
           }
           return out;
         },
         hasFiles: () =>
           ORDER_UPLOAD_SLOTS.some((def) => slotsRef.current[def.id].items.length > 0),
+        askVersionMode,
         clear: async () => {
           for (const slot of Object.values(slotsRef.current)) revokePreviews(slot.items);
           setSlots(emptySlots());
           await clearDraft(draftKey);
         },
-        uploadAll: async (targetOrderId: string) => {
-          const pending = ORDER_UPLOAD_SLOTS.flatMap((def) =>
-            slotsRef.current[def.id].items.map((item, index) => ({ def, item, index })),
-          );
-          for (const { def, item, index } of pending) {
-            setSlots((prev) => {
-              const items = [...prev[def.id].items];
-              items[index] = { ...items[index]!, status: "uploading", progress: 0 };
-              return { ...prev, [def.id]: { items } };
+        uploadAll: async (targetOrderId: string, pendingOverride?: PendingSlotUpload[]) => {
+          const pending =
+            pendingOverride ??
+            ORDER_UPLOAD_SLOTS.flatMap((def) =>
+              slotsRef.current[def.id].items
+                .filter((item) => item.status !== "error")
+                .map((item) => ({
+                  slotId: def.id,
+                  file: item.file,
+                  notes: slotNotes(def.id),
+                })),
+            );
+
+          if (!pending.length) {
+            console.warn("[order-upload-tiles] uploadAll called with no pending files", {
+              orderId: targetOrderId,
             });
-            try {
-              await uploadOne(targetOrderId, def.id, item.file, (pct) => {
-                setSlots((prev) => {
-                  const items = [...prev[def.id].items];
-                  items[index] = { ...items[index]!, progress: pct, status: "uploading" };
-                  return { ...prev, [def.id]: { items } };
-                });
-              });
-              setSlots((prev) => {
-                const items = [...prev[def.id].items];
-                items[index] = { ...items[index]!, progress: 100, status: "uploaded" };
-                return { ...prev, [def.id]: { items } };
-              });
-            } catch (err) {
-              setSlots((prev) => {
-                const items = [...prev[def.id].items];
-                items[index] = {
-                  ...items[index]!,
-                  status: "error",
-                  error: err instanceof Error ? err.message : "שגיאה",
-                };
-                return { ...prev, [def.id]: { items } };
-              });
-              throw err;
-            }
+            return;
           }
+
+          await persistSlotUploads(targetOrderId, pending, {
+            askVersionMode,
+            onFileStart: (file, slotId) => {
+              setSlots((prev) => {
+                const items = prev[slotId].items.map((it) =>
+                  it.file === file || sameName(it.file.name, file.name)
+                    ? { ...it, status: "uploading" as const, progress: 0 }
+                    : it,
+                );
+                return { ...prev, [slotId]: { items } };
+              });
+            },
+            onFileProgress: (file, pct) => {
+              setSlots((prev) => {
+                const next = { ...prev };
+                for (const def of ORDER_UPLOAD_SLOTS) {
+                  const items = next[def.id].items.map((it) =>
+                    it.file === file ? { ...it, progress: pct, status: "uploading" as const } : it,
+                  );
+                  next[def.id] = { items };
+                }
+                return next;
+              });
+            },
+            onFileDone: (file, slotId) => {
+              setSlots((prev) => {
+                const items = prev[slotId].items.map((it) =>
+                  it.file === file || sameName(it.file.name, file.name)
+                    ? { ...it, progress: 100, status: "uploaded" as const }
+                    : it,
+                );
+                return { ...prev, [slotId]: { items } };
+              });
+              setToast("הקובץ נשמר בהצלחה");
+            },
+            onFileError: (file, error) => {
+              setSlots((prev) => {
+                const next = { ...prev };
+                for (const def of ORDER_UPLOAD_SLOTS) {
+                  const items = next[def.id].items.map((it) =>
+                    it.file === file
+                      ? { ...it, status: "error" as const, error: error.message }
+                      : it,
+                  );
+                  next[def.id] = { items };
+                }
+                return next;
+              });
+              setToast(`הקובץ לא נשמר: ${error.message}`);
+            },
+          });
           await clearDraft(draftKey);
         },
       }),
-      [draftKey, uploadOne],
+      [draftKey, askVersionMode],
     );
 
     const openPicker = (slotId: OrderUploadSlotId, replaceAt: number | null = null) => {
@@ -555,12 +615,21 @@ export const OrderUploadTiles = forwardRef<OrderUploadTilesHandle, OrderUploadTi
       const count = state.items.length;
       const filled = count > 0;
       const uploading = state.items.some((i) => i.status === "uploading");
+      const hasError = state.items.some((i) => i.status === "error");
+      const allSaved = filled && state.items.every((i) => i.status === "uploaded");
       const avgProgress = uploading
         ? Math.round(
             state.items.reduce((s, i) => s + (i.status === "uploading" ? i.progress : 100), 0) /
               state.items.length,
           )
         : 0;
+      const statusPill = hasError
+        ? { label: "שגיאה", className: "bg-red-600" }
+        : allSaved
+          ? { label: "נשמר", className: "bg-emerald-600" }
+          : filled
+            ? { label: "מוכן לשליחה", className: "bg-amber-500" }
+            : null;
 
       return (
         <div
@@ -587,7 +656,9 @@ export const OrderUploadTiles = forwardRef<OrderUploadTilesHandle, OrderUploadTi
           className={cn(
             "relative aspect-square rounded-2xl border-2 overflow-hidden cursor-pointer transition-all outline-none bg-white",
             !filled && "border-slate-200 hover:border-sky-500",
-            filled && "border-emerald-500 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]",
+            filled && !allSaved && !hasError && "border-amber-400",
+            allSaved && "border-emerald-500 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]",
+            hasError && "border-red-400",
             dragOver === def.id && "border-sky-500 bg-sky-50 scale-[1.02]",
             focusedSlot === def.id && "ring-2 ring-sky-300",
           )}
@@ -638,20 +709,33 @@ export const OrderUploadTiles = forwardRef<OrderUploadTilesHandle, OrderUploadTi
 
           {filled && (
             <>
-              {/* Count badge */}
-              <div className="absolute top-1.5 left-1.5 z-10 rounded-full bg-white/95 border border-emerald-200 text-slate-800 text-[11px] font-bold px-1.5 py-0.5 shadow">
+              <div className="absolute top-1.5 left-1.5 z-10 rounded-full bg-white/95 border border-slate-200 text-slate-800 text-[11px] font-bold px-1.5 py-0.5 shadow">
                 {badgeEmoji(def)} {count}
               </div>
 
-              {/* Uploaded pill */}
-              <div className="absolute top-1.5 right-1.5 z-10 rounded-full bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 flex items-center gap-0.5 shadow">
-                <Check className="h-3 w-3" strokeWidth={3} />
-                הועלה
-              </div>
+              {statusPill && (
+                <div
+                  className={cn(
+                    "absolute top-1.5 right-1.5 z-10 rounded-full text-white text-[10px] font-bold px-2 py-0.5 flex items-center gap-0.5 shadow",
+                    statusPill.className,
+                  )}
+                >
+                  {allSaved && <Check className="h-3 w-3" strokeWidth={3} />}
+                  {statusPill.label}
+                </div>
+              )}
 
               <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/75 via-black/40 to-transparent px-2 pt-8 pb-2">
                 <p className="text-[11px] text-white font-semibold truncate">{def.label}</p>
-                <p className="text-[10px] text-emerald-200 font-medium">{countLabel(def, count)}</p>
+                <p
+                  className={cn(
+                    "text-[10px] font-medium",
+                    allSaved ? "text-emerald-200" : hasError ? "text-red-200" : "text-amber-100",
+                  )}
+                >
+                  {countLabel(def, count)}
+                  {!allSaved && !hasError && !orderId ? " · יישמרו בשליחה" : ""}
+                </p>
               </div>
             </>
           )}
@@ -675,6 +759,20 @@ export const OrderUploadTiles = forwardRef<OrderUploadTilesHandle, OrderUploadTi
 
     return (
       <div className={cn("space-y-5", className)}>
+        {toast && (
+          <div
+            className={cn(
+              "rounded-xl px-3 py-2 text-sm font-medium border",
+              toast.includes("לא נשמר")
+                ? "bg-red-50 text-red-700 border-red-200"
+                : "bg-emerald-50 text-emerald-800 border-emerald-200",
+            )}
+            role="status"
+          >
+            {toast}
+          </div>
+        )}
+
         {!hydrated && <p className="text-xs text-slate-400">טוען טיוטת קבצים...</p>}
 
         <section>
@@ -699,7 +797,9 @@ export const OrderUploadTiles = forwardRef<OrderUploadTilesHandle, OrderUploadTi
         </section>
 
         <p className="text-[11px] text-slate-400">
-          לחיצה על כרטיס עם קבצים פותחת את הרשימה. ניתן לגרור או להדביק (Ctrl+V) קבצים נוספים — הם יתווספו בלי לדרוס את הקיימים.
+          {orderId
+            ? "קבצים מועלים מיד לשרת ולמסד הנתונים. לחיצה על כרטיס פותחת את רשימת הקבצים."
+            : "קבצים מסומנים «מוכן לשליחה» נשמרים בשרת רק אחרי שליחת ההזמנה. לחיצה על כרטיס פותחת את הרשימה."}
         </p>
 
         <input
@@ -840,7 +940,10 @@ export const OrderUploadTiles = forwardRef<OrderUploadTilesHandle, OrderUploadTi
                 <div>
                   <p className="font-bold text-sm">{managerDef.label}</p>
                   <p className="text-xs text-emerald-700 font-medium">
-                    ✅ הועלה · {countLabel(managerDef, managerItems.length)}
+                    {managerItems.every((i) => i.status === "uploaded")
+                      ? "✅ נשמר בשרת"
+                      : "מוכן לשליחה"}{" "}
+                    · {countLabel(managerDef, managerItems.length)}
                   </p>
                 </div>
                 <button

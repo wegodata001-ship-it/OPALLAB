@@ -519,6 +519,19 @@ export class AppDataService {
       fileName: file.fileName,
     });
 
+    if (!file.buffer?.length) {
+      throw new AppError("UPLOAD_ERROR", "תוכן הקובץ ריק — ההעלאה ל־Storage נכשלה", 400);
+    }
+
+    console.info("[addOrderFile] uploading to storage", {
+      orderId,
+      storagePath,
+      category,
+      slotKey,
+      versionKey,
+      bytes: file.buffer.length,
+    });
+
     await uploadFile(STORAGE_BUCKETS.ORDER_FILES, storagePath, file.buffer, file.mimeType);
 
     return prisma.$transaction(async (tx) => {
@@ -1473,6 +1486,8 @@ export class AppDataService {
         userId,
         checkIn: now,
         method: toPrismaAttendanceMethod(method),
+        trustedDeviceId: meta?.trustedDeviceId ?? null,
+        ipAddress: meta?.ipAddress ?? null,
         nfcTagId: user?.nfcTagId ?? null,
         latitude: meta?.latitude ?? null,
         longitude: meta?.longitude ?? null,

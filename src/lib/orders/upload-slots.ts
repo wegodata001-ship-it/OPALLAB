@@ -194,3 +194,33 @@ export function parseSlotFromNotes(notes?: string | null): OrderUploadSlotId | n
 export function getSlotDef(id: OrderUploadSlotId): OrderUploadSlotDef {
   return ORDER_UPLOAD_SLOTS.find((s) => s.id === id)!;
 }
+
+/** Map stored slotKey / notes back to create-order tile id. */
+export function resolveUploadSlotId(input: {
+  notes?: string | null;
+  slotKey?: string | null;
+}): OrderUploadSlotId | null {
+  const fromNotes = parseSlotFromNotes(input.notes);
+  if (fromNotes) return fromNotes;
+
+  const key = input.slotKey;
+  if (!key) return null;
+
+  const bySlotKey: Record<string, OrderUploadSlotId> = {
+    FrontFace: "face_front",
+    Smile: "smile",
+    RightProfile: "side_right",
+    LeftProfile: "side_left",
+    FrontalOcclusion: "occlusion_front",
+    RightBuccal: "occlusion_right",
+    LeftBuccal: "occlusion_left",
+    UpperOcclusal: "arch_upper",
+    LowerOcclusal: "arch_lower",
+    UpperScan: "scan_upper",
+    LowerScan: "scan_lower",
+    BiteScan: "scan_bite",
+    Other: "extra_files",
+    General: "extra_files",
+  };
+  return bySlotKey[key] ?? null;
+}

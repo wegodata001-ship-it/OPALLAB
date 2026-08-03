@@ -5,12 +5,11 @@ import { Header } from "@/components/layout/sidebar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/providers/AppProvider";
-import { AttendanceVerificationModal } from "@/components/attendance/AttendanceVerificationModal";
 import { fetchAttendanceStatus } from "@/lib/attendance/status";
 import { USER_ROLE_LABELS, ORDER_STATUS_LABELS } from "@/lib/constants/labels";
-import { formatCurrency, formatDate, formatDateTime } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils";
 import { calculateEmployeePay, getSalaryLabel } from "@/lib/salary";
-import { Clock, CheckCircle2, Wallet } from "lucide-react";
+import { Clock, CheckCircle2, Wallet, QrCode } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   PRODUCTION_STAGES,
@@ -23,9 +22,7 @@ import Link from "next/link";
 const STAGE_LABELS = Object.fromEntries(PRODUCTION_STAGES.map((s) => [s.status, s.label])) as Record<OrderStatus, string>;
 
 export default function MyWorkPage() {
-  const { currentUser, attendance, orders, checkIn, checkOut } = useApp();
-  const [modalOpen, setModalOpen] = useState(false);
-  const [message, setMessage] = useState("");
+  const { currentUser, attendance, orders } = useApp();
   const [hasOpenRecord, setHasOpenRecord] = useState<boolean | null>(null);
 
   const refreshAttendanceStatus = useCallback(async () => {
@@ -83,25 +80,9 @@ export default function MyWorkPage() {
     return reports.sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
   })();
 
-  const handleSubmit = async (meta: Parameters<typeof checkIn>[2]) => {
-    const status = await fetchAttendanceStatus();
-
-    if (status.hasOpenRecord) {
-      await checkOut(currentUser.id, "GPS", meta);
-      setHasOpenRecord(false);
-      setMessage(`יציאה נרשמה — ${formatDateTime(new Date())}`);
-    } else {
-      await checkIn(currentUser.id, "GPS", meta);
-      setHasOpenRecord(true);
-      setMessage(`כניסה נרשמה — ${formatDateTime(new Date())}`);
-    }
-
-    await refreshAttendanceStatus();
-  };
-
   return (
     <>
-      <Header title="נוכחות ודיווחים" description={`${currentUser.name} · ${USER_ROLE_LABELS[currentUser.role]}`} />
+      <Header title="העבודה שלי" description={`${currentUser.name} · ${USER_ROLE_LABELS[currentUser.role]}`} />
 
       <div className="grid sm:grid-cols-3 gap-4 mb-6">
         <Card>
@@ -135,44 +116,41 @@ export default function MyWorkPage() {
         </Card>
       </div>
 
-      <AttendanceVerificationModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        kind={isActive ? "check-out" : "check-in"}
-        userId={currentUser.id}
-        isCheckOut={isActive}
-        onSubmit={handleSubmit}
-      />
-
       <div className="grid lg:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
             <CardTitle>נוכחות</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-6 text-center py-4">
+          <CardContent className="space-y-4 text-center py-4">
             <div>
-              <p className="text-sm text-slate-500 mb-1">מצב</p>
-              <p className={cn("text-xl font-bold", hasOpenRecord === null ? "text-slate-400" : isActive ? "text-emerald-700" : "text-slate-600")}>
+              <p className="text-sm text-slate-500 mb-1">מצב כעת</p>
+              <p
+                className={cn(
+                  "text-xl font-bold",
+                  hasOpenRecord === null ? "text-slate-400" : isActive ? "text-emerald-700" : "text-slate-600",
+                )}
+              >
                 {hasOpenRecord === null ? "טוען..." : isActive ? "בעבודה" : "לא בוצעה כניסה"}
               </p>
             </div>
 
-            <Button
-              size="lg"
-              className={cn(
-                "w-full max-w-xs mx-auto",
-                hasOpenRecord === true && "bg-red-600 hover:bg-red-700",
-                hasOpenRecord === false && "bg-emerald-600 hover:bg-emerald-700",
-              )}
-              disabled={hasOpenRecord === null}
-              onClick={() => { setMessage(""); void refreshAttendanceStatus(); setModalOpen(true); }}
-            >
-              {hasOpenRecord === null ? "טוען..." : isActive ? "רישום יציאה" : "רישום כניסה"}
-            </Button>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 space-y-2">
+              <QrCode className="h-8 w-8 text-opal-gold mx-auto" />
+              <p className="font-medium text-slate-800">כניסה ויציאה רק בשער המעבדה</p>
+              <p>
+                סרקו את ה־QR או הצמידו את הטלפון לתג ה־NFC בכניסה.
+                אין יותר רישום נוכחות ממסך זה.
+              </p>
+            </div>
 
-            {message && (
-              <p className="text-sm text-emerald-600">{message}</p>
-            )}
+            <Link href="/attendance/checkin">
+              <Button variant="outline" className="w-full max-w-xs mx-auto">
+                פתיחת שער הנוכחות (בדיקה)
+              </Button>
+            </Link>
+            <Link href="/my-attendance" className="block text-sm text-opal-gold-dark hover:underline">
+              לצפייה בהיסטוריית הנוכחות →
+            </Link>
           </CardContent>
         </Card>
 
@@ -180,22 +158,6 @@ export default function MyWorkPage() {
           <CardHeader><CardTitle>הרשאות התפקיד שלי</CardTitle></CardHeader>
           <CardContent>
             <p className="text-sm text-slate-600">{ROLE_PERMISSIONS_SUMMARY[currentUser.role]}</p>
-          </CardContent>
-        </Card>
-
-        <Card className="lg:col-span-2">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>יומן נוכחות</CardTitle>
-            <Link href="/my-attendance">
-              <Button variant="outline" size="sm">הנוכחות שלי →</Button>
-            </Link>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-slate-600 text-center py-6">
-              לצפייה בהיסטוריית הנוכחות, סיכום שעות ומשמרות — עבור ל
-              {" "}
-              <Link href="/my-attendance" className="text-opal-gold-dark font-medium hover:underline">הנוכחות שלי</Link>
-            </p>
           </CardContent>
         </Card>
 

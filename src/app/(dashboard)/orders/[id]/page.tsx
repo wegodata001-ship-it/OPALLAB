@@ -109,19 +109,27 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           <CardContent><DentalChart selectedTeeth={order.selectedTeeth} onChange={() => {}} readOnly /></CardContent>
         </Card>
 
-        <Card>
-          <CardHeader><CardTitle>קבצים ({order.files.length})</CardTitle></CardHeader>
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>
+              קבצים (
+              {order.files.filter((f) => f.isCurrent !== false).length})
+            </CardTitle>
+          </CardHeader>
           <CardContent>
+            <p className="text-xs text-slate-500 mb-3">
+              הקבצים נטענים ממסד הנתונים · זמינים גם אחרי רענון או ממכשיר אחר
+            </p>
             <OrderFilesSection
               orderId={order.id}
               files={order.files}
               canUpload={!!canEdit}
-              onUpload={(f, folderId, meta) =>
-                addOrderFile(order.id, f, undefined, folderId, {
+              onUpload={async (f, folderId, meta) => {
+                await addOrderFile(order.id, f, undefined, folderId, {
                   category: meta?.category,
                   slotKey: meta?.slotKey,
-                })
-              }
+                });
+              }}
             />
           </CardContent>
         </Card>

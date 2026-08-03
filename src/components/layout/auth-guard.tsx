@@ -19,6 +19,8 @@ const PATH_MODULE: Record<string, AppModule> = {
   "/my-work": "my-work",
   "/my-attendance": "my-attendance",
   "/attendance-management": "attendance-management",
+  "/trusted-devices": "trusted-devices",
+  "/system": "trusted-devices",
 };
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -36,7 +38,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
     const base = "/" + pathname.split("/").filter(Boolean)[0];
     const module = PATH_MODULE[base];
-    if (module && !canAccessUser(currentUser, module)) {
+    // /system/* pages render their own 403 UI — do not hide them behind a redirect (looks like 404).
+    if (module && !canAccessUser(currentUser, module) && !pathname.startsWith("/system/")) {
       router.replace(getDefaultRoute(currentUser));
     }
   }, [isAuthenticated, isLoading, currentUser, pathname, router]);

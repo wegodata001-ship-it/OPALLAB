@@ -211,12 +211,30 @@ export async function mapOrderWithRelations(order: OrderWithIncludes): Promise<O
   };
 }
 
-export function mapLabSettings(_entries: { key: string; value: string }[]): LabSettings {
-  return {};
+export function mapLabSettings(entries: { key: string; value: string }[]): LabSettings {
+  const map = Object.fromEntries(entries.map((e) => [e.key, e.value]));
+  const num = (v?: string) => {
+    if (v == null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    labLatitude: num(map.labLatitude),
+    labLongitude: num(map.labLongitude),
+    geofenceRadiusMeters: num(map.geofenceRadiusMeters),
+    gateToken: map.gateToken?.trim() || null,
+  };
 }
 
-export function labSettingsToEntries(_settings: LabSettings): { key: string; value: string }[] {
-  return [];
+export function labSettingsToEntries(settings: LabSettings): { key: string; value: string }[] {
+  const out: { key: string; value: string }[] = [];
+  if (settings.labLatitude != null) out.push({ key: "labLatitude", value: String(settings.labLatitude) });
+  if (settings.labLongitude != null) out.push({ key: "labLongitude", value: String(settings.labLongitude) });
+  if (settings.geofenceRadiusMeters != null) {
+    out.push({ key: "geofenceRadiusMeters", value: String(settings.geofenceRadiusMeters) });
+  }
+  if (settings.gateToken != null) out.push({ key: "gateToken", value: settings.gateToken });
+  return out;
 }
 
 export const ORDER_INCLUDE = {

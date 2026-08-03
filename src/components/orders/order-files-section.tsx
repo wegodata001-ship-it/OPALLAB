@@ -46,6 +46,7 @@ export function OrderFilesSection({
   const { users } = useApp();
   const [preview, setPreview] = useState<OrderFile | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [openCategory, setOpenCategory] = useState<OrderFileCategory | "all">("all");
   const [showHistory, setShowHistory] = useState(false);
 
@@ -76,10 +77,21 @@ export function OrderFilesSection({
     async (list: FileList | null, category?: OrderFileCategory) => {
       if (!list) return;
       setUploading(true);
+      setUploadMessage(null);
+      let ok = 0;
       try {
         for (const file of Array.from(list)) {
           await onUpload(file, undefined, category ? { category } : undefined);
+          ok += 1;
         }
+        setUploadMessage(
+          ok === 1 ? "הקובץ נשמר בהצלחה" : `${ok} קבצים נשמרו בהצלחה`,
+        );
+      } catch (err) {
+        console.error("[order-files-section] upload failed", err);
+        setUploadMessage(
+          err instanceof Error ? `הקובץ לא נשמר: ${err.message}` : "הקובץ לא נשמר בשרת",
+        );
       } finally {
         setUploading(false);
       }
@@ -94,6 +106,18 @@ export function OrderFilesSection({
 
   return (
     <>
+      {uploadMessage && (
+        <p
+          className={cn(
+            "mb-3 rounded-lg border px-3 py-2 text-sm font-medium",
+            uploadMessage.includes("לא נשמר")
+              ? "border-red-200 bg-red-50 text-red-700"
+              : "border-emerald-200 bg-emerald-50 text-emerald-800",
+          )}
+        >
+          {uploadMessage}
+        </p>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div className="flex flex-wrap gap-1">
           <button

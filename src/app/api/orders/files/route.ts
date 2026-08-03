@@ -35,7 +35,20 @@ export async function POST(request: Request) {
       throw new AppError("UPLOAD_ERROR", `גודל הקובץ חורג מהמגבלה (${process.env.MAX_UPLOAD_SIZE_MB || 500}MB)`, 400);
     }
 
+    console.info("[api/orders/files] upload start", {
+      orderId,
+      fileName: file.name,
+      size: file.size,
+      mimeType: file.type,
+      uploadSlotId: typeof uploadSlotId === "string" ? uploadSlotId : null,
+      userId,
+    });
+
     const buffer = Buffer.from(await file.arrayBuffer());
+    if (!buffer.length) {
+      throw new AppError("UPLOAD_ERROR", "קובץ ריק או שההעלאה נקטעה — נסו שוב", 400);
+    }
+
     const folderId = formData.get("folderId");
     const created = await appDataService.addOrderFile(orderId, userId, {
       fileName: file.name,
@@ -58,8 +71,17 @@ export async function POST(request: Request) {
           : undefined,
     });
 
+    console.info("[api/orders/files] upload ok", {
+      orderId,
+      fileId: created.id,
+      storagePath: created.storagePath,
+      category: created.category,
+      slotKey: created.slotKey,
+    });
+
     return jsonOk({ file: created });
   } catch (error) {
+    console.error("[api/orders/files] upload failed", error);
     return jsonError(error);
   }
 }

@@ -112,11 +112,12 @@ export const SALARY_TYPE_LABELS: Record<SalaryType, string> = {
 };
 
 export const ATTENDANCE_METHOD_LABELS: Record<AttendanceMethod, string> = {
-  NFC: "עמדת NFC",
+  NFC: "עמדת NFC (ישן)",
   MANUAL: "ידני",
   GEOFENCE_AUTO: "גיאופנס אוטומטי",
   WIFI: "רשת WiFi (ישן)",
-  GPS: "GPS + אימות סלפי",
+  GPS: "GPS + אימות סלפי (ישן)",
+  TRUSTED_DEVICE: "שער QR/NFC · מכשיר מאושר",
 };
 
 export const WORKFLOW_STEPS: OrderStatus[] = [

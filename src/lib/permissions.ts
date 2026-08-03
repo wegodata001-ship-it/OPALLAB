@@ -18,7 +18,8 @@ export type AppModule =
   | "settings"
   | "my-work"
   | "my-attendance"
-  | "attendance-management";
+  | "attendance-management"
+  | "trusted-devices";
 
 const ADMIN_MODULES: AppModule[] = [
   "dashboard",
@@ -29,6 +30,7 @@ const ADMIN_MODULES: AppModule[] = [
   "shipping",
   "attendance",
   "attendance-management",
+  "trusted-devices",
   "settings",
   "my-work",
   "my-attendance",

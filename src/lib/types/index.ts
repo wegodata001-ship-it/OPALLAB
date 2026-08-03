@@ -69,7 +69,15 @@ export type OrderFileCategory =
   | "Delivery"
   | "Other";
 
-export type AttendanceMethod = "NFC" | "MANUAL" | "GEOFENCE_AUTO" | "WIFI" | "GPS";
+export type AttendanceMethod =
+  | "NFC"
+  | "MANUAL"
+  | "GEOFENCE_AUTO"
+  | "WIFI"
+  | "GPS"
+  | "TRUSTED_DEVICE";
+
+export type TrustedDeviceStatus = "ACTIVE" | "BLOCKED" | "REVOKED";
 
 export type PaymentStatus = "PENDING" | "PARTIAL" | "PAID" | "OVERDUE";
 
@@ -77,8 +85,13 @@ export type SalaryType = "MONTHLY" | "HOURLY";
 
 export type PaymentMethod = "CASH" | "CHECK" | "TRANSFER" | "CREDIT_CARD";
 
-/** Lab settings — WiFi attendance removed in Attendance V2 */
-export interface LabSettings {}
+/** Lab settings — gate geofence for QR/NFC trusted-device attendance */
+export interface LabSettings {
+  labLatitude?: number | null;
+  labLongitude?: number | null;
+  geofenceRadiusMeters?: number | null;
+  gateToken?: string | null;
+}
 
 export interface StageCompletion {
   completedBy: string;
@@ -324,6 +337,8 @@ export interface AttendanceLocationMeta {
   photoPath?: string | null;
   fileName?: string | null;
   device?: AttendanceDeviceMeta;
+  trustedDeviceId?: string | null;
+  ipAddress?: string | null;
 }
 
 export type AttendanceCheckInMeta = AttendanceLocationMeta;
@@ -334,6 +349,8 @@ export interface AttendanceRecord {
   checkIn: Date;
   checkOut?: Date | null;
   method: AttendanceMethod;
+  trustedDeviceId?: string | null;
+  ipAddress?: string | null;
   nfcTagId?: string | null;
   latitude?: number | null;
   longitude?: number | null;

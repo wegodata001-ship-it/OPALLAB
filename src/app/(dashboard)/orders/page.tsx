@@ -14,6 +14,10 @@ import {
   OrderUploadTiles,
   type OrderUploadTilesHandle,
 } from "@/components/orders/order-upload-tiles";
+import {
+  loadPendingFromDraft,
+  persistSlotUploads,
+} from "@/lib/orders/persist-slot-uploads";
 import { StatusBadge } from "@/components/orders/status-badge";
 import { OrderStageIndicator } from "@/components/orders/order-stage-indicator";
 import { ExportActions } from "@/components/shared/export-actions";
@@ -37,8 +41,9 @@ function OrdersContent() {
   const tabParam = searchParams.get("tab") === "new" ? "new" : "list";
   const setTab = (t: "list" | "new") => router.push(t === "new" ? "/orders?tab=new" : "/orders");
 
-  const { orders, doctors, createOrder, addOrderFile, currentUser } = useApp();
+  const { orders, doctors, createOrder, addOrderFile, currentUser, refresh } = useApp();
   const uploadRef = useRef<OrderUploadTilesHandle>(null);
+  const [formError, setFormError] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<OrderStatus | "ALL">("ALL");
   const [uploadOrderId, setUploadOrderId] = useState("");
@@ -93,22 +98,45 @@ function OrdersContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+    setFormError("");
     try {
-      const order = await createOrder({
-        doctorId: doctorId || undefined,
-        patientName: patientName.trim() || undefined,
-        patientAge: patientAge ? parseInt(patientAge) : undefined,
-        patientGender: patientGender || undefined,
-        shade: shade || undefined, materials, workTypes, selectedTeeth,
-        description: description || undefined,
-        completionDate: completionDate ? new Date(completionDate) : undefined,
-        totalPrice: totalPrice ? parseFloat(totalPrice) : undefined,
-      });
-
-      if (uploadRef.current?.hasFiles()) {
-        await uploadRef.current.uploadAll(order.id);
-        await uploadRef.current.clear();
+      // Capture files BEFORE createOrder refresh can remount/clear tiles.
+      let pending = uploadRef.current?.getPendingUploads() ?? [];
+      if (pending.length === 0) {
+        pending = await loadPendingFromDraft("staff-order-create");
       }
+
+      const order = await createOrder(
+        {
+          doctorId: doctorId || undefined,
+          patientName: patientName.trim() || undefined,
+          patientAge: patientAge ? parseInt(patientAge) : undefined,
+          patientGender: patientGender || undefined,
+          shade: shade || undefined,
+          materials,
+          workTypes,
+          selectedTeeth,
+          description: description || undefined,
+          completionDate: completionDate ? new Date(completionDate) : undefined,
+          totalPrice: totalPrice ? parseFloat(totalPrice) : undefined,
+        },
+        { skipRefresh: pending.length > 0 },
+      );
+
+      if (!order?.id) {
+        throw new Error("ההזמנה נוצרה ללא מזהה — לא ניתן לשמור קבצים");
+      }
+
+      if (pending.length > 0) {
+        await persistSlotUploads(order.id, pending, {
+          askVersionMode: (fileName, existingName, existingVersion) =>
+            uploadRef.current?.askVersionMode(fileName, existingName, existingVersion) ??
+            Promise.resolve("new_version"),
+        });
+        await uploadRef.current?.clear();
+      }
+
+      await refresh();
 
       setDoctorId("");
       setPatientName("");
@@ -122,6 +150,14 @@ function OrdersContent() {
       setCompletionDate("");
       setTotalPrice("");
       router.push(`/orders?saved=${order.serialNumber}`);
+    } catch (err) {
+      console.error("[staff-order] submit failed", err);
+      setFormError(err instanceof Error ? err.message : "שגיאה בשמירת ההזמנה או הקבצים");
+      try {
+        await refresh();
+      } catch {
+        /* ignore */
+      }
     } finally {
       setSaving(false);
     }
@@ -360,13 +396,16 @@ function OrdersContent() {
                   <OrderUploadTiles ref={uploadRef} draftKey="staff-order-create" />
                 </div>
               </div>
+              {formError && <p className="text-sm text-red-600">{formError}</p>}
               <div className="flex gap-3 pt-2">
                 <Button type="submit" size="lg" disabled={saving}>
-                  {saving ? "שומר ומעלה קבצים..." : "שמירת הזמנה"}
+                  {saving ? "שומר ומעלה קבצים לשרת..." : "שמירת הזמנה"}
                 </Button>
                 <Button type="button" variant="outline" onClick={() => setTab("list")} disabled={saving}>ביטול</Button>
               </div>
-              <p className="text-xs text-slate-400">כל השדות אופציונליים — ניתן לשמור הזמנה ריקה ולהשלים מאוחר יותר. קבצים שנבחרו נשמרים אוטומטית בדפדפן.</p>
+              <p className="text-xs text-slate-400">
+                הקבצים נשמרים בשרת ובמסד הנתונים רק לאחר לחיצה על «שמירת הזמנה». עד אז נשמרת טיוטה מקומית בדפדפן.
+              </p>
             </CardContent>
           </Card>
         </form>

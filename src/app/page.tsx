@@ -106,7 +106,7 @@ export default function LoginPage() {
           </div>
 
           <p className="text-center text-xs text-slate-400 mt-6">
-            <a href="/attendance" className="hover:text-opal-gold">נוכחות NFC →</a>
+            <a href="/attendance/checkin" className="hover:text-opal-gold">שער נוכחות QR/NFC →</a>
           </p>
         </div>
       </div>

@@ -56,6 +56,7 @@ export class ResetSystemService {
       deleted.patient = (await tx.patient.deleteMany()).count;
 
       deleted.attendanceRecord = (await tx.attendanceRecord.deleteMany()).count;
+      deleted.trustedDevice = (await tx.trustedDevice.deleteMany()).count;
     });
 
     let storageRemoved: Record<string, number>;

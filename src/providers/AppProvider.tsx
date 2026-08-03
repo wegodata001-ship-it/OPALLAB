@@ -78,7 +78,11 @@ interface AppContextValue {
   getDoctorForUser: (userId: string) => Doctor | undefined;
   getMovementsByItem: (itemId: string) => InventoryMovement[];
   getCategoryLabel: (id: string) => string;
-  createOrder: (input: CreateOrderInput) => Promise<Order>;
+  createOrder: (
+    input: CreateOrderInput,
+    options?: { skipRefresh?: boolean },
+  ) => Promise<Order>;
+  refresh: () => Promise<void>;
   updateOrder: (input: UpdateOrderInput) => Promise<void>;
   updateOrderStatus: (input: UpdateOrderStatusInput) => Promise<void>;
   completeStage: (input: CompleteStageInput) => Promise<void>;
@@ -229,13 +233,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [store.inventoryCategories],
   );
 
-  const createOrder = useCallback(async (input: CreateOrderInput): Promise<Order> => {
+  const createOrder = useCallback(async (
+    input: CreateOrderInput,
+    options?: { skipRefresh?: boolean },
+  ): Promise<Order> => {
     if (!currentUser) throw new Error("Not authenticated");
     return withLoading(async () => {
       const result = await apiPost<{ order: Order }>("/api/orders", input);
-      await refreshInternal();
+      // Skip refresh when caller still needs local upload state (file tiles) intact.
+      if (!options?.skipRefresh) await refreshInternal();
       return result.order;
-    }, "שומר...");
+    }, "שומר הזמנה...");
   }, [currentUser, withLoading, refreshInternal]);
 
   const updateOrder = useCallback(async (input: UpdateOrderInput) => {
@@ -281,7 +289,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       uploadSlotId?: string;
     },
   ) => {
-    if (!currentUser) return;
+    if (!currentUser) throw new Error("Not authenticated");
     await withLoading(async () => {
       const formData = new FormData();
       formData.append("orderId", orderId);
@@ -292,6 +300,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (meta?.slotKey) formData.append("slotKey", meta.slotKey);
       if (meta?.versionMode) formData.append("versionMode", meta.versionMode);
       if (meta?.uploadSlotId) formData.append("uploadSlotId", meta.uploadSlotId);
+      console.info("[addOrderFile] posting", { orderId, fileName: file.name, size: file.size });
       await apiPost("/api/orders/files", formData);
       await refreshInternal();
     }, "מעלה קבצים...");
@@ -562,6 +571,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     getMovementsByItem,
     getCategoryLabel,
     createOrder,
+    refresh,
     updateOrder,
     updateOrderStatus,
     completeStage,

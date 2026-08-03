@@ -91,6 +91,13 @@ enum AttendanceMethod {
   GEOFENCE_AUTO
   WIFI
   GPS
+  TRUSTED_DEVICE
+}
+
+enum TrustedDeviceStatus {
+  ACTIVE
+  BLOCKED
+  REVOKED
 }
 
 enum PaymentStatus {
@@ -154,11 +161,41 @@ model User {
   finishOrders       Order[]              @relation("FinishEmployee")
   statusChanges      OrderStatusHistory[]
   attendanceRecords  AttendanceRecord[]
+  trustedDevices     TrustedDevice[]
   inventoryMovements InventoryMovement[]
   employeePayments   Payment[]            @relation("EmployeePayments")
   auditLogs          AuditLog[]
 
   @@index([role, isActive])
+}
+
+model TrustedDevice {
+  id                    String              @id @default(cuid())
+  userId                String
+  /// Client-generated trusted device id (localStorage) — not a hardware IMEI
+  deviceKey             String              @unique
+  label                 String?
+  browser               String?
+  os                    String?
+  deviceType            String?
+  userAgent             String?
+  screenSize            String?
+  timezone              String?
+  status                TrustedDeviceStatus @default(ACTIVE)
+  registeredAt          DateTime            @default(now())
+  lastUsedAt            DateTime?
+  lastIp                String?
+  registrationPhotoPath String?
+  registrationLatitude  Float?
+  registrationLongitude Float?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attendanceRecords  AttendanceRecord[]
+
+  @@index([userId, status])
+  @@index([lastUsedAt])
 }
 
 model Doctor {
@@ -416,6 +453,8 @@ model AttendanceRecord {
   checkIn           DateTime
   checkOut          DateTime?
   method            AttendanceMethod
+  trustedDeviceId   String?
+  ipAddress         String?
   nfcTagId          String?
   latitude          Float?
   longitude         Float?
@@ -455,10 +494,12 @@ model AttendanceRecord {
   notes             String?
   createdAt         DateTime         @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user          User           @relation(fields: [userId], references: [id])
+  trustedDevice TrustedDevice? @relation(fields: [trustedDeviceId], references: [id], onDelete: SetNull)
 
   @@index([userId, checkIn])
   @@index([checkOut])
+  @@index([trustedDeviceId])
 }
 
 model LabSettings {

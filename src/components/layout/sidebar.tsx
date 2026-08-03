@@ -17,6 +17,8 @@ import {
   UserCircle,
   ClipboardClock,
   CalendarDays,
+  Smartphone,
+  QrCode,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/providers/AppProvider";
@@ -37,9 +39,11 @@ const navItems: NavItem[] = [
   { href: "/dashboard", label: "לוח בקרה", icon: LayoutDashboard, module: "dashboard" },
   { href: "/orders", label: "הזמנות", icon: ClipboardList, module: "orders" },
   { href: "/workflow", label: "מעקב ייצור", icon: Workflow, module: "workflow" },
-  { href: "/my-work", label: "נוכחות ודיווחים", icon: UserCircle, module: "my-work" },
+  { href: "/my-work", label: "העבודה שלי", icon: UserCircle, module: "my-work" },
   { href: "/my-attendance", label: "הנוכחות שלי", icon: CalendarDays, module: "my-attendance" },
   { href: "/attendance-management", label: "ניהול נוכחות", icon: ClipboardClock, module: "attendance-management" },
+  { href: "/system/attendance-qr", label: "QR לנוכחות", icon: QrCode, module: "trusted-devices" },
+  { href: "/trusted-devices", label: "מכשירים מאושרים", icon: Smartphone, module: "trusted-devices" },
   { href: "/inventory", label: "מלאי", icon: Package, module: "inventory" },
   { href: "/accounts", label: "כרטסות", icon: Wallet, module: "accounts" },
   { href: "/shipping", label: "אריזה ושילוח", icon: Truck, module: "shipping" },

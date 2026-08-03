@@ -15,6 +15,10 @@ import { MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS } from "@/lib/con
 import { cn } from "@/lib/utils";
 import type { Gender, MaterialType, WorkType } from "@/lib/types";
 import { Plus } from "lucide-react";
+import {
+  loadPendingFromDraft,
+  persistSlotUploads,
+} from "@/lib/orders/persist-slot-uploads";
 
 interface DoctorOrderFormProps {
   doctorId: string;
@@ -22,7 +26,7 @@ interface DoctorOrderFormProps {
 }
 
 export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
-  const { createOrder } = useApp();
+  const { createOrder, refresh } = useApp();
   const uploadRef = useRef<OrderUploadTilesHandle>(null);
   const [patientName, setPatientName] = useState("");
   const [patientAge, setPatientAge] = useState("");
@@ -35,6 +39,9 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
   const [completionDate, setCompletionDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const draftKey = `doctor-order-${doctorId}`;
 
   const toggleMaterial = (m: MaterialType) =>
     setMaterials((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
@@ -44,29 +51,54 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setSuccess("");
     if (!patientName.trim()) {
       setError("יש למלא שם מטופל");
       return;
     }
     setSaving(true);
     try {
-      const order = await createOrder({
-        doctorId,
-        patientName: patientName.trim(),
-        patientAge: patientAge ? parseInt(patientAge, 10) : undefined,
-        patientGender: patientGender || undefined,
-        shade: shade || undefined,
-        materials,
-        workTypes,
-        selectedTeeth,
-        description: description || undefined,
-        completionDate: completionDate ? new Date(completionDate) : undefined,
-      });
-
-      if (uploadRef.current?.hasFiles()) {
-        await uploadRef.current.uploadAll(order.id);
-        await uploadRef.current.clear();
+      // Snapshot BEFORE createOrder — refresh must not wipe tile state mid-flow.
+      let pending = uploadRef.current?.getPendingUploads() ?? [];
+      if (pending.length === 0) {
+        pending = await loadPendingFromDraft(draftKey);
       }
+
+      const order = await createOrder(
+        {
+          doctorId,
+          patientName: patientName.trim(),
+          patientAge: patientAge ? parseInt(patientAge, 10) : undefined,
+          patientGender: patientGender || undefined,
+          shade: shade || undefined,
+          materials,
+          workTypes,
+          selectedTeeth,
+          description: description || undefined,
+          completionDate: completionDate ? new Date(completionDate) : undefined,
+        },
+        { skipRefresh: pending.length > 0 },
+      );
+
+      if (!order?.id) {
+        throw new Error("ההזמנה נוצרה ללא מזהה — לא ניתן לשמור קבצים");
+      }
+
+      if (pending.length > 0) {
+        const { uploaded } = await persistSlotUploads(order.id, pending, {
+          askVersionMode: (fileName, existingName, existingVersion) =>
+            uploadRef.current?.askVersionMode(fileName, existingName, existingVersion) ??
+            Promise.resolve("new_version"),
+        });
+        await uploadRef.current?.clear();
+        setSuccess(
+          uploaded > 0
+            ? `ההזמנה נשמרה · ${uploaded} קבצים נשמרו בהצלחה בשרת`
+            : "ההזמנה נשמרה",
+        );
+      }
+
+      await refresh();
 
       setPatientName("");
       setPatientAge("");
@@ -79,7 +111,13 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
       setCompletionDate("");
       onCreated?.(order.serialNumber);
     } catch (err) {
+      console.error("[doctor-order] submit failed", err);
       setError(err instanceof Error ? err.message : "שגיאה בשליחת ההזמנה");
+      try {
+        await refresh();
+      } catch {
+        /* ignore */
+      }
     } finally {
       setSaving(false);
     }
@@ -186,14 +224,15 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
           <div>
             <Label>תמונות וסריקות</Label>
             <div className="mt-2">
-              <OrderUploadTiles ref={uploadRef} draftKey={`doctor-order-${doctorId}`} />
+              <OrderUploadTiles ref={uploadRef} draftKey={draftKey} />
             </div>
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
+          {success && <p className="text-sm text-emerald-700 font-medium">{success}</p>}
 
           <Button type="submit" className="w-full" size="lg" disabled={saving}>
-            {saving ? "שולח..." : "שלח הזמנה למעבדה"}
+            {saving ? "שומר ומעלה קבצים לשרת..." : "שלח הזמנה למעבדה"}
           </Button>
         </form>
       </CardContent>
