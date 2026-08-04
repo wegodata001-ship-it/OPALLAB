@@ -28,25 +28,25 @@ export const MATERIAL_LIBRARY: Record<MaterialProfileId, MaterialProfile> = {
   ivory: {
     id: "ivory",
     label: "Ivory Matte",
-    albedo: new Color3(0.9, 0.87, 0.8),
+    albedo: new Color3(0.92, 0.89, 0.82),
     metallic: 0,
-    roughness: 0.85,
+    roughness: 0.82,
     env: 0.1,
-    specular: 0.16,
+    specular: 0.18,
   },
   dentalScan: {
     id: "dentalScan",
     label: "Dental Ivory",
-    albedo: new Color3(0.88, 0.84, 0.76),
+    albedo: new Color3(0.9, 0.86, 0.78),
     metallic: 0,
-    roughness: 0.85,
+    roughness: 0.82,
     env: 0.1,
-    specular: 0.16,
+    specular: 0.18,
   },
   enamel: {
     id: "enamel",
     label: "Enamel",
-    albedo: new Color3(0.92, 0.89, 0.84),
+    albedo: new Color3(0.93, 0.9, 0.85),
     metallic: 0.02,
     roughness: 0.58,
     env: 0.12,
@@ -111,7 +111,7 @@ export const MATERIAL_LIBRARY: Record<MaterialProfileId, MaterialProfile> = {
   clay: {
     id: "clay",
     label: "Clay",
-    albedo: new Color3(0.72, 0.7, 0.68),
+    albedo: new Color3(0.78, 0.76, 0.74),
     metallic: 0,
     roughness: 0.92,
     env: 0.06,
@@ -119,7 +119,7 @@ export const MATERIAL_LIBRARY: Record<MaterialProfileId, MaterialProfile> = {
   monochrome: {
     id: "monochrome",
     label: "Monochrome",
-    albedo: new Color3(0.7, 0.7, 0.7),
+    albedo: new Color3(0.78, 0.78, 0.78),
     metallic: 0,
     roughness: 0.75,
     env: 0.08,
@@ -135,22 +135,38 @@ export const MATERIAL_LIBRARY: Record<MaterialProfileId, MaterialProfile> = {
   default: {
     id: "default",
     label: "Default Ivory",
-    albedo: new Color3(0.9, 0.87, 0.8),
+    albedo: new Color3(0.92, 0.89, 0.82),
     metallic: 0,
     roughness: 0.8,
     env: 0.1,
   },
 };
 
+/** Light gray for OBJ (and PLY without vertex colors). */
+const LIGHT_GRAY = new Color3(0.82, 0.82, 0.84);
+
+/**
+ * Format-first material selection — never black by default.
+ * STL → Ivory · OBJ → Light Gray · PLY → Vertex Colors / Light Gray
+ */
 export function profileForLayer(layer: SceneLayerId, format: ModelFormat): MaterialProfileId {
   if (layer === "gingiva") return "gingiva";
   if (layer === "scanBodies") return "scanBody";
   if (layer === "implant") return "titanium";
   if (layer === "temporary") return "pmma";
   if (layer === "final") return "zirconia";
-  if (format === "ply") return "vertexColor";
   if (format === "stl") return "ivory";
+  if (format === "obj") return "monochrome"; // light gray dental default for OBJ
+  if (format === "ply") return "vertexColor";
   if (layer === "upper" || layer === "lower" || layer === "bite") return "enamel";
+  return "ivory";
+}
+
+/** Profile id used for OBJ light-gray (alias of monochrome with brighter albedo). */
+export function formatDefaultProfile(format: ModelFormat): MaterialProfileId {
+  if (format === "stl") return "ivory";
+  if (format === "obj") return "monochrome";
+  if (format === "ply") return "vertexColor";
   return "ivory";
 }
 
@@ -168,25 +184,35 @@ export function createFromProfile(
     if (mesh && hasVertexColors(mesh)) {
       const mat = new StandardMaterial(`${name}_vc`, scene);
       mat.diffuseColor = Color3.White();
-      mat.specularColor = new Color3(0.08, 0.08, 0.08);
-      mat.specularPower = 16;
-      mat.ambientColor = new Color3(0.22, 0.22, 0.22);
+      mat.specularColor = new Color3(0.1, 0.1, 0.1);
+      mat.specularPower = 18;
+      mat.ambientColor = new Color3(0.32, 0.32, 0.34);
       mat.emissiveColor = Color3.Black();
       mat.backFaceCulling = false;
       mat.freeze();
       return mat;
     }
-    // No vertex colors → Dental Scan ivory (never burned white)
-    return createFromProfile(scene, name, "dentalScan", mesh);
+    // No vertex colors → Light Gray (never black)
+    return createLightGrayPbr(scene, name);
+  }
+
+  // OBJ / monochrome → explicit light gray PBR
+  if (profileId === "monochrome") {
+    return createLightGrayPbr(scene, name);
   }
 
   const mat = new PBRMaterial(`${name}_${profileId}`, scene);
-  mat.albedoColor = profile.albedo.clone();
+  const albedo = profile.albedo.clone();
+  // Guard: never ship a near-black albedo as default
+  if (0.2126 * albedo.r + 0.7152 * albedo.g + 0.0722 * albedo.b < 0.12) {
+    albedo.copyFrom(LIGHT_GRAY);
+  }
+  mat.albedoColor = albedo;
   mat.metallic = profile.metallic;
   mat.roughness = profile.roughness;
   mat.environmentIntensity = Math.min(profile.env, 0.15);
-  mat.directIntensity = profile.metallic >= 0.4 ? 1.1 : 1.0;
-  mat.specularIntensity = profile.specular ?? (profile.metallic >= 0.4 ? 0.42 : 0.18);
+  mat.directIntensity = profile.metallic >= 0.4 ? 1.2 : 1.2;
+  mat.specularIntensity = profile.specular ?? (profile.metallic >= 0.4 ? 0.42 : 0.2);
   mat.emissiveColor = Color3.Black();
   mat.backFaceCulling = false;
   mat.unlit = false;
@@ -198,6 +224,21 @@ export function createFromProfile(
   } catch {
     /* sheen plugin optional */
   }
+  mat.freeze();
+  return mat;
+}
+
+function createLightGrayPbr(scene: Scene, name: string): PBRMaterial {
+  const mat = new PBRMaterial(`${name}_lightGray`, scene);
+  mat.albedoColor = LIGHT_GRAY.clone();
+  mat.metallic = 0;
+  mat.roughness = 0.78;
+  mat.environmentIntensity = 0.1;
+  mat.directIntensity = 1.25;
+  mat.specularIntensity = 0.18;
+  mat.emissiveColor = Color3.Black();
+  mat.backFaceCulling = false;
+  mat.unlit = false;
   mat.freeze();
   return mat;
 }

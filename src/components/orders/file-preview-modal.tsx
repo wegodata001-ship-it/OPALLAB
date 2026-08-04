@@ -164,7 +164,7 @@ export function FilePreviewModal({
 
   const modalClass = cn(
     "shadow-2xl flex flex-col transition-all",
-    isDentalScene ? "bg-[#16181c]" : "bg-white",
+    isDentalScene ? "bg-[#f5f5fa]" : "bg-white",
     isFullscreen
       ? "fixed inset-0 z-[60] w-screen h-screen rounded-none"
       : isDentalScene
@@ -234,7 +234,7 @@ export function FilePreviewModal({
         <div
           className={cn(
             "flex-1 overflow-hidden relative min-h-0",
-            isDentalScene ? "bg-[#16181c]" : "bg-slate-50",
+            isDentalScene ? "bg-[#f5f5fa]" : "bg-slate-50",
           )}
         >
           {loading && previewKind !== "zip" && previewKind !== "plx" && previewKind !== "model3d" && !error && (

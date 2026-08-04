@@ -119,7 +119,7 @@ const BG_ITEMS: { id: AdvancedAction; label: string; bg: ViewerBackground }[] = 
 ];
 
 const VIEW_LABELS: Record<DentalViewMode, string> = {
-  dental: "Dental",
+  dental: "Dental Default",
   scan: "Scan",
   cad: "CAD",
   xray: "X-Ray",

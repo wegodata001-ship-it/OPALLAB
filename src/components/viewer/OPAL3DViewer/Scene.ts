@@ -1,4 +1,5 @@
 import {
+  Color3,
   Color4,
   Engine,
   Scene,
@@ -17,16 +18,16 @@ export type ViewerSceneBundle = {
 };
 
 const CLEAR: Record<ViewerBackground, Color4> = {
-  darkGray: new Color4(0.16, 0.17, 0.19, 1),
-  lightGray: new Color4(0.78, 0.79, 0.81, 1),
-  whiteStudio: new Color4(0.94, 0.945, 0.95, 1),
-  gradientGray: new Color4(0.22, 0.23, 0.26, 1),
+  darkGray: new Color4(0.1686, 0.1686, 0.1686, 1), // #2B2B2B
+  lightGray: new Color4(0.88, 0.89, 0.91, 1),
+  whiteStudio: new Color4(0.96, 0.96, 0.98, 1), // Dental Default
+  gradientGray: new Color4(0.32, 0.33, 0.36, 1),
   transparent: new Color4(0, 0, 0, 0),
 };
 
 export function createViewerScene(
   canvas: HTMLCanvasElement,
-  _theme: ViewerTheme = "dark",
+  _theme: ViewerTheme = "light",
 ): ViewerSceneBundle {
   const engine = new Engine(
     canvas,
@@ -47,7 +48,8 @@ export function createViewerScene(
   engine.setHardwareScalingLevel(estimateGpuScale());
 
   const scene = new Scene(engine);
-  scene.clearColor = CLEAR.darkGray.clone();
+  scene.clearColor = CLEAR.whiteStudio.clone();
+  scene.ambientColor = new Color3(0.62, 0.62, 0.64);
   scene.autoClear = true;
   scene.skipPointerMovePicking = false;
   scene.constantlyUpdateMeshUnderPointer = false;

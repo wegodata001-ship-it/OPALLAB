@@ -1,10 +1,14 @@
 import type { AbstractMesh, Scene } from "@babylonjs/core";
-import { applyProfileToMeshes } from "./MaterialLibrary";
+import {
+  applyProfileToMeshes,
+  formatDefaultProfile,
+} from "./MaterialLibrary";
 import { applyRenderMode } from "./Materials";
 import type {
   DentalPresetId,
   DentalViewMode,
   MaterialProfileId,
+  ModelFormat,
   ViewerBackground,
   ViewerRenderMode,
   ViewerTheme,
@@ -24,12 +28,12 @@ export type DentalPreset = {
 export const DENTAL_PRESETS: DentalPreset[] = [
   {
     id: "dental",
-    label: "Dental",
-    description: "Natural clinical dental look",
-    theme: "dark",
-    background: "darkGray",
+    label: "Dental Default",
+    description: "Bright clean studio — soft lights, always readable",
+    theme: "light",
+    background: "whiteStudio",
     renderMode: "shaded",
-    defaultProfile: "enamel",
+    defaultProfile: "ivory",
     layerProfiles: {
       gingiva: "gingiva",
       implant: "titanium",
@@ -37,6 +41,8 @@ export const DENTAL_PRESETS: DentalPreset[] = [
       final: "zirconia",
       temporary: "pmma",
       stl: "ivory",
+      obj: "monochrome",
+      ply: "vertexColor",
     },
   },
   {
@@ -59,8 +65,8 @@ export const DENTAL_PRESETS: DentalPreset[] = [
     id: "cad",
     label: "CAD",
     description: "Clear mesh for design work",
-    theme: "dark",
-    background: "darkGray",
+    theme: "light",
+    background: "lightGray",
     renderMode: "shaded",
     defaultProfile: "ivory",
     layerProfiles: {
@@ -73,8 +79,8 @@ export const DENTAL_PRESETS: DentalPreset[] = [
     id: "scan",
     label: "Scan",
     description: "Prefer vertex colors / dental scan ivory",
-    theme: "dark",
-    background: "darkGray",
+    theme: "light",
+    background: "whiteStudio",
     renderMode: "shaded",
     defaultProfile: "vertexColor",
     layerProfiles: {
@@ -105,8 +111,8 @@ export const DENTAL_PRESETS: DentalPreset[] = [
     id: "clay",
     label: "Clay",
     description: "Matte clay review",
-    theme: "dark",
-    background: "gradientGray",
+    theme: "light",
+    background: "lightGray",
     renderMode: "shaded",
     defaultProfile: "clay",
   },
@@ -114,8 +120,8 @@ export const DENTAL_PRESETS: DentalPreset[] = [
     id: "monochrome",
     label: "Monochrome",
     description: "Neutral gray form study",
-    theme: "dark",
-    background: "darkGray",
+    theme: "light",
+    background: "lightGray",
     renderMode: "shaded",
     defaultProfile: "monochrome",
   },
@@ -123,8 +129,8 @@ export const DENTAL_PRESETS: DentalPreset[] = [
     id: "implant",
     label: "Implant",
     description: "Highlight implants & scan bodies",
-    theme: "dark",
-    background: "darkGray",
+    theme: "light",
+    background: "whiteStudio",
     renderMode: "shaded",
     defaultProfile: "enamel",
     layerProfiles: {
@@ -156,10 +162,20 @@ export function applyDentalPreset(
 ): DentalPreset {
   const preset = DENTAL_PRESETS.find((p) => p.id === presetId) ?? DENTAL_PRESETS[0];
   for (const item of items) {
+    const format = item.format as ModelFormat;
     let profile: MaterialProfileId =
       preset.layerProfiles?.[item.layer] ?? preset.defaultProfile;
-    if (preset.id === "scan" && item.format === "ply") profile = "vertexColor";
-    if (preset.id === "scan" && item.format === "stl") profile = "ivory";
+
+    // Format defaults always win for mesh files — prevents black / wrong materials
+    if (preset.id === "dental" || preset.id === "clinical" || preset.id === "cad" || preset.id === "scan") {
+      if (item.layer !== "gingiva" && item.layer !== "implant" && item.layer !== "scanBodies") {
+        if (format === "stl" || format === "obj" || format === "ply") {
+          profile = formatDefaultProfile(format);
+        }
+      }
+    }
+    if (preset.id === "scan" && format === "ply") profile = "vertexColor";
+    if (preset.id === "scan" && format === "stl") profile = "ivory";
     if ((preset.id === "clay" || preset.id === "monochrome") && !preset.layerProfiles?.[item.layer]) {
       profile = preset.defaultProfile;
     }

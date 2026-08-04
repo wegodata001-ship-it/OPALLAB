@@ -9,6 +9,7 @@ import { CameraController, computeSceneBounds } from "./Camera";
 import { runDentalPipeline } from "./DentalPipeline";
 import {
   applyAutoExposure,
+  correctDarkAppearance,
   rotateEnvironment,
   setupEnvironment,
   setViewerBackground,
@@ -22,6 +23,7 @@ import {
   toggleLayer,
 } from "./Layers";
 import {
+  resetLightBoost,
   rotateLights,
   setupLights,
   updateLightsForBackground,
@@ -127,7 +129,7 @@ export function Viewer({
   const [projection, setProjectionState] = useState<ViewerProjection>("perspective");
   const [renderMode, setRenderMode] = useState<ViewerRenderMode>("shaded");
   const [viewMode, setViewMode] = useState<DentalViewMode>("dental");
-  const [background, setBackground] = useState<ViewerBackground>("darkGray");
+  const [background, setBackground] = useState<ViewerBackground>("whiteStudio");
   const [layers, setLayers] = useState(buildLayerStates([]));
   const [treeNodes, setTreeNodes] = useState<SceneTreeNode[]>([]);
   const [vertCount, setVertCount] = useState(0);
@@ -180,11 +182,11 @@ export function Viewer({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const bundle = createViewerScene(canvas, "dark");
+    const bundle = createViewerScene(canvas, "light");
     bundleRef.current = bundle;
     camCtrlRef.current = new CameraController(bundle.scene, canvas);
-    lightsRef.current = setupLights(bundle.scene, "darkGray");
-    envRef.current = setupEnvironment(bundle.scene, "darkGray");
+    lightsRef.current = setupLights(bundle.scene, "whiteStudio");
+    envRef.current = setupEnvironment(bundle.scene, "whiteStudio");
     axisRef.current = createAxisGizmo(bundle.scene);
     gridRef.current = createDentalGrid(bundle.scene);
     gridRef.current.setVisible(false);
@@ -347,10 +349,21 @@ export function Viewer({
         setMeshCount(pipeline.items.length);
         syncTree();
 
-        applyAutoExposure(scene, "darkGray");
+        // Dental Default — bright studio, soft lights, never black models
+        if (lightsRef.current) resetLightBoost(lightsRef.current, "whiteStudio");
+        applyAutoExposure(scene, "whiteStudio");
+        if (envRef.current) setViewerBackground(envRef.current, scene, "whiteStudio");
+        if (lightsRef.current) updateLightsForBackground(lightsRef.current, "whiteStudio");
+        correctDarkAppearance({
+          scene,
+          meshes: pipeline.items.map((i) => i.mesh),
+          lights: lightsRef.current,
+          env: envRef.current,
+        });
+        camCtrlRef.current?.updateClipPlanes(pipeline.items.map((i) => i.mesh));
         setViewMode("dental");
         setRenderMode("shaded");
-        setBackground("darkGray");
+        setBackground("whiteStudio");
         setViewPreset("iso");
         bundleRef.current?.engine.resize();
 
@@ -387,7 +400,10 @@ export function Viewer({
     if (!scene || !envRef.current) return;
     setViewerBackground(envRef.current, scene, bg);
     applyAutoExposure(scene, bg);
-    if (lightsRef.current) updateLightsForBackground(lightsRef.current, bg);
+    if (lightsRef.current) {
+      resetLightBoost(lightsRef.current, bg);
+      updateLightsForBackground(lightsRef.current, bg);
+    }
   }, []);
 
   const handleViewMode = useCallback(
@@ -399,6 +415,12 @@ export function Viewer({
       setViewMode(mode);
       setRenderMode(preset.renderMode);
       applyBackground(preset.background);
+      correctDarkAppearance({
+        scene,
+        meshes: meshes(),
+        lights: lightsRef.current,
+        env: envRef.current,
+      });
       freezeSceneMeshes(meshes());
       freezeScenePerformance(scene);
     },
@@ -530,7 +552,7 @@ export function Viewer({
   return (
     <div
       ref={wrapRef}
-      className={cn("relative w-full h-full min-h-0 bg-[#16181c] overflow-hidden", className)}
+      className={cn("relative w-full h-full min-h-0 bg-[#f5f5fa] overflow-hidden", className)}
       onPointerDown={showMouseHelp ? dismissMouseHelp : undefined}
     >
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full outline-none touch-none" />

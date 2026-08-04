@@ -16,6 +16,7 @@ import {
   type RegistrationResult,
 } from "./Registration";
 import { freezeSceneMeshes } from "./Materials";
+import { correctDarkAppearance } from "./Environment";
 import { attachMeshesToShadows, type ViewerLights } from "./Lights";
 import { repairDentalMesh } from "./MeshQuality";
 import { freezeScenePerformance, rebuildOctree } from "./Scene";
@@ -203,6 +204,7 @@ export async function runDentalPipeline(input: {
 
   report("Apply HDR Studio", 97.5);
   if (lights) attachMeshesToShadows(lights, meshList);
+  correctDarkAppearance({ scene, meshes: meshList, lights });
   const boundsForFloor = computeSceneBounds(meshList);
   if (floor && boundsForFloor) {
     floor.syncSize(boundsForFloor.radius * 2);

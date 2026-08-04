@@ -163,7 +163,7 @@ export class CameraController {
       this.camera.beta = beta;
       this.camera.rebuildAnglesAndRadius();
       this.syncOrtho();
-      this.updateClipPlanes();
+      this.updateClipPlanes(meshes);
       return;
     }
 
@@ -182,7 +182,7 @@ export class CameraController {
       cam.alpha = fromAlpha + (alpha - fromAlpha) * e;
       cam.beta = fromBeta + (beta - fromBeta) * e;
       this.syncOrtho();
-      this.updateClipPlanes();
+      this.updateClipPlanes(meshes);
       if (u >= 1) {
         this.scene.onBeforeRenderObservable.remove(obs);
         this.pivot = target.clone();
@@ -269,9 +269,18 @@ export class CameraController {
     this.camera.orthoBottom = -half;
   }
 
-  /** Auto near/far from current radius. */
-  updateClipPlanes(): void {
-    const r = Math.max(this.camera.radius, 1);
+  /**
+   * Auto near/far from scene bounding box (preferred) or current radius.
+   */
+  updateClipPlanes(meshes?: AbstractMesh[]): void {
+    const bounds = meshes?.length ? computeSceneBounds(meshes) : null;
+    if (bounds) {
+      const span = Math.max(bounds.radius * 2, 1);
+      this.camera.minZ = Math.max(span * 0.0005, 0.01);
+      this.camera.maxZ = Math.max(span * 80, this.camera.radius * 40, 1000);
+      return;
+    }
+    const r = Math.max(this.camera.radius, this.fitRadius, 1);
     this.camera.minZ = Math.max(r * 0.001, 0.01);
     this.camera.maxZ = Math.max(r * 40, 1000);
   }
