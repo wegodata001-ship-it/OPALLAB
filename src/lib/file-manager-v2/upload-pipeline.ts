@@ -5,6 +5,7 @@ import { FM2_MAX_RETRIES, FM2_RETRY_DELAY_MS } from "@/lib/file-manager-v2/const
 import {
   createPerfSession,
   readServerTimeMs,
+  uploadLog,
   type PerfSession,
 } from "@/lib/file-manager-v2/upload-perf";
 import { setGeometryInIdb } from "@/lib/orders/geometry-cache";
@@ -330,6 +331,12 @@ export async function fm2UploadFile(
         );
         perf.steps.VERIFY_STORAGE = lastComplete?.totalMs ?? completeMs;
         perf.steps.CREATE_DATABASE_RECORD = lastComplete?.serverMs ?? 0;
+        uploadLog("Database Saved", {
+          file: file.name,
+          fileId: result.fileId,
+          completeMs,
+          retryAfterPut: true,
+        });
         onProgress(100);
         enrichModelInBackground(file, result.fileId);
         return done(result);
@@ -344,10 +351,21 @@ export async function fm2UploadFile(
         prepareUpload(file, ctx, signal, perf),
       );
       onProgress(5);
+      uploadLog("Storage Upload Started", {
+        file: file.name,
+        size: file.size,
+        fileId: prepared.fileId,
+        attempt,
+      });
       await perf.span("UPLOAD_TO_STORAGE", () =>
         putFile(prepared!.signedUrl, file, prepared!.mimeType || mimeType, onProgress, signal),
       );
       putSucceeded = true;
+      uploadLog("Storage Upload Finished", {
+        file: file.name,
+        fileId: prepared.fileId,
+        ms: perf.steps.UPLOAD_TO_STORAGE ?? 0,
+      });
       onProgress(93);
 
       const tComplete = performance.now();
@@ -360,6 +378,12 @@ export async function fm2UploadFile(
       perf.steps.VERIFY_STORAGE = lastComplete?.totalMs ?? completeMs;
       perf.steps.CREATE_DATABASE_RECORD = lastComplete?.serverMs ?? 0;
       perf.flags.refreshList = false;
+      uploadLog("Database Saved", {
+        file: file.name,
+        fileId: result.fileId,
+        completeMs,
+        serverMs: lastComplete?.serverMs ?? "n/a",
+      });
       onProgress(100);
       enrichModelInBackground(file, result.fileId);
       return done(result);

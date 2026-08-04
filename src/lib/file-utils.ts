@@ -50,7 +50,7 @@ export function getFileExtension(fileName: string): string {
 export function getPreviewKind(mimeType?: string | null, fileName?: string): PreviewKind {
   const ext = fileName ? getFileExtension(fileName) : "";
   if (
-    ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"].includes(ext) ||
+    ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif"].includes(ext) ||
     mimeType?.startsWith("image/")
   ) {
     return "image";

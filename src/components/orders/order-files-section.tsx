@@ -5,12 +5,12 @@ import type { OrderFile } from "@/lib/types";
 import { FILE_TYPE_LABELS } from "@/lib/constants/labels";
 import {
   buildFileViewUrl,
-  getFileExtension,
   getOrderFileFolderId,
   getPreviewKind,
   isPreviewable,
 } from "@/lib/file-utils";
 import { FilePreviewModal } from "@/components/orders/file-preview-modal";
+import { MeshFileInfoModal } from "@/components/orders/mesh-file-info-modal";
 import { FileModelThumb } from "@/components/orders/file-model-thumb";
 import { useApp } from "@/providers/AppProvider";
 import {
@@ -70,6 +70,7 @@ export function OrderFilesSection({
 }: OrderFilesSectionProps) {
   const { users, refresh } = useApp();
   const [preview, setPreview] = useState<OrderFile | null>(null);
+  const [meshInfo, setMeshInfo] = useState<OrderFile | null>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
@@ -103,16 +104,6 @@ export function OrderFilesSection({
     }
     return map;
   }, [visible]);
-
-  /** Full dental scene — all current mesh files on the order (Exocad-style). */
-  const sceneFilesForPreview = useMemo(() => {
-    if (!preview) return [];
-    const meshExt = new Set(["stl", "obj", "ply", "glb", "gltf", "zip"]);
-    return visible.filter((f) => {
-      if (f.isCurrent === false) return false;
-      return meshExt.has(getFileExtension(f.fileName));
-    });
-  }, [preview, visible]);
 
   const handleFiles = useCallback(
     async (list: FileList | File[] | null, category?: OrderFileCategory) => {
@@ -386,7 +377,10 @@ export function OrderFilesSection({
                         <div className="flex items-start justify-between gap-3">
                           <button
                             type="button"
-                            onClick={() => setPreview(f)}
+                            onClick={() => {
+                              if (isDentalWebViewMesh(f.fileName)) setMeshInfo(f);
+                              else setPreview(f);
+                            }}
                             className="flex items-start gap-3 min-w-0 text-right flex-1"
                           >
                             <span className="h-14 w-14 rounded-lg border bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center">
@@ -419,7 +413,8 @@ export function OrderFilesSection({
                             </span>
                           </button>
                           <span className="flex items-center gap-0.5 shrink-0">
-                            {isPreviewable(f.mimeType, f.fileName) && (
+                            {isPreviewable(f.mimeType, f.fileName) &&
+                              !isDentalWebViewMesh(f.fileName) && (
                               <button
                                 type="button"
                                 title="צפייה"
@@ -497,9 +492,25 @@ export function OrderFilesSection({
       )}
 
       <FilePreviewModal
-        file={preview}
-        sceneFiles={sceneFilesForPreview}
+        file={preview && !isDentalWebViewMesh(preview.fileName) ? preview : null}
         onClose={() => setPreview(null)}
+      />
+
+      <MeshFileInfoModal
+        file={
+          meshInfo
+            ? {
+                fileName: meshInfo.fileName,
+                fileSize: meshInfo.fileSize,
+                uploadedAt: meshInfo.uploadedAt,
+                uploadedByName: userName(meshInfo.uploadedBy, meshInfo.uploadedByName),
+                downloadUrl:
+                  meshInfo.dataUrl ||
+                  buildFileViewUrl(meshInfo.orderId, getOrderFileFolderId(meshInfo)),
+              }
+            : null
+        }
+        onClose={() => setMeshInfo(null)}
       />
     </>
   );

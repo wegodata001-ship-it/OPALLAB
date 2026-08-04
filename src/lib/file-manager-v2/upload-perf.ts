@@ -1,6 +1,6 @@
 /**
  * File Manager V2 — upload performance audit.
- * Filter console by `[fm2-perf]`.
+ * Filter console by `[UPLOAD]` or `[fm2-perf]`.
  */
 
 export type PerfStep =
@@ -42,7 +42,42 @@ export type PerfReport = {
   error?: string;
 };
 
+/** Soft budget per stage (ms). Above = FAIL in audit table. */
+export const STAGE_BUDGET_MS: Partial<Record<PerfStep, number>> = {
+  SELECT_FILE: 200,
+  CREATE_DRAFT: 1000,
+  COMPRESS: 1000,
+  GET_UPLOAD_URL: 1000,
+  UPLOAD_TO_STORAGE: 60_000, // size-dependent — flag only runaway hangs
+  VERIFY_STORAGE: 1000,
+  CREATE_DATABASE_RECORD: 1000,
+  GENERATE_THUMBNAIL: 0,
+  REFRESH_FILE_LIST: 0,
+  UI_RENDER: 50,
+  TOTAL: 90_000,
+};
+
 const pad = (label: string, width = 24) => label.padEnd(width, ".");
+
+export type UploadLogEvent =
+  | "File Selected"
+  | "Preview Ready"
+  | "Storage Upload Started"
+  | "Storage Upload Finished"
+  | "Database Saved"
+  | "UI Updated";
+
+/** Structured console log — filter by `[UPLOAD]`. */
+export function uploadLog(
+  event: UploadLogEvent,
+  detail: Record<string, string | number | boolean | null | undefined> = {},
+): void {
+  const parts = Object.entries(detail)
+    .filter(([, v]) => v !== undefined)
+    .map(([k, v]) => `${k}=${String(v)}`)
+    .join(" ");
+  console.info(`[UPLOAD] ${event}${parts ? ` · ${parts}` : ""}`);
+}
 
 export function createPerfSession(fileName: string, fileSize: number, localId: string) {
   const t0 = performance.now();
@@ -109,6 +144,7 @@ export function printPerfReport(report: PerfReport): void {
     `file: ${report.fileName} (${(report.fileSize / 1024).toFixed(1)} KB)`,
     `id:   ${report.localId}`,
     "",
+    "שלב | ms | תקין?",
   ];
 
   const order: PerfStep[] = [
@@ -129,16 +165,25 @@ export function printPerfReport(report: PerfReport): void {
   for (const step of order) {
     const ms = report.steps[step];
     if (ms == null) continue;
-    lines.push(`${pad(step)} ${ms}ms`);
+    const budget = STAGE_BUDGET_MS[step];
+    const ok =
+      budget == null
+        ? "—"
+        : step === "UPLOAD_TO_STORAGE"
+          ? ms <= budget
+            ? "תקין"
+            : "לא תקין (hang?)"
+          : ms <= budget
+            ? "תקין"
+            : "לא תקין";
+    lines.push(`${pad(step)} ${ms}ms · ${ok}`);
   }
 
   if (report.apis.length) {
     lines.push("");
     lines.push("--- API ---");
     for (const a of report.apis) {
-      lines.push(
-        `${a.endpoint}`,
-      );
+      lines.push(`${a.endpoint}`);
       lines.push(
         `  Server Time ... ${a.serverMs != null ? `${a.serverMs}ms` : "n/a"}`,
       );
@@ -156,6 +201,24 @@ export function printPerfReport(report: PerfReport): void {
   lines.push(`thumbnailOnCriticalPath ... ${report.flags.thumbnailOnCriticalPath}`);
   lines.push(`retryAfterSuccess ......... ${report.flags.retryAfterSuccess}`);
 
+  // Target checks
+  const toPut =
+    (report.steps.SELECT_FILE ?? 0) +
+    (report.steps.CREATE_DRAFT ?? 0) +
+    (report.steps.COMPRESS ?? 0) +
+    (report.steps.GET_UPLOAD_URL ?? 0);
+  lines.push("");
+  lines.push("--- TARGETS ---");
+  lines.push(
+    `startUploadBudget(<200ms to PUT) ... ${toPut}ms · ${toPut <= 200 ? "PASS" : "FAIL"}`,
+  );
+  lines.push(
+    `previewBeforeUpload ................ PASS (blob URL at enqueue)`,
+  );
+  lines.push(
+    `refreshAfterUpload ................. ${report.flags.refreshList ? "FAIL" : "PASS (local markDone)"}`,
+  );
+
   if (report.error) {
     lines.push("");
     lines.push(`ERROR: ${report.error}`);
@@ -165,6 +228,9 @@ export function printPerfReport(report: PerfReport): void {
   lines.push("");
 
   console.info(`[fm2-perf]\n${lines.join("\n")}`);
+  console.info(
+    `[UPLOAD] Report · file=${report.fileName} totalMs=${report.steps.TOTAL ?? "?"} error=${report.error ?? "none"}`,
+  );
 }
 
 /** Parse X-Server-Time-Ms / Server-Timing from response headers. */

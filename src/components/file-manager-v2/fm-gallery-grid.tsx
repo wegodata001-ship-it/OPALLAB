@@ -172,17 +172,19 @@ export function FmGalleryGrid({
 
               {file.status === "done" && (
                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors opacity-0 group-hover:opacity-100 flex items-center justify-center gap-1">
-                  <button
-                    type="button"
-                    title="צפייה"
-                    className="h-7 w-7 rounded-full bg-white/90 text-slate-800 flex items-center justify-center"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onView(index);
-                    }}
-                  >
-                    <Eye className="h-3.5 w-3.5" />
-                  </button>
+                  {!isDentalWebViewMesh(file.fileName) && file.kind !== "model3d" && (
+                    <button
+                      type="button"
+                      title="צפייה"
+                      className="h-7 w-7 rounded-full bg-white/90 text-slate-800 flex items-center justify-center"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onView(index);
+                      }}
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     title="שינוי שם"

@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
   Download,
-  Globe,
   Maximize2,
   Minimize2,
   RotateCw,
@@ -14,10 +13,8 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { OPAL3DViewer, type SceneAsset } from "@/components/viewer/OPAL3DViewer";
 import { cn } from "@/lib/utils";
 import type { FmFile } from "@/lib/file-manager-v2/types";
-import { isDentalWebViewMesh, openDentalWebView } from "@/lib/orders/dental-webview";
 
 type FmLightboxProps = {
   files: FmFile[];
@@ -27,6 +24,7 @@ type FmLightboxProps = {
   onDownload: (index: number) => void;
 };
 
+/** Image / PDF / video lightbox — mesh files use MeshFileInfoModal instead. */
 export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: FmLightboxProps) {
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
@@ -35,19 +33,6 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
   const file = index != null ? files[index] : null;
   const hasPrev = index != null && index > 0;
   const hasNext = index != null && index < files.length - 1;
-
-  const sceneFiles = useMemo((): SceneAsset[] => {
-    return files
-      .filter((f) => f.kind === "model3d")
-      .map((f) => ({
-        id: f.fileId || f.id,
-        fileName: f.fileName,
-        file: f.localFile ?? null,
-        fileId: f.fileId,
-        fileSize: f.fileSize,
-        primary: file ? f.id === file.id : false,
-      }));
-  }, [files, file]);
 
   useEffect(() => {
     setZoom(1);
@@ -75,9 +60,6 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
 
   if (index == null || !file) return null;
 
-  const canViewModel =
-    file.kind === "model3d" && (file.localFile || file.fileId || sceneFiles.length > 0);
-
   return (
     <div className="fixed inset-0 z-[220] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/80" onClick={onClose} />
@@ -94,13 +76,28 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
           <div className="flex items-center gap-1 shrink-0">
             {file.kind === "image" && (
               <>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setZoom((z) => Math.min(3, z + 0.25))}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setZoom((z) => Math.min(3, z + 0.25))}
+                >
                   <ZoomIn className="h-4 w-4" />
                 </Button>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}
+                >
                   <ZoomOut className="h-4 w-4" />
                 </Button>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setRotation((r) => r + 90)}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setRotation((r) => r + 90)}
+                >
                   <RotateCw className="h-4 w-4" />
                 </Button>
               </>
@@ -108,15 +105,15 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
             <Button type="button" variant="ghost" size="sm" onClick={() => setFullscreen((f) => !f)}>
               {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => onDownload(index)} title="הורדה">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onDownload(index)}
+              title="הורדה"
+            >
               <Download className="h-4 w-4" />
             </Button>
-            {isDentalWebViewMesh(file.fileName) && (
-              <Button type="button" variant="ghost" size="sm" onClick={openDentalWebView} title="Open WebView">
-                <Globe className="h-4 w-4" />
-                <span className="mr-1 hidden sm:inline text-xs">Open WebView</span>
-              </Button>
-            )}
             <Button type="button" variant="ghost" size="sm" onClick={onClose}>
               <X className="h-4 w-4" />
             </Button>
@@ -143,25 +140,6 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
             </button>
           )}
 
-          {canViewModel && (
-            <OPAL3DViewer
-              key={`fm-v3-${file.id}`}
-              sceneFiles={sceneFiles.length ? sceneFiles : undefined}
-              file={file.localFile}
-              fileName={file.fileName}
-              fileId={file.fileId}
-              fileSize={file.fileSize}
-              className={fullscreen ? "min-h-[calc(100vh-80px)] w-full" : "min-h-[420px] w-full"}
-              onDownload={() => onDownload(index)}
-              onOpenWebView={
-                isDentalWebViewMesh(file.fileName) ? openDentalWebView : undefined
-              }
-            />
-          )}
-          {file.kind === "model3d" && !canViewModel && file.previewUrl && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={file.previewUrl} alt="" className="max-h-[70vh] object-contain" />
-          )}
           {file.kind === "image" && file.previewUrl && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -182,7 +160,7 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
             // eslint-disable-next-line jsx-a11y/media-has-caption
             <video src={file.previewUrl} controls className="max-h-[70vh] max-w-full" />
           )}
-          {!["image", "model3d", "pdf", "video"].includes(file.kind) && (
+          {!["image", "pdf", "video"].includes(file.kind) && (
             <p className="text-white text-sm">{file.fileName}</p>
           )}
         </div>
