@@ -7,10 +7,12 @@ import {
   Engine,
   HemisphericLight,
   Scene,
+  TransformNode,
   Vector3,
 } from "@babylonjs/core";
+import { alignDentalScene } from "./Alignment";
+import { computeSceneBounds } from "./Camera";
 import { loadDentalScene } from "./Loaders";
-import { centerAndScaleScene, fitCameraToMeshes } from "./Camera";
 import { createMaterialForMesh } from "./Materials";
 import type { SceneAsset } from "./types";
 import { detectFormat, inferSceneLayer } from "./Utils";
@@ -27,9 +29,9 @@ export async function captureSceneThumbnail(
   const engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true }, true);
   const scene = new Scene(engine);
   scene.clearColor = new Color4(0, 0, 0, 0);
-  new HemisphericLight("tL", new Vector3(0, 1, 0), scene);
-  const camera = new ArcRotateCamera("tC", -Math.PI / 2.2, Math.PI / 2.6, 80, Vector3.Zero(), scene);
-  camera.attachControl(canvas, false);
+  scene.environmentIntensity = 0.35;
+  new HemisphericLight("tL", new Vector3(0.2, 1, 0.1), scene).intensity = 0.7;
+  const camera = new ArcRotateCamera("tC", -Math.PI / 2.35, Math.PI / 2.65, 80, Vector3.Zero(), scene);
 
   try {
     const loaded = await loadDentalScene(scene, assets.slice(0, 4));
@@ -44,9 +46,15 @@ export async function captureSceneThumbnail(
         );
       }
     }
+    const root =
+      (scene.getTransformNodeByName("opalDentalRoot") as TransformNode | null) ?? null;
+    alignDentalScene(root, loaded);
     const meshes = loaded.map((l) => l.mesh);
-    centerAndScaleScene(meshes);
-    fitCameraToMeshes(camera, meshes, 1.25);
+    const bounds = computeSceneBounds(meshes);
+    if (bounds) {
+      camera.setTarget(bounds.center.clone());
+      camera.radius = Math.max(bounds.radius * 2.6, 2);
+    }
     scene.render();
     return canvas.toDataURL("image/png");
   } catch {

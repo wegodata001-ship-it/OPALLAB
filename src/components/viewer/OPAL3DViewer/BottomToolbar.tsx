@@ -1,43 +1,48 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { ViewerCameraPreset } from "./types";
 
 const PRESETS: { id: ViewerCameraPreset; label: string }[] = [
-  { id: "top", label: "Top" },
-  { id: "bottom", label: "Bottom" },
-  { id: "front", label: "Front" },
-  { id: "back", label: "Back" },
-  { id: "left", label: "Left" },
-  { id: "right", label: "Right" },
-  { id: "iso", label: "Iso" },
+  { id: "iso", label: "ISO" },
+  { id: "top", label: "TOP" },
+  { id: "bottom", label: "BOTTOM" },
+  { id: "left", label: "LEFT" },
+  { id: "right", label: "RIGHT" },
+  { id: "front", label: "FRONT" },
+  { id: "back", label: "BACK" },
 ];
 
 type BottomToolbarProps = {
   onPreset: (p: ViewerCameraPreset) => void;
+  active?: ViewerCameraPreset | null;
 };
 
-export function BottomToolbar({ onPreset }: BottomToolbarProps) {
+export function BottomToolbar({ onPreset, active }: BottomToolbarProps) {
   return (
-    <div className="absolute bottom-2 left-1/2 z-20 -translate-x-1/2 flex flex-col items-center gap-1">
-      <div className="flex items-center gap-0.5 rounded-xl bg-black/55 backdrop-blur px-1.5 py-1 border border-white/10">
+    <div className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2">
+      <div
+        className={cn(
+          "flex items-center gap-0.5 px-1.5 py-0.5",
+          "rounded-[18px] bg-white/5 backdrop-blur-xl border border-white/10",
+          "shadow-[0_8px_28px_rgba(0,0,0,0.25)]",
+        )}
+      >
         {PRESETS.map((p) => (
-          <Button
+          <button
             key={p.id}
             type="button"
-            variant="ghost"
-            size="sm"
             title={p.label}
-            className="h-7 px-2 text-[11px] text-white/90 hover:text-white"
+            className={cn(
+              "h-7 px-2 text-[10px] tracking-wide text-white/65 hover:text-white transition-all duration-200 rounded-lg hover:bg-white/8",
+              active === p.id && "text-opal-gold",
+            )}
             onClick={() => onPreset(p.id)}
           >
             {p.label}
-          </Button>
+          </button>
         ))}
       </div>
-      <p className="text-[10px] text-white/50 select-none">
-        LMB Rotate · RMB Pan · Wheel Zoom · Dbl-click Zoom to selection
-      </p>
     </div>
   );
 }

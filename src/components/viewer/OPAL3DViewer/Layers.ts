@@ -13,6 +13,7 @@ export function buildLayerStates(items: LoadedSceneMesh[]): SceneLayerState[] {
     id,
     label: LAYER_LABELS[id],
     visible: true,
+    locked: false,
     count: counts.get(id) ?? 0,
   }));
 }

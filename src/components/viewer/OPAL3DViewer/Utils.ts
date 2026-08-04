@@ -142,6 +142,9 @@ export function mergeSceneAssets(
       fileSize: props.fileSize ?? existing?.fileSize,
       slotKey: existing?.slotKey,
       category: existing?.category,
+      transform: existing?.transform,
+      modelMeta: existing?.modelMeta,
+      displayName: existing?.displayName,
       primary: true,
     });
   }
@@ -159,4 +162,15 @@ export function formatBytes(n?: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function formatVertexCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${(n / 1000).toFixed(0)}K`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return n.toLocaleString();
+}
+
+export function formatTriangleCount(n: number): string {
+  return formatVertexCount(n);
 }

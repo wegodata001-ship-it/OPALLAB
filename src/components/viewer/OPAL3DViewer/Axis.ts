@@ -13,20 +13,23 @@ export type AxisGizmo = {
   dispose: () => void;
 };
 
-/** Corner XYZ axis — X red, Y green, Z blue. */
+/**
+ * Small XYZ gizmo pinned to lower-left (Exocad-style), NOT on the model center.
+ */
 export function createAxisGizmo(scene: Scene): AxisGizmo {
-  const root = MeshBuilder.CreateBox("opalAxisRoot", { size: 0.01 }, scene);
+  const root = MeshBuilder.CreateBox("opalAxisRoot", { size: 0.001 }, scene);
   root.isVisible = false;
   root.isPickable = false;
+  root.scaling.setAll(0.16);
 
-  const makeAxis = (name: string, dir: Vector3, color: Color3) => {
+  const makeAxis = (name: string, dir: Vector3, color: Color3, letter: string) => {
     const shaft = MeshBuilder.CreateCylinder(
       name,
-      { height: 1.2, diameter: 0.06, tessellation: 8 },
+      { height: 1.0, diameter: 0.07, tessellation: 6 },
       scene,
     );
     shaft.parent = root;
-    shaft.position = dir.scale(0.6);
+    shaft.position = dir.scale(0.5);
     if (Math.abs(dir.x) > 0.5) shaft.rotation.z = Math.PI / 2;
     if (Math.abs(dir.z) > 0.5) shaft.rotation.x = Math.PI / 2;
     const mat = new StandardMaterial(`${name}Mat`, scene);
@@ -36,29 +39,28 @@ export function createAxisGizmo(scene: Scene): AxisGizmo {
     shaft.material = mat;
     shaft.isPickable = false;
     shaft.renderingGroupId = 3;
+    shaft.alwaysSelectAsActiveMesh = true;
 
     const tip = MeshBuilder.CreateCylinder(
       `${name}Tip`,
-      { height: 0.28, diameterTop: 0, diameterBottom: 0.16, tessellation: 8 },
+      { height: 0.22, diameterTop: 0, diameterBottom: 0.14, tessellation: 6 },
       scene,
     );
     tip.parent = root;
-    tip.position = dir.scale(1.35);
+    tip.position = dir.scale(1.12);
     if (Math.abs(dir.x) > 0.5) tip.rotation.z = -Math.PI / 2;
     if (Math.abs(dir.z) > 0.5) tip.rotation.x = Math.PI / 2;
-    if (dir.y < 0) tip.rotation.x = Math.PI;
     tip.material = mat;
     tip.isPickable = false;
     tip.renderingGroupId = 3;
 
-    const label = MeshBuilder.CreatePlane(`${name}Label`, { size: 0.45 }, scene);
+    const label = MeshBuilder.CreatePlane(`${name}Label`, { size: 0.32 }, scene);
     label.parent = root;
-    label.position = dir.scale(1.7);
+    label.position = dir.scale(1.4);
     label.billboardMode = 7;
     const dt = new DynamicTexture(`${name}Tex`, { width: 64, height: 64 }, scene, false);
     dt.hasAlpha = true;
-    const labelChar = name.replace("opalAxis", "");
-    dt.drawText(labelChar, null, null, "bold 42px sans-serif", color.toHexString(), "transparent", true);
+    dt.drawText(letter, null, null, "bold 40px sans-serif", color.toHexString(), "transparent", true);
     const lmat = new StandardMaterial(`${name}LMat`, scene);
     lmat.diffuseTexture = dt;
     lmat.emissiveTexture = dt;
@@ -70,25 +72,25 @@ export function createAxisGizmo(scene: Scene): AxisGizmo {
     label.renderingGroupId = 3;
   };
 
-  makeAxis("opalAxisX", new Vector3(1, 0, 0), new Color3(0.9, 0.2, 0.2));
-  makeAxis("opalAxisY", new Vector3(0, 1, 0), new Color3(0.25, 0.75, 0.3));
-  makeAxis("opalAxisZ", new Vector3(0, 0, 1), new Color3(0.25, 0.45, 0.95));
+  makeAxis("opalAxisX", new Vector3(1, 0, 0), new Color3(0.9, 0.22, 0.2), "X");
+  makeAxis("opalAxisY", new Vector3(0, 1, 0), new Color3(0.28, 0.78, 0.32), "Y");
+  makeAxis("opalAxisZ", new Vector3(0, 0, 1), new Color3(0.28, 0.48, 0.95), "Z");
 
-  // Keep gizmo in corner via observer
-  const cam = scene.activeCamera;
   const obs = scene.onBeforeRenderObservable.add(() => {
-    const camera = scene.activeCamera ?? cam;
+    const camera = scene.activeCamera;
     if (!camera) return;
-    // Place in lower-left of view in world space near camera
-    const forward = camera.getDirection(Vector3.Forward());
-    const right = camera.getDirection(Vector3.Right());
-    const up = camera.getDirection(Vector3.Up());
+    // Lower-left of the view, close to camera (screen corner feel)
+    const forward = camera.getDirection(Vector3.Forward()).normalize();
+    const right = camera.getDirection(Vector3.Right()).normalize();
+    const up = camera.getDirection(Vector3.Up()).normalize();
+    const dist = 3.2;
     const pos = camera.position
-      .add(forward.scale(6))
-      .add(right.scale(-3.2))
-      .add(up.scale(-2.2));
+      .add(forward.scale(dist))
+      .add(right.scale(-1.85))
+      .add(up.scale(-1.25));
     root.position.copyFrom(pos);
-    root.scaling.setAll(0.55);
+    // Keep tiny
+    root.scaling.setAll(0.14);
   });
 
   return {

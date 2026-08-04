@@ -1,20 +1,15 @@
 import {
-  Color3,
   Material,
   PBRMaterial,
-  StandardMaterial,
-  VertexBuffer,
   type AbstractMesh,
   type Scene,
 } from "@babylonjs/core";
+import { createFromProfile, profileForLayer, softenExistingMaterial } from "./MaterialLibrary";
 import type { ModelFormat, SceneLayerId, ViewerRenderMode } from "./types";
-import { LAYER_COLORS, hexToColor3Components } from "./Utils";
 
-function colorOf(layer: SceneLayerId): Color3 {
-  const [r, g, b] = hexToColor3Components(LAYER_COLORS[layer]);
-  return new Color3(r, g, b);
-}
-
+/**
+ * Dental materials via Material Library profiles.
+ */
 export function createMaterialForMesh(
   scene: Scene,
   name: string,
@@ -22,53 +17,23 @@ export function createMaterialForMesh(
   layer: SceneLayerId,
   mesh: AbstractMesh,
 ): Material {
-  const base = colorOf(layer);
-
-  if (format === "ply" && hasVertexColors(mesh)) {
-    const mat = new StandardMaterial(`${name}_ply`, scene);
-    mat.diffuseColor = Color3.White();
-    mat.specularColor = new Color3(0.08, 0.08, 0.08);
-    mat.emissiveColor = Color3.Black();
-    mat.backFaceCulling = false;
-    mat.freeze();
-    return mat;
+  if ((format === "glb" || format === "gltf") && mesh.material) {
+    softenExistingMaterial(mesh.material);
+    return mesh.material;
   }
-
-  if (format === "glb" || format === "gltf") {
-    // Keep native materials when present
-    if (mesh.material) return mesh.material;
-  }
-
-  if (format === "obj") {
-    const mat = new StandardMaterial(`${name}_obj`, scene);
-    mat.diffuseColor = base;
-    mat.specularColor = new Color3(0.12, 0.12, 0.12);
-    mat.ambientColor = base.scale(0.35);
-    mat.backFaceCulling = false;
-    mat.freeze();
-    return mat;
-  }
-
-  // STL / default → dental PBR
-  const mat = new PBRMaterial(`${name}_pbr`, scene);
-  mat.albedoColor = base;
-  mat.metallic = layer === "implant" ? 0.85 : 0.05;
-  mat.roughness = layer === "implant" ? 0.35 : layer === "gingiva" ? 0.55 : 0.42;
-  mat.environmentIntensity = 0.85;
-  mat.backFaceCulling = false;
-  mat.freeze();
-  return mat;
-}
-
-function hasVertexColors(mesh: AbstractMesh): boolean {
-  const data = mesh.getVerticesData(VertexBuffer.ColorKind);
-  return !!data && data.length > 0;
+  const profileId = profileForLayer(layer, format);
+  return createFromProfile(scene, name, profileId, mesh);
 }
 
 export function applyRenderMode(meshes: AbstractMesh[], mode: ViewerRenderMode): void {
   for (const mesh of meshes) {
     const mats = collectMaterials(mesh);
     for (const mat of mats) {
+      try {
+        mat.unfreeze();
+      } catch {
+        /* ignore */
+      }
       if (mode === "wireframe") {
         mat.wireframe = true;
         mat.alpha = 1;
@@ -79,22 +44,28 @@ export function applyRenderMode(meshes: AbstractMesh[], mode: ViewerRenderMode):
         mat.transparencyMode = Material.MATERIAL_ALPHABLEND;
       } else if (mode === "xray") {
         mat.wireframe = false;
-        mat.alpha = 0.22;
+        mat.alpha = 0.28;
         mat.transparencyMode = Material.MATERIAL_ALPHABLEND;
         if (mat instanceof PBRMaterial) {
-          mat.emissiveColor = mat.albedoColor.scale(0.15);
+          mat.environmentIntensity = Math.min(mat.environmentIntensity, 0.08);
         }
       } else {
         mat.wireframe = false;
         mat.alpha = 1;
         mat.transparencyMode = Material.MATERIAL_OPAQUE;
-        if (mat instanceof PBRMaterial) {
-          mat.emissiveColor = Color3.Black();
-        }
       }
       mat.markAsDirty(Material.MiscDirtyFlag);
+      try {
+        mat.freeze();
+      } catch {
+        /* ignore */
+      }
     }
   }
+}
+
+export function resetMaterialsShaded(meshes: AbstractMesh[]): void {
+  applyRenderMode(meshes, "shaded");
 }
 
 function collectMaterials(mesh: AbstractMesh): Material[] {
@@ -108,7 +79,25 @@ function collectMaterials(mesh: AbstractMesh): Material[] {
 
 export function setMeshVisibility(meshes: AbstractMesh[], visible: boolean): void {
   for (const m of meshes) {
+    if (m.metadata?.locked) continue;
     m.setEnabled(visible);
     m.isVisible = visible;
+  }
+}
+
+export function freezeSceneMeshes(meshes: AbstractMesh[]): void {
+  for (const m of meshes) {
+    try {
+      m.freezeWorldMatrix();
+    } catch {
+      /* ignore */
+    }
+    if (m.material) {
+      try {
+        m.material.freeze();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }

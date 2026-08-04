@@ -2056,11 +2056,16 @@ export class AppDataService {
             duplicate: true,
           };
         }
+        const timeLabel = active.checkIn.toLocaleTimeString("he-IL", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        });
         throw new AppError(
           "VALIDATION_ERROR",
-          "כבר קיימת כניסה פתוחה — יש לבצע יציאה מהעבודה",
+          `כבר נכנסת היום בשעה ${timeLabel}.\nיש לבצע יציאה לפני כניסה חדשה.`,
           409,
-          { code: "ALREADY_CHECKED_IN" },
+          { code: "ALREADY_CHECKED_IN", checkIn: active.checkIn.toISOString() },
         );
       }
 
@@ -2083,7 +2088,7 @@ export class AppDataService {
         }
         throw new AppError(
           "VALIDATION_ERROR",
-          "אין כניסה פתוחה — יש לבצע כניסה לעבודה תחילה",
+          "לא נמצאה כניסה פתוחה.\nיש לבצע כניסה לפני יציאה.",
           409,
           { code: "NO_OPEN_CHECK_IN" },
         );

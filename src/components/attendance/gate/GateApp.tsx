@@ -7,11 +7,14 @@ import { Input, Label } from "@/components/ui/input";
 import { useApp } from "@/providers/AppProvider";
 import { getOrCreateDeviceKey } from "@/lib/attendance/gate/device-key";
 import {
-  peekGatePunchResult,
   resetGatePunchLock,
   runGatePunchOnce,
   type GatePunchAction,
 } from "@/lib/attendance/gate/punch-lock";
+import {
+  formatAttendanceDuration,
+  formatAttendanceTime,
+} from "@/lib/attendance/gate/time-format";
 import { captureGpsForVerification } from "@/lib/attendance/verification/gps";
 import { captureDeviceInfo } from "@/lib/attendance/verification/device";
 import { AttendanceVerificationError } from "@/lib/attendance/verification/types";
@@ -19,8 +22,6 @@ import { permissionHelpText } from "@/lib/attendance/gate/open-settings";
 import {
   CheckCircle2,
   Loader2,
-  LogIn,
-  LogOut,
   MapPin,
   Shield,
   AlertTriangle,
@@ -31,8 +32,9 @@ const GPS_REQUIRED_MSG = "יש לאשר הרשאת מיקום כדי לבצע ר
 
 type Phase =
   | "booting"
+  | "ready"
   | "punching"
-  | "success"
+  | "checkout_success"
   | "need_register"
   | "login"
   | "registering"
@@ -45,6 +47,19 @@ type GpsSnapshot = {
   accuracy?: number;
 };
 
+type CheckoutSummary = {
+  checkIn: string;
+  checkOut: string;
+  durationHours: number | null;
+};
+
+/**
+ * Real time-clock gate:
+ * - Not in shift → Entry only
+ * - In shift → disabled "entered at" + Exit
+ * - After exit → summary, then Entry again
+ * Never auto-punches; one open shift max (enforced server-side).
+ */
 export function GateApp() {
   const { login, currentUser, isAuthenticated, logout } = useApp();
 
@@ -55,7 +70,9 @@ export function GateApp() {
   const [password, setPassword] = useState("");
   const [userName, setUserName] = useState("");
   const [deviceKey, setDeviceKey] = useState("");
-  const [lastAction, setLastAction] = useState<GatePunchAction | null>(null);
+  const [hasOpenRecord, setHasOpenRecord] = useState(false);
+  const [openCheckIn, setOpenCheckIn] = useState<string | null>(null);
+  const [checkoutSummary, setCheckoutSummary] = useState<CheckoutSummary | null>(null);
   const bootOnceRef = useRef(false);
 
   const failPermission = useCallback((msg?: string) => {
@@ -64,15 +81,49 @@ export function GateApp() {
     setPhase("permission_error");
   }, []);
 
-  const applyPunchSuccess = useCallback(
-    (data: { action: GatePunchAction; userName: string; message: string }) => {
-      setLastAction(data.action);
-      setUserName(data.userName);
-      setMessage(data.message);
-      setPhase("success");
+  const goReady = useCallback(
+    (opts: { userName?: string; hasOpen: boolean; checkIn?: string | null }) => {
+      if (opts.userName) setUserName(opts.userName);
+      setHasOpenRecord(opts.hasOpen);
+      setOpenCheckIn(opts.hasOpen ? opts.checkIn ?? null : null);
+      setCheckoutSummary(null);
+      setMessage("");
+      setPhase("ready");
     },
     [],
   );
+
+  const refreshTrustedState = useCallback(async () => {
+    const key = deviceKey || getOrCreateDeviceKey();
+    try {
+      const res = await fetch("/api/attendance/gate/lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deviceKey: key }),
+      });
+      const json = (await res.json()) as {
+        success?: boolean;
+        data?: {
+          status: string;
+          userName?: string;
+          hasOpenRecord?: boolean;
+          openCheckIn?: string | null;
+        };
+      };
+      if (json.success && json.data?.status === "trusted") {
+        goReady({
+          userName: json.data.userName,
+          hasOpen: Boolean(json.data.hasOpenRecord),
+          checkIn: json.data.openCheckIn ?? null,
+        });
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    setPhase("error");
+    setMessage("לא ניתן לרענן את מצב המשמרת");
+  }, [deviceKey, goReady]);
 
   const submitPunch = useCallback(
     async (opts: { key: string; action: GatePunchAction; gps: GpsSnapshot }) => {
@@ -102,6 +153,9 @@ export function GateApp() {
               action: GatePunchAction;
               userName: string;
               message: string;
+              durationHours?: number | null;
+              checkIn?: string;
+              checkOut?: string | null;
             };
             error?: { message?: string; details?: { code?: string } | null };
           };
@@ -124,10 +178,31 @@ export function GateApp() {
             action: json.data.action,
             userName: json.data.userName,
             message: json.data.message,
+            durationHours: json.data.durationHours ?? null,
+            checkIn: json.data.checkIn ?? null,
+            checkOut: json.data.checkOut ?? null,
           };
         });
 
-        applyPunchSuccess(result);
+        setUserName(result.userName);
+
+        if (result.action === "check-in") {
+          goReady({
+            userName: result.userName,
+            hasOpen: true,
+            checkIn: result.checkIn ?? new Date().toISOString(),
+          });
+          return;
+        }
+
+        setCheckoutSummary({
+          checkIn: result.checkIn ?? openCheckIn ?? "",
+          checkOut: result.checkOut ?? new Date().toISOString(),
+          durationHours: result.durationHours ?? null,
+        });
+        setHasOpenRecord(false);
+        setOpenCheckIn(null);
+        setPhase("checkout_success");
       } catch (err) {
         const code =
           err && typeof err === "object" && "code" in err
@@ -144,6 +219,21 @@ export function GateApp() {
           setMessage(err instanceof Error ? err.message : "נדרשת הרשמה חד-פעמית למכשיר זה");
           return;
         }
+        if (code === "ALREADY_CHECKED_IN") {
+          resetGatePunchLock();
+          const msg =
+            err instanceof Error
+              ? err.message
+              : `כבר נכנסת היום בשעה ${formatAttendanceTime(openCheckIn)}.\nיש לבצע יציאה לפני כניסה חדשה.`;
+          void refreshTrustedState().then(() => setMessage(msg));
+          return;
+        }
+        if (code === "NO_OPEN_CHECK_IN") {
+          resetGatePunchLock();
+          goReady({ hasOpen: false, checkIn: null });
+          setMessage("לא נמצאה כניסה פתוחה.\nיש לבצע כניסה לפני יציאה.");
+          return;
+        }
         if (
           code === "GPS_REQUIRED" ||
           (err instanceof AttendanceVerificationError && err.step === "gps") ||
@@ -158,18 +248,25 @@ export function GateApp() {
         setMessage(err instanceof Error ? err.message : "שגיאה ברישום נוכחות");
       }
     },
-    [applyPunchSuccess, failPermission],
+    [failPermission, goReady, openCheckIn, refreshTrustedState],
   );
 
-  /** Daily QR: GPS → auto check-in or check-out (no camera, no choose screen). */
-  const beginAutoPunch = useCallback(
-    async (hasOpenRecord: boolean) => {
+  const handlePunchClick = useCallback(
+    async (action: GatePunchAction) => {
+      if (action === "check-in" && hasOpenRecord) {
+        setMessage(
+          `כבר נכנסת היום בשעה ${formatAttendanceTime(openCheckIn)}.\nיש לבצע יציאה לפני כניסה חדשה.`,
+        );
+        return;
+      }
+      if (action === "check-out" && !hasOpenRecord) {
+        setMessage("לא נמצאה כניסה פתוחה.\nיש לבצע כניסה לפני יציאה.");
+        return;
+      }
+
       const key = deviceKey || getOrCreateDeviceKey();
-      const action: GatePunchAction = hasOpenRecord ? "check-out" : "check-in";
       setPhase("punching");
       setMessage("מאשרים מיקום GPS...");
-      resetGatePunchLock();
-
       try {
         const gps = await captureGpsForVerification();
         await submitPunch({ key, action, gps });
@@ -181,20 +278,14 @@ export function GateApp() {
         failPermission(GPS_REQUIRED_MSG);
       }
     },
-    [deviceKey, failPermission, submitPunch],
+    [deviceKey, failPermission, hasOpenRecord, openCheckIn, submitPunch],
   );
 
   const bootstrap = useCallback(async () => {
     setPhase("booting");
-    setMessage("טוען שער נוכחות...");
+    setMessage("טוען שעון נוכחות...");
     const key = getOrCreateDeviceKey();
     setDeviceKey(key);
-
-    const already = peekGatePunchResult();
-    if (already) {
-      applyPunchSuccess(already);
-      return;
-    }
 
     try {
       const res = await fetch("/api/attendance/gate/lookup", {
@@ -208,6 +299,7 @@ export function GateApp() {
           status: string;
           userName?: string;
           hasOpenRecord?: boolean;
+          openCheckIn?: string | null;
         };
         error?: { message?: string };
       };
@@ -220,8 +312,11 @@ export function GateApp() {
 
       const status = json.data?.status;
       if (status === "trusted") {
-        setUserName(json.data?.userName ?? "");
-        void beginAutoPunch(Boolean(json.data?.hasOpenRecord));
+        goReady({
+          userName: json.data?.userName,
+          hasOpen: Boolean(json.data?.hasOpenRecord),
+          checkIn: json.data?.openCheckIn ?? null,
+        });
         return;
       }
       if (status === "blocked") {
@@ -236,7 +331,7 @@ export function GateApp() {
       setPhase("error");
       setMessage("לא ניתן להתחבר לשרת");
     }
-  }, [applyPunchSuccess, beginAutoPunch]);
+  }, [goReady]);
 
   useEffect(() => {
     if (bootOnceRef.current) return;
@@ -289,7 +384,7 @@ export function GateApp() {
 
       setDeviceKey(key);
       setUserName(user.name);
-      // First enrollment → automatic check-in
+      // After enrollment — land on clock ready (not auto punch); then punch check-in once
       await submitPunch({ key, action: "check-in", gps });
     } catch (err) {
       if (err instanceof AttendanceVerificationError) {
@@ -318,10 +413,15 @@ export function GateApp() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex flex-col">
-      <header className="px-4 py-5 border-b border-white/10 text-center">
-        <p className="text-opal-gold text-xs font-semibold tracking-widest">שער נוכחות</p>
-        <h1 className="text-xl font-bold mt-1">{LAB_INFO.name}</h1>
-        <p className="text-slate-400 text-sm mt-1">/attendance/checkin · QR בלבד</p>
+      <header className="px-4 py-5 border-b border-white/10 text-center space-y-2">
+        <p className="text-opal-gold text-xs font-semibold tracking-widest">שעון נוכחות</p>
+        <h1 className="text-xl font-bold">{LAB_INFO.name}</h1>
+        {userName && phase !== "booting" && (
+          <p className="text-slate-300 text-sm">{userName}</p>
+        )}
+        {(phase === "ready" || phase === "checkout_success" || phase === "punching") && (
+          <ShiftBadge inShift={hasOpenRecord} />
+        )}
       </header>
 
       <main className="flex-1 flex items-center justify-center p-4">
@@ -333,55 +433,92 @@ export function GateApp() {
               {(phase === "punching" || phase === "registering") && (
                 <p className="text-center text-xs text-slate-500 mt-2 flex items-center justify-center gap-1">
                   <MapPin className="h-3.5 w-3.5" />
-                  GPS חובה · ללא צילום
+                  GPS · מכשיר · שעת רישום
                 </p>
               )}
             </CardBox>
           )}
 
-          {phase === "success" && (
-            <CardBox
-              className={
-                lastAction === "check-out"
-                  ? "border-sky-500/40 bg-sky-500/10"
-                  : "border-emerald-500/40 bg-emerald-500/10"
-              }
-            >
-              {lastAction === "check-out" ? (
-                <LogOut className="h-16 w-16 mx-auto text-sky-300" />
-              ) : (
-                <LogIn className="h-16 w-16 mx-auto text-emerald-400" />
-              )}
-              <CheckCircle2
-                className={cn(
-                  "h-8 w-8 mx-auto mt-2",
-                  lastAction === "check-out" ? "text-sky-300" : "text-emerald-400",
-                )}
-              />
-              <p className="text-center text-2xl font-black mt-4">
-                {lastAction === "check-out" ? "יציאה נרשמה בהצלחה" : "כניסה נרשמה בהצלחה"}
-              </p>
-              <p className="text-center text-lg font-semibold mt-2">{userName}</p>
+          {phase === "ready" && (
+            <CardBox className="space-y-4">
               {message && (
-                <p
-                  className={cn(
-                    "text-center mt-2 text-sm",
-                    lastAction === "check-out" ? "text-sky-100" : "text-emerald-200",
-                  )}
-                >
+                <p className="text-center text-sm text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2 whitespace-pre-line">
                   {message}
                 </p>
               )}
-              <Button
-                className="w-full mt-6"
-                variant="outline"
+
+              {!hasOpenRecord ? (
+                <button
+                  type="button"
+                  onClick={() => void handlePunchClick("check-in")}
+                  className="w-full rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] transition-all py-7 px-4 text-xl font-black shadow-lg shadow-emerald-900/40"
+                >
+                  🟢 כניסה
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled
+                    className="w-full rounded-2xl bg-emerald-900/50 border border-emerald-500/40 py-6 px-4 text-lg font-bold text-emerald-100 cursor-not-allowed opacity-90"
+                  >
+                    🟢 נכנסת בשעה {formatAttendanceTime(openCheckIn)}
+                  </button>
+                  <div className="h-px bg-white/10" />
+                  <button
+                    type="button"
+                    onClick={() => void handlePunchClick("check-out")}
+                    className="w-full rounded-2xl bg-red-600 hover:bg-red-500 active:scale-[0.99] transition-all py-7 px-4 text-xl font-black shadow-lg shadow-red-900/40"
+                  >
+                    🔴 יציאה
+                  </button>
+                </>
+              )}
+
+              <p className="text-center text-[11px] text-slate-500 flex items-center justify-center gap-1">
+                <MapPin className="h-3 w-3" />
+                מיקום ומכשיר נשמרים בכל רישום
+              </p>
+            </CardBox>
+          )}
+
+          {phase === "checkout_success" && checkoutSummary && (
+            <CardBox className="space-y-4 border-sky-500/40 bg-sky-500/10">
+              <CheckCircle2 className="h-14 w-14 mx-auto text-emerald-400" />
+              <p className="text-center text-2xl font-black">✅ היציאה בוצעה בהצלחה</p>
+              <div className="space-y-2 text-center text-base">
+                <p>
+                  כניסה:{" "}
+                  <span className="font-bold">{formatAttendanceTime(checkoutSummary.checkIn)}</span>
+                </p>
+                <p>
+                  יציאה:{" "}
+                  <span className="font-bold">{formatAttendanceTime(checkoutSummary.checkOut)}</span>
+                </p>
+                <p className="text-lg font-black text-opal-gold mt-2">
+                  סה״כ: {formatAttendanceDuration(checkoutSummary.durationHours)} שעות
+                </p>
+              </div>
+              <div className="h-px bg-white/10" />
+              <button
+                type="button"
                 onClick={() => {
-                  resetGatePunchLock();
-                  bootOnceRef.current = false;
-                  void bootstrap();
+                  setCheckoutSummary(null);
+                  setHasOpenRecord(false);
+                  setOpenCheckIn(null);
+                  setPhase("ready");
+                  void handlePunchClick("check-in");
                 }}
+                className="w-full rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] transition-all py-7 px-4 text-xl font-black shadow-lg shadow-emerald-900/40"
               >
-                סריקה נוספת
+                🟢 כניסה
+              </button>
+              <Button
+                variant="ghost"
+                className="w-full text-slate-400"
+                onClick={() => goReady({ hasOpen: false, checkIn: null, userName })}
+              >
+                סגירה
               </Button>
             </CardBox>
           )}
@@ -395,9 +532,9 @@ export function GateApp() {
                 <li>סריקת QR</li>
                 <li>התחברות לחשבון העובד</li>
                 <li>אישור GPS</li>
-                <li>רישום המכשיר כמאושר + כניסה אוטומטית</li>
+                <li>רישום המכשיר + כניסה ראשונה</li>
               </ul>
-              <Button className="w-full mt-6" onClick={startRegistration}>
+              <Button className="w-full mt-6 h-12" onClick={startRegistration}>
                 התחלת הרשמה
               </Button>
             </CardBox>
@@ -407,7 +544,7 @@ export function GateApp() {
             <CardBox>
               <h2 className="text-lg font-bold text-center">התחברות</h2>
               <p className="text-sm text-slate-400 text-center mt-2">
-                פעם אחת בלבד — לאחר מכן סריקת QR מספיקה
+                פעם אחת בלבד — לאחר מכן השעון זמין במכשיר זה
               </p>
               <form onSubmit={handleLogin} className="space-y-3 mt-4">
                 <div>
@@ -432,7 +569,7 @@ export function GateApp() {
                   />
                 </div>
                 {message && <p className="text-sm text-red-300">{message}</p>}
-                <Button type="submit" className="w-full">
+                <Button type="submit" className="w-full h-11">
                   התחבר והמשך
                 </Button>
               </form>
@@ -446,6 +583,7 @@ export function GateApp() {
               <p className="text-sm text-amber-100/80 mt-3 text-center">{detail}</p>
               <div className="flex flex-col gap-2 mt-6">
                 <Button
+                  className="h-11"
                   onClick={() => {
                     resetGatePunchLock();
                     bootOnceRef.current = false;
@@ -453,15 +591,6 @@ export function GateApp() {
                   }}
                 >
                   נסה שוב
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setDetail(permissionHelpText());
-                    alert(permissionHelpText());
-                  }}
-                >
-                  הוראות לפתיחת הגדרות המיקום
                 </Button>
               </div>
             </CardBox>
@@ -472,7 +601,7 @@ export function GateApp() {
               <AlertTriangle className="h-12 w-12 text-red-400 mx-auto" />
               <p className="text-center mt-3">{message}</p>
               <Button
-                className="w-full mt-6"
+                className="w-full mt-6 h-11"
                 onClick={() => {
                   resetGatePunchLock();
                   bootOnceRef.current = false;
@@ -484,7 +613,7 @@ export function GateApp() {
             </CardBox>
           )}
 
-          {isAuthenticated && currentUser && phase !== "success" && (
+          {isAuthenticated && currentUser && phase !== "checkout_success" && (
             <p className="text-center text-xs text-slate-500">
               מחובר כ־{currentUser.name}{" "}
               <button type="button" className="underline text-slate-400" onClick={() => void logout()}>
@@ -494,6 +623,21 @@ export function GateApp() {
           )}
         </div>
       </main>
+    </div>
+  );
+}
+
+function ShiftBadge({ inShift }: { inShift: boolean }) {
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-semibold border",
+        inShift
+          ? "bg-emerald-500/15 border-emerald-400/40 text-emerald-200"
+          : "bg-white/5 border-white/15 text-slate-300",
+      )}
+    >
+      {inShift ? "🟢 נמצא במשמרת" : "⚪ לא במשמרת"}
     </div>
   );
 }

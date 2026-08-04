@@ -11,23 +11,32 @@ import "@babylonjs/loaders/glTF";
 import "@babylonjs/loaders/OBJ";
 import { unzipSync } from "fflate";
 import type { ModelFormat, SceneAsset, SceneLayerId } from "./types";
+import { getCachedGeometry, setCachedGeometry } from "./Cache";
 import { createMaterialForMesh } from "./Materials";
-import { detectFormat, getExt, inferSceneLayer } from "./Utils";
+import { repairDentalMesh } from "./MeshQuality";
+import { detectFormat, getExt, inferSceneLayer, LAYER_LABELS } from "./Utils";
 
 export type LoadedSceneMesh = {
   mesh: AbstractMesh;
   assetId: string;
   fileName: string;
+  displayName: string;
   format: ModelFormat;
   layer: SceneLayerId;
   vertexCount: number;
 };
 
-export type LoadSceneProgress = (phase: string, progress: number) => void;
+export type LoadSceneProgress = (phase: string, progress: number, detail?: string) => void;
 
 async function resolveBuffer(asset: SceneAsset): Promise<{ buffer: ArrayBuffer; fileName: string }> {
+  const cached = getCachedGeometry(asset.id, asset.fileSize);
+  if (cached) {
+    return { buffer: cached.buffer.slice(0), fileName: cached.fileName };
+  }
   if (asset.file) {
-    return { buffer: await asset.file.arrayBuffer(), fileName: asset.fileName || asset.file.name };
+    const buffer = await asset.file.arrayBuffer();
+    setCachedGeometry(asset.id, asset.fileSize ?? asset.file.size, buffer, asset.fileName || asset.file.name);
+    return { buffer, fileName: asset.fileName || asset.file.name };
   }
   if (asset.fileId) {
     const res = await fetch(`/api/orders/files/${asset.fileId}/access`, {
@@ -44,52 +53,19 @@ async function resolveBuffer(asset: SceneAsset): Promise<{ buffer: ArrayBuffer; 
     }
     const bin = await fetch(json.data.signedUrl);
     if (!bin.ok) throw new Error(`הורדת קובץ נכשלה: ${asset.fileName}`);
-    return {
-      buffer: await bin.arrayBuffer(),
-      fileName: json.data.fileName || asset.fileName,
-    };
+    const buffer = await bin.arrayBuffer();
+    const fileName = json.data.fileName || asset.fileName;
+    setCachedGeometry(asset.id, asset.fileSize, buffer, fileName);
+    return { buffer, fileName };
   }
   if (asset.url) {
     const bin = await fetch(asset.url, { credentials: "include", cache: "no-store" });
     if (!bin.ok) throw new Error(`הורדת קובץ נכשלה: ${asset.fileName}`);
-    return { buffer: await bin.arrayBuffer(), fileName: asset.fileName };
+    const buffer = await bin.arrayBuffer();
+    setCachedGeometry(asset.id, asset.fileSize, buffer, asset.fileName);
+    return { buffer, fileName: asset.fileName };
   }
   throw new Error(`אין מקור לקובץ: ${asset.fileName}`);
-}
-
-function autoRepairMesh(mesh: Mesh): void {
-  try {
-    mesh.forceSharedVertices();
-  } catch {
-    /* ignore */
-  }
-  try {
-    if (!mesh.isVerticesDataPresent(VertexBuffer.NormalKind)) {
-      mesh.createNormals(true);
-    }
-  } catch {
-    try {
-      mesh.createNormals(false);
-    } catch {
-      /* ignore */
-    }
-  }
-  try {
-    mesh.optimizeIndices();
-  } catch {
-    /* ignore */
-  }
-  mesh.computeWorldMatrix(true);
-  mesh.refreshBoundingInfo(true, true);
-  mesh.freezeWorldMatrix();
-  mesh.doNotSyncBoundingInfo = true;
-  if (mesh.material) {
-    try {
-      mesh.material.freeze();
-    } catch {
-      /* ignore */
-    }
-  }
 }
 
 function parseStl(buffer: ArrayBuffer, name: string, scene: Scene): Mesh {
@@ -316,22 +292,87 @@ function parsePly(buffer: ArrayBuffer, name: string, scene: Scene): Mesh {
   return mesh;
 }
 
+function meshVertexCount(m: AbstractMesh): number {
+  const verts = m.getTotalVertices?.() ?? 0;
+  if (verts >= 3) return verts;
+  // Fallback — some OBJ nodes report 0 until positions are read
+  const pos = m.getVerticesData?.(VertexBuffer.PositionKind);
+  return pos ? Math.floor(pos.length / 3) : 0;
+}
+
+function isRenderableMesh(m: AbstractMesh): boolean {
+  if (!m || m.name === "__root__") return false;
+  return meshVertexCount(m) >= 3;
+}
+
+/**
+ * Collect every mesh with geometry from an ImportMesh result.
+ * IMPORTANT: never dispose empty parents with recurse — that deletes renderable children (OBJ).
+ */
+function collectRenderableMeshes(imported: AbstractMesh[]): AbstractMesh[] {
+  const seen = new Set<AbstractMesh>();
+  const out: AbstractMesh[] = [];
+  const visit = (m: AbstractMesh) => {
+    if (seen.has(m)) return;
+    seen.add(m);
+    if (isRenderableMesh(m)) out.push(m);
+    for (const child of m.getChildMeshes?.(false) ?? []) visit(child);
+  };
+  for (const m of imported) visit(m);
+  return out;
+}
+
 async function loadViaSceneLoader(
   scene: Scene,
   buffer: ArrayBuffer,
   fileName: string,
   root: TransformNode,
 ): Promise<AbstractMesh[]> {
+  if (scene.isDisposed) throw new Error("Scene disposed before load");
   const ext = getExt(fileName);
-  const blob = new Blob([buffer]);
+  const blob = new Blob([buffer], {
+    type: ext === "obj" ? "text/plain" : "application/octet-stream",
+  });
   const objectUrl = URL.createObjectURL(blob);
   try {
     const result = await SceneLoader.ImportMeshAsync("", objectUrl, "", scene, undefined, `.${ext}`);
-    const meshes = result.meshes.filter((m) => m.name !== "__root__");
+    if (scene.isDisposed) {
+      for (const m of result.meshes) {
+        try {
+          // doNotRecurse=true — avoid wiping shared hierarchy mid-dispose
+          m.dispose(true, true);
+        } catch {
+          /* ignore */
+        }
+      }
+      throw new Error("Scene has been disposed");
+    }
+
+    const meshes = collectRenderableMeshes(result.meshes);
     for (const m of meshes) {
       m.parent = root;
+      m.isVisible = true;
+      m.setEnabled(true);
     }
-    return meshes.length ? meshes : result.meshes;
+
+    // Drop empty helper nodes only if they have no renderable descendants
+    for (const m of result.meshes) {
+      if (meshes.includes(m) || m.name === "__root__") continue;
+      const hasRenderableChild = (m.getChildMeshes?.(false) ?? []).some((c) =>
+        meshes.includes(c),
+      );
+      if (hasRenderableChild) continue;
+      try {
+        m.dispose(true, true); // doNotRecurse — never kill geometry children
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (!meshes.length) {
+      throw new Error(`No renderable geometry in ${fileName}`);
+    }
+    return meshes;
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
@@ -399,19 +440,59 @@ async function loadSingleAsset(
     throw new Error(`פורמט לא נתמך: ${fileName}`);
   }
 
-  const prepared: LoadedSceneMesh[] = [];
-  for (const mesh of meshes) {
-    if (!(mesh instanceof Mesh) && mesh.getTotalVertices?.() === 0) continue;
-    if (mesh instanceof Mesh) {
-      autoRepairMesh(mesh);
-      if (format !== "glb" && format !== "gltf") {
-        mesh.material = createMaterialForMesh(scene, baseName, format, layer, mesh);
-      } else if (!mesh.material) {
-        mesh.material = createMaterialForMesh(scene, baseName, format, layer, mesh);
+  if (scene.isDisposed) {
+    for (const m of meshes) {
+      try {
+        m.dispose(false, true);
+      } catch {
+        /* ignore */
       }
     }
+    throw new Error("Scene has been disposed");
+  }
+
+  const prepared: LoadedSceneMesh[] = [];
+  for (const mesh of meshes) {
+    let vCount = meshVertexCount(mesh);
+    if (vCount < 3) {
+      try {
+        mesh.dispose(true, true);
+      } catch {
+        /* ignore */
+      }
+      continue;
+    }
+    if (mesh instanceof Mesh) {
+      repairDentalMesh(mesh);
+      vCount = meshVertexCount(mesh);
+      if (vCount < 3) {
+        // Repair wiped geometry — keep original mesh if still somehow valid, else drop
+        try {
+          mesh.dispose(true, true);
+        } catch {
+          /* ignore */
+        }
+        continue;
+      }
+    }
+    // Always replace loader materials — OBJ/MTL often lands as black without IBL
+    try {
+      mesh.material?.dispose(false, true);
+    } catch {
+      /* ignore */
+    }
+    mesh.material = createMaterialForMesh(
+      scene,
+      `${baseName}_${prepared.length}`,
+      format,
+      layer,
+      mesh,
+    );
     mesh.isPickable = true;
-    mesh.receiveShadows = true;
+    mesh.isVisible = true;
+    mesh.setEnabled(true);
+    mesh.receiveShadows = false;
+    mesh.alwaysSelectAsActiveMesh = false;
     mesh.metadata = {
       ...(mesh.metadata ?? {}),
       opalAssetId: asset.id,
@@ -419,21 +500,24 @@ async function loadSingleAsset(
       opalFormat: format,
       opalLayer: layer,
     };
-    const vCount = mesh.getTotalVertices?.() ?? 0;
     prepared.push({
       mesh,
       assetId: asset.id,
       fileName,
+      displayName: asset.displayName || fileName,
       format,
       layer,
       vertexCount: vCount,
     });
   }
+  if (!prepared.length) {
+    throw new Error(`No renderable geometry in ${fileName}`);
+  }
   return prepared;
 }
 
 /**
- * Load Order → all mesh files → sort → meshes → repair → return.
+ * Progressive dental scene load with real progress labels.
  */
 export async function loadDentalScene(
   scene: Scene,
@@ -445,21 +529,33 @@ export async function loadDentalScene(
   const all: LoadedSceneMesh[] = [];
   const total = Math.max(sorted.length, 1);
 
+  onProgress?.("Loading Dental Scene...", 2, "Preparing");
+
   for (let i = 0; i < sorted.length; i++) {
     const asset = sorted[i];
+    const layer = inferSceneLayer(asset.fileName, asset.slotKey, asset.category);
+    const label = LAYER_LABELS[layer] || asset.fileName;
     onProgress?.(
-      `טוען ${asset.fileName} (${i + 1}/${sorted.length})`,
-      Math.round(((i + 0.15) / total) * 100),
+      `${label}...`,
+      Math.round(((i + 0.1) / total) * 85),
+      asset.fileName,
     );
+    // Yield so UI can paint progressive status
+    await new Promise((r) => setTimeout(r, 0));
     try {
+      if (scene.isDisposed) throw new Error("Scene has been disposed");
       const loaded = await loadSingleAsset(scene, asset, root);
       all.push(...loaded);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Superseded viewer remount — abort whole load, don't pretend assets are broken
+      if (/disposed/i.test(msg)) throw err instanceof Error ? err : new Error(msg);
       console.warn("[OPAL3DViewer V3] skip asset", asset.fileName, err);
     }
     onProgress?.(
-      `נטען ${asset.fileName}`,
-      Math.round(((i + 1) / total) * 90),
+      `${label} ✓`,
+      Math.round(((i + 1) / total) * 88),
+      asset.fileName,
     );
   }
 
@@ -467,7 +563,7 @@ export async function loadDentalScene(
     throw new Error("לא נטענו מודלים לתצוגת הסצנה");
   }
 
-  onProgress?.("מרכז סצנה...", 92);
+  onProgress?.("Optimizing...", 92, "Normals / freeze / bounds");
   return all;
 }
 

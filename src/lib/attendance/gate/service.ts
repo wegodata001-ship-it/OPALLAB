@@ -42,6 +42,7 @@ export async function lookupTrustedDevice(deviceKey: string) {
     userId: device.userId,
     userName: device.user.name,
     hasOpenRecord: !!open,
+    openCheckIn: open?.checkIn ? new Date(open.checkIn).toISOString() : null,
     os: device.os,
     browser: device.browser,
     registeredAt: device.registeredAt,
@@ -180,6 +181,8 @@ export async function punchViaTrustedDevice(input: {
   durationHours: number | null;
   duplicate: boolean;
   recordId: string;
+  checkIn: string;
+  checkOut: string | null;
 }> {
   const device = await prisma.trustedDevice.findUnique({
     where: { deviceKey: input.deviceKey },
@@ -287,6 +290,8 @@ export async function punchViaTrustedDevice(input: {
     durationHours: result.durationHours,
     duplicate: result.duplicate,
     recordId: result.recordId,
+    checkIn: result.checkIn.toISOString(),
+    checkOut: result.checkOut ? result.checkOut.toISOString() : null,
   };
 }
 

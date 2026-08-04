@@ -35,7 +35,7 @@ function StatusBadge({ status }: { status: "open" | "closed" }) {
         status === "open" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600",
       )}
     >
-      {status === "open" ? "פתוחה" : "הסתיימה"}
+      {status === "open" ? "🟢 במשמרת" : "הסתיימה"}
     </span>
   );
 }

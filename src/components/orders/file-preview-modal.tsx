@@ -54,13 +54,28 @@ export function FilePreviewModal({
 
   const downloadUrl = file?.dataUrl ?? viewUrl;
 
+  const sceneFilesKey = useMemo(
+    () =>
+      (sceneFiles.length ? sceneFiles : relatedFiles)
+        .map((f) => f.id)
+        .sort()
+        .join(","),
+    [sceneFiles, relatedFiles],
+  );
+
   const dentalScene = useMemo((): SceneAsset[] => {
     if (!file) return [];
     const pool = sceneFiles.length ? sceneFiles : relatedFiles.length ? relatedFiles : [file];
-    const byId = new Map<string, OrderFile>();
-    for (const f of pool) byId.set(f.id, f);
-    if (!byId.has(file.id)) byId.set(file.id, file);
-    return [...byId.values()].map((f) => ({
+    // One mesh per fileName — prefer current / clicked file (avoids 4× LOWER.obj reload storms)
+    const byName = new Map<string, OrderFile>();
+    for (const f of pool) {
+      if (f.isCurrent === false) continue;
+      const k = f.fileName.toLowerCase();
+      const prev = byName.get(k);
+      if (!prev || f.id === file.id) byName.set(k, f);
+    }
+    if (!byName.has(file.fileName.toLowerCase())) byName.set(file.fileName.toLowerCase(), file);
+    return [...byName.values()].map((f) => ({
       id: f.id,
       fileName: f.fileName,
       fileId: f.id,
@@ -69,8 +84,24 @@ export function FilePreviewModal({
       slotKey: f.slotKey,
       category: f.category,
       primary: f.id === file.id,
+      displayName: f.fileName,
+      modelMeta: f.modelMeta
+        ? {
+            bbox: f.modelMeta.bbox,
+            center: f.modelMeta.center,
+            maxDim: f.modelMeta.maxDim,
+            hasVertexColors: f.modelMeta.hasVertexColors,
+            hasNormals: f.modelMeta.hasNormals,
+            transform:
+              (f.modelMeta as { transform?: SceneAsset["transform"] }).transform ?? null,
+          }
+        : null,
+      transform:
+        (f.modelMeta as { transform?: SceneAsset["transform"] } | null | undefined)?.transform ??
+        null,
     }));
-  }, [file, sceneFiles, relatedFiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file?.id, file?.fileName, sceneFilesKey]);
 
   useEffect(() => {
     if (!file) return;
@@ -120,78 +151,84 @@ export function FilePreviewModal({
 
   if (!file) return null;
 
+  const isDentalScene = previewKind === "model3d" || previewKind === "zip";
+
   const title =
     isScanViewer && previewKind === "html"
       ? "צפייה בסריקה תלת־ממדית"
-      : previewKind === "model3d" || previewKind === "zip"
+      : isDentalScene
         ? "OPAL Dental Scene"
         : file.fileName;
 
   const modalClass = cn(
-    "bg-white shadow-2xl flex flex-col transition-all",
+    "shadow-2xl flex flex-col transition-all",
+    isDentalScene ? "bg-[#16181c]" : "bg-white",
     isFullscreen
       ? "fixed inset-0 z-[60] w-screen h-screen rounded-none"
-      : "relative rounded-2xl w-[90vw] h-[90vh] max-w-[90vw] max-h-[90vh]",
+      : isDentalScene
+        ? "relative rounded-xl w-[96vw] h-[96vh] max-w-[96vw] max-h-[96vh]"
+        : "relative rounded-2xl w-[90vw] h-[90vh] max-w-[90vw] max-h-[90vh]",
   );
 
   return (
     <div
       className={cn(
-        "fixed inset-0 z-50 flex items-center justify-center bg-black/70",
-        isFullscreen && "p-0",
-        !isFullscreen && "p-4",
+        "fixed inset-0 z-50 flex items-center justify-center bg-black/80",
+        isFullscreen ? "p-0" : "p-2",
       )}
-      onClick={onClose}
+      onClick={isDentalScene ? undefined : onClose}
     >
       <div className={modalClass} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between gap-3 p-4 border-b shrink-0">
-          <div className="min-w-0">
-            <p className="font-bold text-slate-900 truncate">{title}</p>
-            <p className="text-xs text-slate-400 flex items-center gap-1.5">
-              {(previewKind === "model3d" || previewKind === "zip" || isScanViewer) && (
-                <Box className="h-3.5 w-3.5 text-opal-gold" />
+        {!isDentalScene && (
+          <div className="flex items-center justify-between gap-3 p-4 border-b shrink-0">
+            <div className="min-w-0">
+              <p className="font-bold text-slate-900 truncate">{title}</p>
+              <p className="text-xs text-slate-400 flex items-center gap-1.5">
+                {isScanViewer && <Box className="h-3.5 w-3.5 text-opal-gold" />}
+                {FILE_TYPE_LABELS[file.fileType]}
+              </p>
+            </div>
+            <div className="flex gap-1.5 shrink-0">
+              {downloadUrl && (
+                <a href={downloadUrl} download={file.fileName} target="_blank" rel="noopener noreferrer">
+                  <Button variant="outline" size="sm" title="הורדה">
+                    <Download className="h-4 w-4" />
+                  </Button>
+                </a>
               )}
-              {FILE_TYPE_LABELS[file.fileType]}
-              {(previewKind === "model3d" || previewKind === "zip") && dentalScene.length > 1
-                ? ` · ${dentalScene.length} meshes`
-                : ""}
-            </p>
-          </div>
-          <div className="flex gap-1.5 shrink-0">
-            {downloadUrl && (
-              <a href={downloadUrl} download={file.fileName} target="_blank" rel="noopener noreferrer">
-                <Button variant="outline" size="sm" title="הורדה">
-                  <Download className="h-4 w-4" />
+              {viewUrl && (
+                <a href={viewUrl} target="_blank" rel="noopener noreferrer">
+                  <Button variant="outline" size="sm" title="פתיחה בלשונית חדשה">
+                    <ExternalLink className="h-4 w-4" />
+                  </Button>
+                </a>
+              )}
+              {(previewKind === "html" || previewKind === "pdf") && (
+                <Button variant="outline" size="sm" title="רענון" onClick={handleRefresh}>
+                  <RefreshCw className="h-4 w-4" />
                 </Button>
-              </a>
-            )}
-            {viewUrl && (
-              <a href={viewUrl} target="_blank" rel="noopener noreferrer">
-                <Button variant="outline" size="sm" title="פתיחה בלשונית חדשה">
-                  <ExternalLink className="h-4 w-4" />
-                </Button>
-              </a>
-            )}
-            {(previewKind === "html" || previewKind === "pdf") && (
-              <Button variant="outline" size="sm" title="רענון" onClick={handleRefresh}>
-                <RefreshCw className="h-4 w-4" />
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                title={isFullscreen ? "יציאה ממסך מלא" : "מסך מלא"}
+                onClick={() => setIsFullscreen((v) => !v)}
+              >
+                {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
               </Button>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              title={isFullscreen ? "יציאה ממסך מלא" : "מסך מלא"}
-              onClick={() => setIsFullscreen((v) => !v)}
-            >
-              {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-            </Button>
-            <Button variant="outline" size="sm" title="סגירה" onClick={onClose}>
-              <X className="h-4 w-4" />
-            </Button>
+              <Button variant="outline" size="sm" title="סגירה" onClick={onClose}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="flex-1 overflow-hidden relative bg-slate-50 min-h-0">
+        <div
+          className={cn(
+            "flex-1 overflow-hidden relative min-h-0",
+            isDentalScene ? "bg-[#16181c]" : "bg-slate-50",
+          )}
+        >
           {loading && previewKind !== "zip" && previewKind !== "plx" && previewKind !== "model3d" && !error && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-50/90">
               <div className="text-center">
@@ -250,7 +287,7 @@ export function FilePreviewModal({
             />
           )}
 
-          {(previewKind === "model3d" || previewKind === "zip") && !error && (
+          {isDentalScene && !error && (
             <OPAL3DViewer
               key={`v3-${refreshKey}`}
               sceneFiles={dentalScene}
@@ -258,6 +295,29 @@ export function FilePreviewModal({
               fileSize={file.fileSize ?? undefined}
               url={viewUrl ?? undefined}
               fileName={file.fileName}
+              className="min-h-0"
+              isFullscreen={isFullscreen}
+              onClose={onClose}
+              onFullscreen={() => setIsFullscreen((v) => !v)}
+              onOpenExternal={
+                viewUrl
+                  ? () => {
+                      window.open(viewUrl, "_blank", "noopener,noreferrer");
+                    }
+                  : undefined
+              }
+              onDownload={
+                downloadUrl
+                  ? () => {
+                      const a = document.createElement("a");
+                      a.href = downloadUrl;
+                      a.download = file.fileName;
+                      a.target = "_blank";
+                      a.rel = "noopener noreferrer";
+                      a.click();
+                    }
+                  : undefined
+              }
               onLoaded={() => setLoading(false)}
               onError={() => {
                 setLoading(false);

@@ -6,11 +6,9 @@ import {
   SceneOptimizerOptions,
   HardwareScalingOptimization,
   ShadowsOptimization,
-  MergeMeshesOptimization,
-  PostProcessesOptimization,
   TextureOptimization,
 } from "@babylonjs/core";
-import type { ViewerTheme } from "./types";
+import type { ViewerBackground, ViewerTheme } from "./types";
 
 export type ViewerSceneBundle = {
   engine: Engine;
@@ -18,50 +16,86 @@ export type ViewerSceneBundle = {
   optimizer: SceneOptimizer | null;
 };
 
+const CLEAR: Record<ViewerBackground, Color4> = {
+  darkGray: new Color4(0.16, 0.17, 0.19, 1),
+  lightGray: new Color4(0.78, 0.79, 0.81, 1),
+  whiteStudio: new Color4(0.94, 0.945, 0.95, 1),
+  gradientGray: new Color4(0.22, 0.23, 0.26, 1),
+  transparent: new Color4(0, 0, 0, 0),
+};
+
 export function createViewerScene(
   canvas: HTMLCanvasElement,
-  theme: ViewerTheme,
+  _theme: ViewerTheme = "dark",
 ): ViewerSceneBundle {
-  const engine = new Engine(canvas, true, {
-    preserveDrawingBuffer: true,
-    stencil: true,
-    antialias: true,
-    adaptToDeviceRatio: true,
-    powerPreference: "high-performance",
-  }, true);
+  const engine = new Engine(
+    canvas,
+    true,
+    {
+      preserveDrawingBuffer: true,
+      stencil: true,
+      antialias: true,
+      adaptToDeviceRatio: true,
+      powerPreference: "high-performance",
+      premultipliedAlpha: false,
+      useHighPrecisionFloats: true,
+    },
+    true,
+  );
 
-  // MSAA when available
-  engine.setHardwareScalingLevel(1);
+  // Auto hardware scaling seed — SceneOptimizer may raise this on weak GPUs
+  engine.setHardwareScalingLevel(estimateGpuScale());
+
   const scene = new Scene(engine);
-  scene.clearColor =
-    theme === "dark" ? new Color4(0.08, 0.09, 0.11, 1) : new Color4(0.93, 0.94, 0.96, 1);
+  scene.clearColor = CLEAR.darkGray.clone();
   scene.autoClear = true;
   scene.skipPointerMovePicking = false;
   scene.constantlyUpdateMeshUnderPointer = false;
   scene.blockMaterialDirtyMechanism = false;
+  scene.skipFrustumClipping = false;
+  scene.useRightHandedSystem = false;
 
-  // Prefer FXAA via default pipeline (wired in Environment)
   const optimizer = startOptimizer(scene);
 
   return { engine, scene, optimizer };
 }
 
-export function setSceneTheme(scene: Scene, theme: ViewerTheme): void {
-  scene.clearColor =
-    theme === "dark" ? new Color4(0.08, 0.09, 0.11, 1) : new Color4(0.93, 0.94, 0.96, 1);
+function estimateGpuScale(): number {
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+    if (!gl) return 1;
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = dbg
+      ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || "").toLowerCase()
+      : "";
+    // Integrated / weak GPUs → slight downscale for smoothness
+    if (/intel|uhd|iris|mali|adreno 5|apple gpu/.test(renderer)) return 1.15;
+    if (/nvidia|radeon|geforce|rtx|gtx|apple m/.test(renderer)) return 1;
+  } catch {
+    /* ignore */
+  }
+  return 1;
 }
 
+export function setSceneTheme(scene: Scene, theme: ViewerTheme): void {
+  scene.clearColor =
+    theme === "dark" ? CLEAR.darkGray.clone() : CLEAR.lightGray.clone();
+}
+
+export function setSceneBackground(scene: Scene, background: ViewerBackground): void {
+  scene.clearColor = (CLEAR[background] ?? CLEAR.darkGray).clone();
+}
+
+/** Conservative optimizer — no mesh merge (breaks dental materials). */
 export function startOptimizer(scene: Scene): SceneOptimizer {
-  const opts = new SceneOptimizerOptions(50, 2000);
+  const opts = new SceneOptimizerOptions(48, 2500);
   opts.optimizations = [
-    new HardwareScalingOptimization(0, 1.5),
+    new HardwareScalingOptimization(0, 1.75),
     new ShadowsOptimization(1),
-    new PostProcessesOptimization(2),
-    new TextureOptimization(3, 512),
-    new MergeMeshesOptimization(4),
+    new TextureOptimization(2, 1024),
   ];
-  const optimizer = SceneOptimizer.OptimizeAsync(scene, opts);
-  return optimizer;
+  return SceneOptimizer.OptimizeAsync(scene, opts);
 }
 
 export function disposeViewerScene(bundle: ViewerSceneBundle | null): void {
@@ -83,12 +117,38 @@ export function disposeViewerScene(bundle: ViewerSceneBundle | null): void {
   }
 }
 
-/** Build / refresh octree for large scenes. */
 export function rebuildOctree(scene: Scene): void {
   const meshes = scene.meshes.filter((m) => m.isEnabled() && m.isVisible);
   if (meshes.length < 2) return;
   try {
     scene.createOrUpdateSelectionOctree(64, 2);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Freeze active meshes after load for large dental scenes. */
+export function freezeScenePerformance(scene: Scene): void {
+  try {
+    scene.freezeActiveMeshes();
+  } catch {
+    /* ignore */
+  }
+  try {
+    scene.blockMaterialDirtyMechanism = true;
+  } catch {
+    /* ignore */
+  }
+}
+
+export function unfreezeScenePerformance(scene: Scene): void {
+  try {
+    scene.unfreezeActiveMeshes();
+  } catch {
+    /* ignore */
+  }
+  try {
+    scene.blockMaterialDirtyMechanism = false;
   } catch {
     /* ignore */
   }

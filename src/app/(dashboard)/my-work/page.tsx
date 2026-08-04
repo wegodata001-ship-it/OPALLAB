@@ -11,6 +11,7 @@ import { formatCurrency } from "@/lib/utils";
 import { calculateEmployeePay, getSalaryLabel } from "@/lib/salary";
 import { Clock, CheckCircle2, Wallet, QrCode } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatAttendanceTime } from "@/lib/attendance/gate/time-format";
 import {
   PRODUCTION_STAGES,
   getStagesForRole,
@@ -24,17 +25,21 @@ const STAGE_LABELS = Object.fromEntries(PRODUCTION_STAGES.map((s) => [s.status, 
 export default function MyWorkPage() {
   const { currentUser, attendance, orders } = useApp();
   const [hasOpenRecord, setHasOpenRecord] = useState<boolean | null>(null);
+  const [openCheckIn, setOpenCheckIn] = useState<Date | string | null>(null);
 
   const refreshAttendanceStatus = useCallback(async () => {
     if (!currentUser) {
       setHasOpenRecord(null);
+      setOpenCheckIn(null);
       return;
     }
     try {
       const status = await fetchAttendanceStatus();
       setHasOpenRecord(status.hasOpenRecord);
+      setOpenCheckIn(status.record?.checkIn ?? null);
     } catch {
       setHasOpenRecord(null);
+      setOpenCheckIn(null);
     }
   }, [currentUser]);
 
@@ -122,30 +127,41 @@ export default function MyWorkPage() {
             <CardTitle>נוכחות</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-center py-4">
-            <div>
-              <p className="text-sm text-slate-500 mb-1">מצב כעת</p>
-              <p
-                className={cn(
-                  "text-xl font-bold",
-                  hasOpenRecord === null ? "text-slate-400" : isActive ? "text-emerald-700" : "text-slate-600",
-                )}
-              >
-                {hasOpenRecord === null ? "טוען..." : isActive ? "בעבודה" : "לא בוצעה כניסה"}
-              </p>
+            <div
+              className={cn(
+                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-semibold border mx-auto",
+                hasOpenRecord === null
+                  ? "border-slate-200 text-slate-400"
+                  : isActive
+                    ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                    : "bg-slate-50 border-slate-200 text-slate-600",
+              )}
+            >
+              {hasOpenRecord === null
+                ? "טוען..."
+                : isActive
+                  ? "🟢 נמצא במשמרת"
+                  : "⚪ לא במשמרת"}
             </div>
+
+            {isActive && openCheckIn && (
+              <p className="text-sm font-medium text-emerald-800">
+                נכנסת בשעה {formatAttendanceTime(openCheckIn)}
+              </p>
+            )}
 
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 space-y-2">
               <QrCode className="h-8 w-8 text-opal-gold mx-auto" />
-              <p className="font-medium text-slate-800">כניסה ויציאה רק בשער המעבדה</p>
+              <p className="font-medium text-slate-800">שעון נוכחות בשער המעבדה</p>
               <p>
-                סרקו את ה־QR או הצמידו את הטלפון לתג ה־NFC בכניסה.
-                אין יותר רישום נוכחות ממסך זה.
+                כניסה ויציאה מתבצעות בשעון הנוכחות (QR).
+                לא ניתן לבצע שתי כניסות רצופות או יציאה ללא כניסה פתוחה.
               </p>
             </div>
 
             <Link href="/attendance/checkin">
-              <Button variant="outline" className="w-full max-w-xs mx-auto">
-                פתיחת שער הנוכחות (בדיקה)
+              <Button className="w-full max-w-xs mx-auto h-12 text-base font-bold">
+                {isActive ? "פתיחת שעון — יציאה" : "פתיחת שעון — כניסה"}
               </Button>
             </Link>
             <Link href="/my-attendance" className="block text-sm text-opal-gold-dark hover:underline">
