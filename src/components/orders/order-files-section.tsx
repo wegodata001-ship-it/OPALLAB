@@ -31,11 +31,13 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
+  Globe,
   Pencil,
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiPatch } from "@/lib/api/client";
+import { isDentalWebViewMesh, openDentalWebView } from "@/lib/orders/dental-webview";
 
 interface OrderFilesSectionProps {
   orderId: string;
@@ -436,6 +438,19 @@ export function OrderFilesSection({
                             >
                               <Download className="h-4 w-4" />
                             </a>
+                            {isDentalWebViewMesh(f.fileName) && (
+                              <button
+                                type="button"
+                                title="Open WebView"
+                                className="p-1.5 rounded-md text-sky-600 hover:bg-white"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openDentalWebView();
+                                }}
+                              >
+                                <Globe className="h-4 w-4" />
+                              </button>
+                            )}
                             {canUpload && (
                               <>
                                 <button

@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Eye,
   Focus,
+  Globe,
   Home,
   Maximize2,
   Minimize2,
@@ -46,6 +47,7 @@ type ChromeActions = {
   isFullscreen?: boolean;
   onOpenExternal?: () => void;
   onDownload?: () => void;
+  onOpenWebView?: () => void;
 };
 
 type ToolbarProps = ChromeActions & {
@@ -132,6 +134,7 @@ export function Toolbar({
   isFullscreen,
   onOpenExternal,
   onDownload,
+  onOpenWebView,
   projection,
   renderMode,
   viewMode,
@@ -176,7 +179,9 @@ export function Toolbar({
     return false;
   };
 
-  const hasChrome = Boolean(onClose || onFullscreen || onOpenExternal || onDownload);
+  const hasChrome = Boolean(
+    onClose || onFullscreen || onOpenExternal || onDownload || onOpenWebView,
+  );
 
   return (
     <div ref={rootRef} className="absolute top-0 inset-x-0 z-30 pointer-events-none">
@@ -200,6 +205,11 @@ export function Toolbar({
           {onDownload && (
             <IconBtn title="Download" onClick={onDownload}>
               <Download className="h-4 w-4" />
+            </IconBtn>
+          )}
+          {onOpenWebView && (
+            <IconBtn title="Open WebView" onClick={onOpenWebView}>
+              <Globe className="h-4 w-4" />
             </IconBtn>
           )}
         </div>

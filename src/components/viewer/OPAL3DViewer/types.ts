@@ -172,6 +172,8 @@ export type OPAL3DViewerProps = {
   isFullscreen?: boolean;
   onOpenExternal?: () => void;
   onDownload?: () => void;
+  /** Opens https://webview.dental/ for STL/OBJ/PLY Add Mesh workflow. */
+  onOpenWebView?: () => void;
 };
 
 export type LoadProgress = {

@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Globe,
   Maximize2,
   Minimize2,
   RotateCw,
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { OPAL3DViewer, type SceneAsset } from "@/components/viewer/OPAL3DViewer";
 import { cn } from "@/lib/utils";
 import type { FmFile } from "@/lib/file-manager-v2/types";
+import { isDentalWebViewMesh, openDentalWebView } from "@/lib/orders/dental-webview";
 
 type FmLightboxProps = {
   files: FmFile[];
@@ -106,9 +108,15 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
             <Button type="button" variant="ghost" size="sm" onClick={() => setFullscreen((f) => !f)}>
               {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => onDownload(index)}>
+            <Button type="button" variant="ghost" size="sm" onClick={() => onDownload(index)} title="הורדה">
               <Download className="h-4 w-4" />
             </Button>
+            {isDentalWebViewMesh(file.fileName) && (
+              <Button type="button" variant="ghost" size="sm" onClick={openDentalWebView} title="Open WebView">
+                <Globe className="h-4 w-4" />
+                <span className="mr-1 hidden sm:inline text-xs">Open WebView</span>
+              </Button>
+            )}
             <Button type="button" variant="ghost" size="sm" onClick={onClose}>
               <X className="h-4 w-4" />
             </Button>
@@ -144,6 +152,10 @@ export function FmLightbox({ files, index, onClose, onNavigate, onDownload }: Fm
               fileId={file.fileId}
               fileSize={file.fileSize}
               className={fullscreen ? "min-h-[calc(100vh-80px)] w-full" : "min-h-[420px] w-full"}
+              onDownload={() => onDownload(index)}
+              onOpenWebView={
+                isDentalWebViewMesh(file.fileName) ? openDentalWebView : undefined
+              }
             />
           )}
           {file.kind === "model3d" && !canViewModel && file.previewUrl && (

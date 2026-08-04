@@ -15,6 +15,7 @@ import {
   X,
   Download,
   ExternalLink,
+  Globe,
   RefreshCw,
   Maximize2,
   Minimize2,
@@ -22,6 +23,7 @@ import {
   FileWarning,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isDentalWebViewMesh, openDentalWebView } from "@/lib/orders/dental-webview";
 
 interface FilePreviewModalProps {
   file: OrderFile | null;
@@ -196,6 +198,12 @@ export function FilePreviewModal({
                   </Button>
                 </a>
               )}
+              {isDentalWebViewMesh(file.fileName) && (
+                <Button variant="outline" size="sm" title="Open WebView" onClick={openDentalWebView}>
+                  <Globe className="h-4 w-4" />
+                  <span className="mr-1 hidden sm:inline">Open WebView</span>
+                </Button>
+              )}
               {viewUrl && (
                 <a href={viewUrl} target="_blank" rel="noopener noreferrer">
                   <Button variant="outline" size="sm" title="פתיחה בלשונית חדשה">
@@ -246,14 +254,22 @@ export function FilePreviewModal({
                 <p className="text-sm text-slate-500 mt-2">
                   ייתכן שחסרים קבצים נלווים או שהקובץ פגום.
                 </p>
-                {downloadUrl && (
-                  <a href={downloadUrl} download={file.fileName} className="inline-block mt-4">
-                    <Button variant="outline" size="sm">
-                      <Download className="h-4 w-4" />
-                      הורד קובץ
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                  {downloadUrl && (
+                    <a href={downloadUrl} download={file.fileName}>
+                      <Button variant="outline" size="sm">
+                        <Download className="h-4 w-4" />
+                        הורד קובץ
+                      </Button>
+                    </a>
+                  )}
+                  {isDentalWebViewMesh(file.fileName) && (
+                    <Button variant="outline" size="sm" onClick={openDentalWebView}>
+                      <Globe className="h-4 w-4" />
+                      Open WebView
                     </Button>
-                  </a>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -316,6 +332,12 @@ export function FilePreviewModal({
                       a.rel = "noopener noreferrer";
                       a.click();
                     }
+                  : undefined
+              }
+              onOpenWebView={
+                isDentalWebViewMesh(file.fileName) ||
+                dentalScene.some((a) => isDentalWebViewMesh(a.fileName))
+                  ? openDentalWebView
                   : undefined
               }
               onLoaded={() => setLoading(false)}

@@ -92,6 +92,7 @@ export function Viewer({
   isFullscreen,
   onOpenExternal,
   onDownload,
+  onOpenWebView,
 }: OPAL3DViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -542,6 +543,7 @@ export function Viewer({
             isFullscreen={isFullscreen}
             onOpenExternal={onOpenExternal}
             onDownload={onDownload}
+            onOpenWebView={onOpenWebView}
             projection={projection}
             renderMode={renderMode}
             viewMode={viewMode}

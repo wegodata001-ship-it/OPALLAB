@@ -8,6 +8,7 @@ import {
   FileArchive,
   FileText,
   Film,
+  Globe,
   Pencil,
   RefreshCw,
   Trash2,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FmFile } from "@/lib/file-manager-v2/types";
+import { isDentalWebViewMesh, openDentalWebView } from "@/lib/orders/dental-webview";
 
 function KindIcon({ kind, className }: { kind: FmFile["kind"]; className?: string }) {
   if (kind === "model3d" || kind === "dcm") return <Box className={className} />;
@@ -203,6 +205,19 @@ export function FmGalleryGrid({
                   >
                     <Download className="h-3.5 w-3.5" />
                   </button>
+                  {isDentalWebViewMesh(file.fileName) && (
+                    <button
+                      type="button"
+                      title="Open WebView"
+                      className="h-7 w-7 rounded-full bg-white/90 text-sky-700 flex items-center justify-center"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openDentalWebView();
+                      }}
+                    >
+                      <Globe className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     title="מחיקה"
