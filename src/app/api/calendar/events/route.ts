@@ -9,6 +9,16 @@ export async function GET(request: Request) {
     const user = await requireSessionUser();
     await assertModuleAccess(user, "calendar", "CALENDAR_ACCESS");
     const url = new URL(request.url);
+    const upcoming = url.searchParams.get("upcoming") === "1" || url.searchParams.get("upcoming") === "true";
+    const calendarKey = url.searchParams.get("calendarKey") ?? undefined;
+
+    if (upcoming) {
+      const limitRaw = Number(url.searchParams.get("limit") ?? "5");
+      const limit = Number.isFinite(limitRaw) ? limitRaw : 5;
+      const events = await calendarService.listUpcomingEvents({ calendarKey, limit });
+      return jsonOk({ events });
+    }
+
     const fromRaw = url.searchParams.get("from");
     const toRaw = url.searchParams.get("to");
     if (!fromRaw || !toRaw) {
@@ -19,7 +29,6 @@ export async function GET(request: Request) {
     const q = url.searchParams.get("q") ?? undefined;
     const types = url.searchParams.getAll("type") as CalendarEventType[];
     const statuses = url.searchParams.getAll("status") as CalendarEventStatus[];
-    const calendarKey = url.searchParams.get("calendarKey") ?? undefined;
 
     const events = await calendarService.listEvents({
       from,

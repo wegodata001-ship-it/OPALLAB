@@ -21,6 +21,7 @@ export const USER_ROLE_LABELS: Record<UserRole, string> = {
   PACKAGING: "אריזה",
   DOCTOR: "רופא",
   OWNER: "בעלים",
+  ASSISTANT: "סייעת",
 };
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {

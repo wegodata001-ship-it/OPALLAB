@@ -19,6 +19,7 @@ enum UserRole {
   PACKAGING
   DOCTOR
   OWNER
+  ASSISTANT
 }
 
 enum Gender {

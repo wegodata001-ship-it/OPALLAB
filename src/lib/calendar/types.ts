@@ -204,6 +204,28 @@ export function formatDateHe(d: Date): string {
   });
 }
 
+/** Compact date label for dashboard upcoming list: היום / מחר / 29.08 */
+export function formatUpcomingDayLabel(d: Date, now = new Date()): string {
+  const day = startOfDay(d);
+  const today = startOfDay(now);
+  const tomorrow = addDays(today, 1);
+  if (isSameDay(day, today)) return "היום";
+  if (isSameDay(day, tomorrow)) return "מחר";
+  const dd = String(day.getDate()).padStart(2, "0");
+  const mm = String(day.getMonth() + 1).padStart(2, "0");
+  return `${dd}.${mm}`;
+}
+
+export function formatUpcomingWhen(
+  startsAt: Date,
+  allDay: boolean,
+  now = new Date(),
+): string {
+  const day = formatUpcomingDayLabel(startsAt, now);
+  if (allDay) return `${day} · יום שלם`;
+  return `${day} · ${formatTimeHe(startsAt)}`;
+}
+
 export function isSameDay(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&

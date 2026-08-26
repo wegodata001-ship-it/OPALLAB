@@ -11,6 +11,7 @@ const ROLE_PRIORITY: UserRole[] = [
   "FINISH",
   "PACKAGING",
   "DOCTOR",
+  "ASSISTANT",
 ];
 
 export function getUserRoles(user: Pick<User, "role" | "roles">): UserRole[] {
@@ -65,6 +66,17 @@ export function isLabEmployee(user: Pick<User, "role" | "roles">): boolean {
 
 export function isDoctorUser(user: Pick<User, "role" | "roles">): boolean {
   return userHasRole(user, "DOCTOR");
+}
+
+/** Attendance-only assistant (סייעת) — no business modules. */
+export function isAssistantUser(user: Pick<User, "role" | "roles">): boolean {
+  return userHasRole(user, "ASSISTANT") && !isSystemAdminUser(user) && !isDoctorUser(user);
+}
+
+/** True when the user may only use the assistant attendance screen. */
+export function isAssistantOnlyUser(user: Pick<User, "role" | "roles">): boolean {
+  const roles = getUserRoles(user);
+  return roles.length > 0 && roles.every((r) => r === "ASSISTANT");
 }
 
 export function isSystemAdminUser(user: Pick<User, "role" | "roles">): boolean {

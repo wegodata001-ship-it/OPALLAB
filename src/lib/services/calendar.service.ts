@@ -123,6 +123,28 @@ export class CalendarService {
     return rows.map(mapEvent);
   }
 
+  /** Upcoming events for dashboard widget — not ended, nearest first. */
+  async listUpcomingEvents(input?: {
+    calendarKey?: string;
+    limit?: number;
+    now?: Date;
+  }): Promise<CalendarEvent[]> {
+    const now = input?.now ?? new Date();
+    const limit = Math.min(Math.max(input?.limit ?? 5, 1), 20);
+    const calendarKey = input?.calendarKey ?? MANAGER_CALENDAR_KEY;
+    const rows = await prisma.calendarEvent.findMany({
+      where: {
+        calendarKey,
+        endsAt: { gte: now },
+        status: { notIn: ["CANCELLED", "DONE", "NO_SHOW"] },
+      },
+      include: { order: { select: { id: true, serialNumber: true } } },
+      orderBy: { startsAt: "asc" },
+      take: limit,
+    });
+    return rows.map(mapEvent);
+  }
+
   async getEvent(id: string): Promise<CalendarEvent | null> {
     const row = await prisma.calendarEvent.findUnique({
       where: { id },

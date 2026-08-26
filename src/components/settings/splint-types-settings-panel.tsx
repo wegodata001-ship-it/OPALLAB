@@ -72,7 +72,7 @@ export function SplintTypesSettingsPanel() {
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="למשל: 🔹 Michigan"
+              placeholder="למשל: Michigan"
             />
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
@@ -81,7 +81,7 @@ export function SplintTypesSettingsPanel() {
             הוסף
           </Button>
           <p className="text-xs text-slate-500">
-            הרשימה מופיעה ב־Dropdown של «סוג סד» במסך ההזמנה. ניתן להוסיף סוגים חדשים ללא שינוי קוד.
+            הרשימה מופיעה ככפתורי בחירה ב«סוג סד» במסך ההזמנה. השתמשו בשם נקי ללא אימוג׳ים.
           </p>
         </CardContent>
       </Card>

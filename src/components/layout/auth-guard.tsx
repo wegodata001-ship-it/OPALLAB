@@ -21,6 +21,7 @@ const PATH_MODULE: Record<string, AppModule> = {
   "/my-work": "my-work",
   "/my-attendance": "my-attendance",
   "/attendance-management": "attendance-management",
+  "/assistant": "assistant-attendance",
   // Legacy URLs redirect into attendance-management
   "/trusted-devices": "attendance-management",
   "/system": "attendance-management",

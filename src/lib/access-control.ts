@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import type { AppDataSnapshot } from "@/lib/services/app-data.service";
 import type { Doctor, User } from "@/lib/types";
 import { canAccessModule, canViewAllOrders, isDoctorPortalUser } from "@/lib/permissions";
-import { getDoctorIdForUser, isLabEmployee, isSystemAdminUser } from "@/lib/user-roles";
+import { getDoctorIdForUser, isAssistantOnlyUser, isLabEmployee, isSystemAdminUser, userHasRole } from "@/lib/user-roles";
 
 /**
  * Prisma filter for orders visible to a user.
@@ -13,6 +13,10 @@ export function buildOrderWhereForUser(
   user: User,
   doctors: Pick<Doctor, "id" | "userId">[],
 ): Prisma.OrderWhereInput | null {
+  if (isAssistantOnlyUser(user) || (userHasRole(user, "ASSISTANT") && !canAccessModule(user, "orders"))) {
+    return { id: { in: [] } };
+  }
+
   if (isDoctorPortalUser(user)) {
     const doctorId = getDoctorIdForUser(user, doctors);
     if (!doctorId) return { id: { in: [] } };
@@ -27,6 +31,28 @@ export function buildOrderWhereForUser(
 }
 
 export function filterSnapshotForUser(snapshot: AppDataSnapshot, user: User): AppDataSnapshot {
+  if (isAssistantOnlyUser(user) || (userHasRole(user, "ASSISTANT") && !canAccessModule(user, "dashboard"))) {
+    const me = snapshot.users.find((u) => u.id === user.id);
+    return {
+      ...snapshot,
+      users: me ? [me] : [],
+      doctors: [],
+      couriers: [],
+      payments: [],
+      orders: [],
+      inventory: [],
+      inventoryCategories: [],
+      movements: [],
+      shipments: [],
+      attendance: [],
+      labSettings: { labLatitude: null, labLongitude: null, geofenceRadiusMeters: null, gateToken: null },
+      warehouses: [],
+      auditLogs: [],
+      splintTypes: [],
+      orderCatalog: [],
+    };
+  }
+
   if (isDoctorPortalUser(user)) {
     const doctorId = getDoctorIdForUser(user, snapshot.doctors);
     return {

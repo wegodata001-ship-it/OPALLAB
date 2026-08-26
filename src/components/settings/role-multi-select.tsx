@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 const ASSIGNABLE_ROLES: UserRole[] = [
   "SECRETARY",
+  "ASSISTANT",
   "DESIGNER",
   "PRINTER",
   "MILLING",

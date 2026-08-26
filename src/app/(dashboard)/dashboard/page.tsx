@@ -5,11 +5,12 @@ import { Header } from "@/components/layout/sidebar";
 import { Card, CardContent } from "@/components/ui/card";
 import { ExportActions } from "@/components/shared/export-actions";
 import { DateRangeFilter } from "@/components/shared/date-range-filter";
+import { UpcomingMeetingsCard } from "@/components/dashboard/upcoming-meetings-card";
 import { useApp } from "@/providers/AppProvider";
 import { StatusBadge } from "@/components/orders/status-badge";
-import { ORDER_STATUS_LABELS } from "@/lib/constants/labels";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { filterByDateRange } from "@/lib/date-filter";
+import { canAccessCalendar } from "@/lib/calendar/permissions";
 import type { DateRange, OrderStatus } from "@/lib/types";
 import { useState } from "react";
 import {
@@ -32,6 +33,7 @@ export default function DashboardPage() {
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
   const stats = getDashboardStats();
   const isOwner = currentUser?.role === "OWNER" || currentUser?.role === "ADMIN";
+  const showCalendar = currentUser ? canAccessCalendar(currentUser) : false;
 
   const filteredOrders = filterByDateRange(orders, (o) => o.entryDate, dateRange);
 
@@ -43,6 +45,9 @@ export default function DashboardPage() {
     { label: "מלאי נמוך", value: stats.lowStockCount, icon: TrendingUp, color: "text-amber-600 bg-amber-50" },
     { label: "ממתינות לאריזה", value: stats.pendingPackaging, icon: Clock, color: "text-teal-600 bg-teal-50" },
   ];
+
+  const bottomCols =
+    showCalendar && isOwner ? "lg:grid-cols-2 xl:grid-cols-3" : "lg:grid-cols-2";
 
   return (
     <>
@@ -105,7 +110,9 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className={`grid gap-6 ${bottomCols}`}>
+        {showCalendar && <UpcomingMeetingsCard />}
+
         <Card>
           <CardContent className="p-4">
             <h3 className="font-semibold mb-3">הזמנות אחרונות</h3>

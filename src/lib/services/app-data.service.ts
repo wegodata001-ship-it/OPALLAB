@@ -96,11 +96,19 @@ const DEFAULT_SPLINT_TYPES: Array<{
   name: string;
   sortOrder: number;
 }> = [
-  { id: "splint_night_guard", code: "NIGHT_GUARD", name: "🦷 סד לילה", sortOrder: 10 },
-  { id: "splint_whitening", code: "WHITENING", name: "✨ סד הלבנה", sortOrder: 20 },
-  { id: "splint_surgical", code: "SURGICAL", name: "🛡️ סד חרוט", sortOrder: 30 },
-  { id: "splint_omnivac", code: "OMNIVAC", name: "🔹 OMNIVAC", sortOrder: 40 },
+  { id: "splint_night_guard", code: "NIGHT_GUARD", name: "סד לילה", sortOrder: 10 },
+  { id: "splint_whitening", code: "WHITENING", name: "סד הלבנה", sortOrder: 20 },
+  { id: "splint_surgical", code: "SURGICAL", name: "סד חרוט", sortOrder: 30 },
+  { id: "splint_omnivac", code: "OMNIVAC", name: "OMNIVAC", sortOrder: 40 },
 ];
+
+/** Strip leading emoji / symbol prefixes from splint display names. */
+function cleanSplintDisplayName(name: string): string {
+  return name
+    .replace(/^[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D🔹]+\s*/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 async function ensureDefaultOrderCatalog(): Promise<void> {
   const count = await prisma.orderCatalogOption.count();
@@ -117,15 +125,29 @@ async function ensureDefaultOrderCatalog(): Promise<void> {
 
 async function ensureDefaultSplintTypes(): Promise<void> {
   const count = await prisma.splintType.count();
-  if (count > 0) return;
-  await prisma.splintType.createMany({
-    data: DEFAULT_SPLINT_TYPES.map((t) => ({
-      ...t,
-      isActive: true,
-      isSystem: true,
-    })),
-    skipDuplicates: true,
-  });
+  if (count === 0) {
+    await prisma.splintType.createMany({
+      data: DEFAULT_SPLINT_TYPES.map((t) => ({
+        ...t,
+        isActive: true,
+        isSystem: true,
+      })),
+      skipDuplicates: true,
+    });
+    return;
+  }
+
+  // Strip emoji prefixes from any splint name (keeps custom text after the emoji).
+  const rows = await prisma.splintType.findMany({ select: { id: true, name: true } });
+  for (const row of rows) {
+    const cleaned = cleanSplintDisplayName(row.name);
+    if (cleaned && cleaned !== row.name) {
+      await prisma.splintType.update({
+        where: { id: row.id },
+        data: { name: cleaned },
+      });
+    }
+  }
 }
 
 function toPrismaAttendanceMethod(method: AttendanceMethod): $Enums.AttendanceMethod {
@@ -1716,7 +1738,7 @@ export class AppDataService {
     code?: string;
     sortOrder?: number;
   }): Promise<SplintType> {
-    const name = input.name.trim();
+    const name = cleanSplintDisplayName(input.name);
     if (!name) throw new AppError("VALIDATION_ERROR", "שם סוג סד נדרש", 400);
     const code =
       input.code?.trim().toUpperCase().replace(/\s+/g, "_") ||
@@ -1742,10 +1764,15 @@ export class AppDataService {
   }): Promise<SplintType> {
     const existing = await prisma.splintType.findUnique({ where: { id: input.id } });
     if (!existing) throw new AppError("NOT_FOUND", "סוג סד לא נמצא", 404);
+    const nextName =
+      input.name !== undefined ? cleanSplintDisplayName(input.name) : undefined;
+    if (input.name !== undefined && !nextName) {
+      throw new AppError("VALIDATION_ERROR", "שם סוג סד נדרש", 400);
+    }
     const row = await prisma.splintType.update({
       where: { id: input.id },
       data: {
-        name: input.name?.trim() || undefined,
+        name: nextName,
         isActive: input.isActive,
         sortOrder: input.sortOrder,
       },

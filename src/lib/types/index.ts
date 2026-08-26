@@ -8,7 +8,8 @@ export type UserRole =
   | "FINISH"
   | "PACKAGING"
   | "DOCTOR"
-  | "OWNER";
+  | "OWNER"
+  | "ASSISTANT";
 
 export type Gender = "MALE" | "FEMALE";
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   CALENDAR_STATUS_DOT,
   CALENDAR_STATUS_LABELS,
@@ -79,12 +80,30 @@ function pxPerMinute(rowHeight = 48): number {
   return rowHeight / 60;
 }
 
+function parseDeepLinkDate(raw: string | null): Date | null {
+  if (!raw) return null;
+  // YYYY-MM-DD
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (m) {
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return Number.isNaN(d.getTime()) ? null : startOfDay(d);
+  }
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : startOfDay(d);
+}
+
 export function ManagerCalendarApp() {
   const { currentUser, doctors, orders } = useApp();
   const canEdit = currentUser ? canEditCalendarEvents(currentUser) : false;
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  const initialDate = parseDeepLinkDate(searchParams.get("date"));
+  const deepEventId = searchParams.get("eventId");
+  const openNew = searchParams.get("new") === "1";
 
   const [view, setView] = useState<CalendarView>("week");
-  const [cursor, setCursor] = useState(() => startOfDay(new Date()));
+  const [cursor, setCursor] = useState(() => initialDate ?? startOfDay(new Date()));
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -99,6 +118,7 @@ export function ManagerCalendarApp() {
   const eventsRef = useRef(events);
   eventsRef.current = events;
   const loadReqId = useRef(0);
+  const deepLinkHandled = useRef(false);
 
   const range = useMemo(() => {
     if (view === "day") return { from: startOfDay(cursor), to: addDays(startOfDay(cursor), 1) };
@@ -146,6 +166,36 @@ export function ManagerCalendarApp() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (deepLinkHandled.current) return;
+    if (openNew && canEdit) {
+      deepLinkHandled.current = true;
+      const start = snapToSlot(addMinutes(startOfDay(cursor), 10 * 60));
+      setEditor({ mode: "create", draftStarts: start, draftEnds: addMinutes(start, 60) });
+      router.replace("/calendar", { scroll: false });
+      return;
+    }
+    if (!deepEventId) {
+      if (initialDate) deepLinkHandled.current = true;
+      return;
+    }
+    if (loading) return;
+    const hit = events.find((e) => e.id === deepEventId);
+    if (hit) {
+      deepLinkHandled.current = true;
+      setPreview(hit);
+      setCursor(startOfDay(hit.startsAt));
+      router.replace("/calendar", { scroll: false });
+      return;
+    }
+    // Event not in current range — still clear params after first successful load
+    if (!loading && events.length >= 0) {
+      // Fetch single event via range already loaded; if missing, jump day view
+      deepLinkHandled.current = true;
+      router.replace("/calendar", { scroll: false });
+    }
+  }, [openNew, canEdit, deepEventId, loading, events, cursor, initialDate, router]);
 
   useEffect(() => {
     const t = window.setInterval(() => setNow(new Date()), 30_000);

@@ -1,6 +1,7 @@
 import type { User, UserRole } from "@/lib/types";
 import {
   getUserRoles,
+  isAssistantOnlyUser,
   isDoctorUser,
   isSystemAdminUser,
   canDeleteOrders as canDeleteOrdersRole,
@@ -22,7 +23,8 @@ export type AppModule =
   | "attendance-management"
   | "trusted-devices"
   | "deleted-orders"
-  | "calendar";
+  | "calendar"
+  | "assistant-attendance";
 
 const ADMIN_MODULES: AppModule[] = [
   "dashboard",
@@ -62,6 +64,8 @@ const ROLE_MODULES: Record<UserRole, AppModule[]> = {
   FINISH: LAB_EMPLOYEE_MODULES,
   PACKAGING: [...LAB_EMPLOYEE_MODULES, "shipping"],
   DOCTOR: ["portal"],
+  /** סייעת — attendance check-in/out only */
+  ASSISTANT: ["assistant-attendance"],
 };
 
 export function canAccessModule(user: Pick<User, "role" | "roles">, module: AppModule): boolean {
@@ -92,6 +96,7 @@ export function isDoctorPortalUser(user: Pick<User, "role" | "roles">): boolean 
 
 export function canViewAllOrders(user: Pick<User, "role" | "roles">): boolean {
   if (isDoctorPortalUser(user)) return false;
+  if (isAssistantOnlyUser(user)) return false;
   if (isSystemAdminUser(user)) return true;
   // Production staff see all orders; actions remain stage-gated on the server
   return getUserRoles(user).some((role) =>
@@ -124,5 +129,8 @@ export function canManageOrderCatalog(user: Pick<User, "role" | "roles">): boole
 
 export function getDefaultRoute(user: Pick<User, "role" | "roles">): string {
   if (isDoctorPortalUser(user)) return "/portal";
+  if (isAssistantOnlyUser(user) || canAccessModule(user, "assistant-attendance")) {
+    if (!canAccessModule(user, "dashboard")) return "/assistant";
+  }
   return "/dashboard";
 }

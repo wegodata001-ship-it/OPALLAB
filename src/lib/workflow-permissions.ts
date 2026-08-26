@@ -212,4 +212,5 @@ export const ROLE_PERMISSIONS_SUMMARY: Record<UserRole, string> = {
   FINISH: "גימור — סימון/ביטול שלב הגימור",
   PACKAGING: "אריזה — סימון/ביטול שלב האריזה",
   DOCTOR: "פורטל רופא — מעקב הזמנות וכרטסת בלבד",
+  ASSISTANT: "סייעת — כניסה/יציאה לנוכחות בלבד",
 };
