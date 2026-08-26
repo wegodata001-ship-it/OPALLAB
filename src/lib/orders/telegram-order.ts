@@ -1,4 +1,4 @@
-import { WORK_TYPE_LABELS } from "@/lib/constants/labels";
+import { LEGACY_WORK_TYPE_LABELS } from "@/lib/orders/order-catalog";
 import type { WorkType } from "@/lib/types";
 
 /** Lab Telegram destination (international, no +). */
@@ -25,7 +25,7 @@ export function buildOrderPublicUrl(orderId: string): string {
 export function buildTelegramOrderMessage(input: TelegramOrderShareInput): string {
   const work =
     input.workTypes?.length
-      ? input.workTypes.map((w) => WORK_TYPE_LABELS[w] ?? w).join(", ")
+      ? input.workTypes.map((w) => LEGACY_WORK_TYPE_LABELS[w] ?? w).join(", ")
       : "—";
   const orderUrl =
     input.orderUrl ||

@@ -3,6 +3,7 @@ import {
   getUserRoles,
   isDoctorUser,
   isSystemAdminUser,
+  canDeleteOrders as canDeleteOrdersRole,
   PRODUCTION_ROLES,
 } from "@/lib/user-roles";
 
@@ -19,7 +20,9 @@ export type AppModule =
   | "my-work"
   | "my-attendance"
   | "attendance-management"
-  | "trusted-devices";
+  | "trusted-devices"
+  | "deleted-orders"
+  | "calendar";
 
 const ADMIN_MODULES: AppModule[] = [
   "dashboard",
@@ -34,7 +37,11 @@ const ADMIN_MODULES: AppModule[] = [
   "settings",
   "my-work",
   "my-attendance",
+  "calendar",
 ];
+
+/** Soft/permanent delete inbox — ADMIN & OWNER only (not secretary). */
+const SYSTEM_ADMIN_ONLY_MODULES: AppModule[] = ["deleted-orders"];
 
 const LAB_EMPLOYEE_MODULES: AppModule[] = [
   "dashboard",
@@ -45,8 +52,8 @@ const LAB_EMPLOYEE_MODULES: AppModule[] = [
 ];
 
 const ROLE_MODULES: Record<UserRole, AppModule[]> = {
-  ADMIN: ADMIN_MODULES,
-  OWNER: ADMIN_MODULES,
+  ADMIN: [...ADMIN_MODULES, ...SYSTEM_ADMIN_ONLY_MODULES],
+  OWNER: [...ADMIN_MODULES, ...SYSTEM_ADMIN_ONLY_MODULES],
   SECRETARY: ADMIN_MODULES,
   DESIGNER: LAB_EMPLOYEE_MODULES,
   PRINTER: LAB_EMPLOYEE_MODULES,
@@ -96,6 +103,11 @@ export function canEditOrders(user: Pick<User, "role" | "roles">): boolean {
   return isSystemAdminUser(user);
 }
 
+/** ADMIN / OWNER only — soft delete, restore, permanent delete. */
+export function canDeleteOrders(user: Pick<User, "role" | "roles">): boolean {
+  return canDeleteOrdersRole(user);
+}
+
 /** Doctors may create orders for themselves; admins create for any doctor. */
 export function canCreateOrders(user: Pick<User, "role" | "roles">): boolean {
   return isSystemAdminUser(user) || isDoctorUser(user);
@@ -103,6 +115,11 @@ export function canCreateOrders(user: Pick<User, "role" | "roles">): boolean {
 
 export function canManageSettings(user: Pick<User, "role" | "roles">): boolean {
   return isSystemAdminUser(user);
+}
+
+/** ADMIN / OWNER only — order form master data (materials, work types, shades, splints). */
+export function canManageOrderCatalog(user: Pick<User, "role" | "roles">): boolean {
+  return canDeleteOrders(user);
 }
 
 export function getDefaultRoute(user: Pick<User, "role" | "roles">): string {

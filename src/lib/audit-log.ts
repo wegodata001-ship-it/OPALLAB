@@ -22,7 +22,11 @@ export type AuditAction =
   | "SHIPMENT_SIGNATURE_REPLACE"
   | "SHIPMENT_SIGNATURE_DELETE"
   | "SHIPMENT_SIGNATURE_VIEW"
-  | "SHIPMENT_LOCK";
+  | "SHIPMENT_LOCK"
+  | "ORDER_SOFT_DELETE"
+  | "ORDER_RESTORE"
+  | "ORDER_PERMANENT_DELETE"
+  | "FORBIDDEN_ATTEMPT";
 
 export async function writeAuditLog(input: {
   userId: string;

@@ -14,6 +14,7 @@ import type {
   Shipment as PrismaShipment,
   User as PrismaUser,
 } from "@prisma/client";
+import { normalizeSplintTypeIds, primarySplintTypeId } from "@/lib/orders/splint-types";
 import type {
   AttendanceRecord,
   Courier,
@@ -34,6 +35,7 @@ import type {
   User,
 } from "@/lib/types";
 import { getSignedUrl, STORAGE_BUCKETS } from "@/lib/supabase/storage";
+import { parseBridgeGroups } from "@/lib/orders/bridge-groups";
 
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 12);
@@ -143,8 +145,15 @@ export function serializeCompletedStages(stages: Order["completedStages"]): Reco
 }
 
 export function mapOrder(order: PrismaOrder): Order {
+  const selectedTeeth = order.selectedTeeth ?? [];
+  const stored = parseBridgeGroups(order.bridgeGroups);
+  const splintTypeIds = normalizeSplintTypeIds(order.splintTypeIds, order.splintTypeId);
   return {
     ...order,
+    selectedTeeth,
+    bridgeGroups: stored,
+    splintTypeIds,
+    splintTypeId: primarySplintTypeId(splintTypeIds),
     completedStages: parseCompletedStages(order.completedStages),
   };
 }
@@ -214,7 +223,67 @@ type OrderWithIncludes = PrismaOrder & {
   files: PrismaOrderFile[];
   statusHistory: PrismaOrderStatusHistory[];
   shipment: PrismaShipment | null;
+  splintType: {
+    id: string;
+    code: string;
+    name: string;
+    isActive: boolean;
+    sortOrder: number;
+    isSystem: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+  } | null;
 };
+
+export function mapSplintType(row: {
+  id: string;
+  code: string;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+  isSystem: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}): import("@/lib/types").SplintType {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    isActive: row.isActive,
+    sortOrder: row.sortOrder,
+    isSystem: row.isSystem,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export function mapOrderCatalogOption(row: {
+  id: string;
+  category: import("@/lib/types").OrderCatalogCategory;
+  code: string;
+  label: string;
+  color: string | null;
+  group: string | null;
+  sortOrder: number;
+  isActive: boolean;
+  isSystem: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}): import("@/lib/types").OrderCatalogOption {
+  return {
+    id: row.id,
+    category: row.category,
+    code: row.code,
+    label: row.label,
+    color: row.color,
+    group: row.group,
+    sortOrder: row.sortOrder,
+    isActive: row.isActive,
+    isSystem: row.isSystem,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
 
 export async function mapOrderWithRelations(order: OrderWithIncludes): Promise<OrderWithRelations> {
   const files = await Promise.all(order.files.map((file) => mapOrderFile(file)));
@@ -228,6 +297,7 @@ export async function mapOrderWithRelations(order: OrderWithIncludes): Promise<O
     files,
     statusHistory: order.statusHistory.map(mapStatusHistory),
     shipment: order.shipment ? await mapShipment(order.shipment) : null,
+    splintType: order.splintType ? mapSplintType(order.splintType) : null,
   };
 }
 
@@ -266,4 +336,5 @@ export const ORDER_INCLUDE = {
   files: { orderBy: { uploadedAt: "desc" as const } },
   statusHistory: { orderBy: { createdAt: "desc" as const } },
   shipment: true,
+  splintType: true,
 } as const;

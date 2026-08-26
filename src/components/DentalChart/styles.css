@@ -21,6 +21,102 @@
   -webkit-user-select: none;
 }
 
+/* Soft dental-style bridge bracket — only for explicitly selected bridges */
+.dc-bridge {
+  fill: none;
+  stroke: #7c3aed;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.88;
+  pointer-events: none;
+}
+
+.dc-bridge-cap {
+  fill: none;
+  stroke: #7c3aed;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  opacity: 0.88;
+  pointer-events: none;
+}
+
+/* Connection controls between adjacent teeth (outside the arch) */
+.dc-bridge-point {
+  cursor: pointer;
+  outline: none;
+}
+
+.dc-bridge-point--disabled {
+  cursor: default;
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.dc-bridge-point-hit {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+}
+
+.dc-bridge-point-visual {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 140ms ease-out;
+}
+
+.dc-bridge-point-ring {
+  fill: #fffdf7;
+  stroke: #c9a227;
+  stroke-width: 2;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.22));
+  transition:
+    fill 140ms ease,
+    stroke 140ms ease,
+    stroke-width 140ms ease;
+}
+
+.dc-bridge-point-dot {
+  fill: transparent;
+  stroke: none;
+  pointer-events: none;
+  transition: fill 140ms ease;
+}
+
+.dc-bridge-point:hover:not(.dc-bridge-point--disabled) .dc-bridge-point-visual,
+.dc-bridge-point:focus-visible:not(.dc-bridge-point--disabled) .dc-bridge-point-visual {
+  transform: scale(1.14);
+}
+
+.dc-bridge-point:hover:not(.dc-bridge-point--disabled) .dc-bridge-point-ring,
+.dc-bridge-point:focus-visible:not(.dc-bridge-point--disabled) .dc-bridge-point-ring {
+  fill: #f5e6b8;
+  stroke: #a8841a;
+  stroke-width: 2.2;
+}
+
+.dc-bridge-point:hover:not(.dc-bridge-point--disabled) .dc-bridge-point-dot,
+.dc-bridge-point:focus-visible:not(.dc-bridge-point--disabled) .dc-bridge-point-dot {
+  fill: #c9a227;
+}
+
+.dc-bridge-point--active .dc-bridge-point-ring {
+  fill: #c9a227;
+  stroke: #ffffff;
+  stroke-width: 2.2;
+  filter: drop-shadow(0 2px 3px rgba(15, 23, 42, 0.28));
+}
+
+.dc-bridge-point--active .dc-bridge-point-dot {
+  fill: #ffffff;
+}
+
+.dc-bridge-point--active:hover .dc-bridge-point-ring {
+  fill: #b8921f;
+  stroke: #ffffff;
+}
+
 .dc-tooth {
   cursor: pointer;
   outline: none;
@@ -122,6 +218,35 @@
 
 .dc-tooth--selected.dc-tooth--interactive:hover:not(.dc-tooth--disabled) .dc-tooth-body {
   fill: #6d28d9 !important;
+}
+
+/* Range endpoints (Shift / long-press) — blue frame */
+.dc-tooth--range-end .dc-tooth-body {
+  stroke: #2563eb !important;
+  stroke-width: 3.2;
+  filter: url(#dc-hover);
+}
+
+.dc-tooth--range-end.dc-tooth--selected .dc-tooth-body {
+  stroke: #2563eb !important;
+  stroke-width: 3.2;
+}
+
+/* Short pulse when a range is applied */
+@keyframes dc-range-flash {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.dc-tooth--range-flash {
+  animation: dc-range-flash 0.45s ease-out;
 }
 
 /* Status colors — shape unchanged */

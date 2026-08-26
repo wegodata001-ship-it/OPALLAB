@@ -13,9 +13,12 @@ import {
 } from "@/components/orders/order-upload-tiles";
 import { FmSaveUploadHint } from "@/components/file-manager-v2/fm-global-progress";
 import { TelegramOrderButton } from "@/components/orders/telegram-order-button";
+import { CatalogChipField } from "@/components/orders/catalog-chip-field";
 import { useApp } from "@/providers/AppProvider";
 import { useOrderCreateDraft } from "@/hooks/use-order-create-draft";
-import { MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS } from "@/lib/constants/labels";
+import { GENDER_LABELS } from "@/lib/constants/labels";
+import { syncWorkTypesWithSplint } from "@/lib/orders/splint-types";
+import { SplintTypeSelect } from "@/components/orders/splint-type-select";
 import { openTelegramOrderShare } from "@/lib/orders/telegram-order";
 import { cn } from "@/lib/utils";
 import type { Gender, MaterialType, Order, WorkType } from "@/lib/types";
@@ -28,7 +31,7 @@ interface DoctorOrderFormProps {
 }
 
 export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
-  const { refresh, doctors } = useApp();
+  const { refresh, refreshQuiet, doctors, orderCatalog } = useApp();
   const doctorName = doctors.find((d) => d.id === doctorId)?.name ?? "רופא";
   const uploadRef = useRef<OrderUploadTilesHandle>(null);
   const [patientName, setPatientName] = useState("");
@@ -37,7 +40,9 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
   const [shade, setShade] = useState("");
   const [materials, setMaterials] = useState<MaterialType[]>([]);
   const [workTypes, setWorkTypes] = useState<WorkType[]>([]);
+  const [splintTypeIds, setSplintTypeIds] = useState<string[]>([]);
   const [selectedTeeth, setSelectedTeeth] = useState<number[]>([]);
+  const [bridgeGroups, setBridgeGroups] = useState<number[][]>([]);
   const [description, setDescription] = useState("");
   const [completionDate, setCompletionDate] = useState("");
   const [saving, setSaving] = useState(false);
@@ -55,10 +60,15 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
   const saveReady =
     draft.ready && !uploadBlocking && (!hasUploadFiles || uploadState?.isComplete === true);
 
-  const toggleMaterial = (m: MaterialType) =>
+  const toggleMaterial = (m: string) =>
     setMaterials((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
-  const toggleWorkType = (w: WorkType) =>
+  const toggleWorkType = (w: string) =>
     setWorkTypes((p) => (p.includes(w) ? p.filter((x) => x !== w) : [...p, w]));
+
+  const onSplintTypeChange = (ids: string[]) => {
+    setSplintTypeIds(ids);
+    setWorkTypes((prev) => syncWorkTypesWithSplint(prev, ids));
+  };
 
   useEffect(() => {
     const h = draft.hydrateFromDraft;
@@ -70,7 +80,16 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
       if (h.shade) setShade(h.shade);
       if (h.materials?.length) setMaterials(h.materials);
       if (h.workTypes?.length) setWorkTypes(h.workTypes);
+      if (h.splintTypeIds?.length) setSplintTypeIds(h.splintTypeIds);
+      else if (h.splintTypeId) setSplintTypeIds([h.splintTypeId]);
       if (h.selectedTeeth?.length) setSelectedTeeth(h.selectedTeeth);
+      if (h.bridgeGroups != null) {
+        setBridgeGroups(
+          Array.isArray(h.bridgeGroups)
+            ? h.bridgeGroups.filter((g): g is number[] => Array.isArray(g))
+            : [],
+        );
+      }
       if (h.description) setDescription(h.description);
       if (h.completionDate) {
         setCompletionDate(new Date(h.completionDate).toISOString().slice(0, 10));
@@ -89,7 +108,9 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
         shade: shade || null,
         materials,
         workTypes,
+        splintTypeIds,
         selectedTeeth,
+        bridgeGroups,
         description: description || null,
         completionDate: completionDate ? new Date(completionDate) : null,
       });
@@ -104,7 +125,9 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
     shade,
     materials,
     workTypes,
+    splintTypeIds,
     selectedTeeth,
+    bridgeGroups,
     description,
     completionDate,
     saveDraftFields,
@@ -152,7 +175,9 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
       shade: shade || undefined,
       materials,
       workTypes,
+      splintTypeIds,
       selectedTeeth,
+      bridgeGroups,
       description: description || undefined,
       completionDate: completionDate ? new Date(completionDate) : undefined,
     });
@@ -249,49 +274,38 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
             </div>
           </div>
 
-          <div>
-            <Label>סוג חומר</Label>
-            <div className="mt-1.5 flex flex-wrap gap-2">
-              {(Object.keys(MATERIAL_TYPE_LABELS) as MaterialType[]).map((m) => (
-                <label
-                  key={m}
-                  className={cn(
-                    "cursor-pointer rounded-lg border px-3 py-1.5 text-sm transition-colors",
-                    materials.includes(m)
-                      ? "border-opal-gold bg-opal-gold/10 font-medium text-opal-gold-dark"
-                      : "border-slate-200",
-                  )}
-                >
-                  <input type="checkbox" className="sr-only" checked={materials.includes(m)} onChange={() => toggleMaterial(m)} />
-                  {MATERIAL_TYPE_LABELS[m]}
-                </label>
-              ))}
-            </div>
-          </div>
+          <CatalogChipField
+            category="MATERIAL"
+            title="סוג חומר"
+            catalog={orderCatalog}
+            selected={materials}
+            onToggle={toggleMaterial}
+            onCatalogChanged={refreshQuiet}
+          />
 
-          <div>
-            <Label>סוג עבודה</Label>
-            <div className="mt-1.5 flex flex-wrap gap-2">
-              {(Object.keys(WORK_TYPE_LABELS) as WorkType[]).map((w) => (
-                <label
-                  key={w}
-                  className={cn(
-                    "cursor-pointer rounded-lg border px-3 py-1.5 text-sm transition-colors",
-                    workTypes.includes(w)
-                      ? "border-opal-gold bg-opal-gold/10 font-medium text-opal-gold-dark"
-                      : "border-slate-200",
-                  )}
-                >
-                  <input type="checkbox" className="sr-only" checked={workTypes.includes(w)} onChange={() => toggleWorkType(w)} />
-                  {WORK_TYPE_LABELS[w]}
-                </label>
-              ))}
+          <div className="space-y-2">
+            <CatalogChipField
+              category="WORK_TYPE"
+              title="סוג עבודה"
+              catalog={orderCatalog}
+              selected={workTypes}
+              onToggle={toggleWorkType}
+              onCatalogChanged={refreshQuiet}
+            />
+            <div className="max-w-xs">
+              <SplintTypeSelect value={splintTypeIds} onChange={onSplintTypeChange} />
             </div>
           </div>
 
           <div>
             <Label>מבנה שיניים</Label>
-            <DentalChart selectedTeeth={selectedTeeth} onChange={setSelectedTeeth} className="mt-1.5" />
+            <DentalChart
+              selectedTeeth={selectedTeeth}
+              onChange={setSelectedTeeth}
+              bridgeGroups={bridgeGroups}
+              onBridgeGroupsChange={setBridgeGroups}
+              className="mt-1.5"
+            />
           </div>
 
           <div>

@@ -16,19 +16,19 @@ import { TelegramOrderButton } from "@/components/orders/telegram-order-button";
 import { ExportActions } from "@/components/shared/export-actions";
 import { OrderHistoryButton } from "@/components/orders/order-history-modal";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { canEditOrders } from "@/lib/permissions";
+import { canEditOrders, canDeleteOrders } from "@/lib/permissions";
+import { catalogLabel } from "@/lib/orders/order-catalog";
 import {
-  MATERIAL_TYPE_LABELS,
-  WORK_TYPE_LABELS,
   GENDER_LABELS,
   ORDER_STATUS_LABELS,
   LAB_INFO,
 } from "@/lib/constants/labels";
 import { ArrowRight, User, Pencil } from "lucide-react";
+import { OrderDeleteButton } from "@/components/orders/order-delete-button";
 
 export default function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { getOrderById, currentUser, addOrderFile } = useApp();
+  const { getOrderById, currentUser, addOrderFile, orderCatalog, splintTypes } = useApp();
   const [editing, setEditing] = useState(false);
   const order = getOrderById(id);
 
@@ -47,6 +47,20 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   }
 
   const canEdit = currentUser && canEditOrders(currentUser);
+  const canDelete = currentUser && canDeleteOrders(currentUser);
+  const materialLabels = order.materials.map((m) => catalogLabel(orderCatalog, "MATERIAL", m));
+  const workLabels = order.workTypes
+    .filter((w) => w !== "NIGHT_GUARD_WHITENING_MILLED")
+    .map((w) => catalogLabel(orderCatalog, "WORK_TYPE", w));
+  const splintIds =
+    order.splintTypeIds?.length
+      ? order.splintTypeIds
+      : order.splintTypeId
+        ? [order.splintTypeId]
+        : [];
+  const splintLabels = splintIds
+    .map((id) => splintTypes.find((t) => t.id === id)?.name ?? order.splintType?.name)
+    .filter(Boolean) as string[];
 
   const pdfHtml = `
     <h2>הזמנה ${order.serialNumber}</h2>
@@ -55,8 +69,8 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       <tr><td>מטופל</td><td>${order.patient.name}</td></tr>
       <tr><td>צבע</td><td>${order.shade ?? "—"}</td></tr>
       <tr><td>שיניים</td><td>${order.selectedTeeth.join(", ") || "—"}</td></tr>
-      <tr><td>חומרים</td><td>${order.materials.map((m) => MATERIAL_TYPE_LABELS[m]).join(", ")}</td></tr>
-      <tr><td>סוג עבודה</td><td>${order.workTypes.map((w) => WORK_TYPE_LABELS[w]).join(", ")}</td></tr>
+      <tr><td>חומרים</td><td>${materialLabels.join(", ")}</td></tr>
+      <tr><td>סוג עבודה</td><td>${[...workLabels, ...splintLabels].filter(Boolean).join(", ")}</td></tr>
       <tr><td>תיאור</td><td>${order.description ?? "—"}</td></tr>
       <tr><td>סטטוס</td><td>${ORDER_STATUS_LABELS[order.status]}</td></tr>
       <tr><td>מחיר</td><td>${order.totalPrice ? formatCurrency(order.totalPrice) : "—"}</td></tr>
@@ -77,6 +91,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
                 <Pencil className="h-4 w-4" />עריכה
               </Button>
             )}
+            {canDelete && <OrderDeleteButton order={order} />}
             <TelegramOrderButton
               size="md"
               order={{
@@ -114,8 +129,11 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
             <span className="text-slate-500">כניסה</span><span>{formatDate(order.entryDate)}</span>
             <span className="text-slate-500">יעד</span><span>{formatDate(order.completionDate)}</span>
             <span className="text-slate-500">מחיר</span><span className="font-semibold text-opal-gold-dark">{order.totalPrice ? formatCurrency(order.totalPrice) : "—"}</span>
-            <span className="text-slate-500 col-span-2">חומרים</span><span className="col-span-2">{order.materials.map((m) => MATERIAL_TYPE_LABELS[m]).join(", ") || "—"}</span>
-            <span className="text-slate-500 col-span-2">עבודה</span><span className="col-span-2">{order.workTypes.map((w) => WORK_TYPE_LABELS[w]).join(", ") || "—"}</span>
+            <span className="text-slate-500 col-span-2">חומרים</span><span className="col-span-2">{materialLabels.join(", ") || "—"}</span>
+            <span className="text-slate-500 col-span-2">עבודה</span>
+            <span className="col-span-2">
+              {[...workLabels, ...splintLabels].filter(Boolean).join(", ") || "—"}
+            </span>
             {order.description && <><span className="text-slate-500 col-span-2">תיאור</span><span className="col-span-2">{order.description}</span></>}
             {order.shipment && <><span className="text-slate-500">תעודת משלוח</span><span className="font-bold text-opal-gold-dark">{order.shipment.deliveryNote}</span></>}
           </CardContent>
@@ -123,7 +141,14 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
         <Card>
           <CardHeader><CardTitle>מבנה שיניים</CardTitle></CardHeader>
-          <CardContent><DentalChart selectedTeeth={order.selectedTeeth} onChange={() => {}} readOnly /></CardContent>
+          <CardContent>
+            <DentalChart
+              selectedTeeth={order.selectedTeeth}
+              bridgeGroups={order.bridgeGroups}
+              onChange={() => {}}
+              readOnly
+            />
+          </CardContent>
         </Card>
 
         <Card className="lg:col-span-2">

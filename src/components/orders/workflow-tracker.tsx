@@ -22,6 +22,14 @@ export function WorkflowTracker({ currentStatus, compact }: WorkflowTrackerProps
     );
   }
 
+  if (currentStatus === "DELETED") {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-center font-medium text-slate-600">
+        הזמנה נמחקה
+      </div>
+    );
+  }
+
   if (compact) {
     return (
       <div className="flex items-center gap-1 overflow-x-auto pb-2">

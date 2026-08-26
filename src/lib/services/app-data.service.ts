@@ -16,6 +16,8 @@ import {
   mapOrderWithRelations,
   mapPayment,
   mapShipment,
+  mapSplintType,
+  mapOrderCatalogOption,
   mapUser,
   ORDER_INCLUDE,
   serializeCompletedStages,
@@ -31,12 +33,15 @@ import type {
   InventoryMovement,
   LabSettings,
   Order,
+  OrderCatalogCategory,
+  OrderCatalogOption,
   OrderFile,
   OrderStatus,
   OrderWithRelations,
   Payment,
   PaymentStatus,
   Shipment,
+  SplintType,
   UndoStageInput,
   UpdateDoctorInput,
   UpdateOrderInput,
@@ -45,6 +50,7 @@ import type {
   UserRole,
 } from "@/lib/types";
 import { generateDeliveryNote, generateSerialNumber } from "@/lib/utils";
+import { DEFAULT_CATALOG_SEED, slugifyCatalogCode } from "@/lib/orders/order-catalog";
 import {
   canCompleteStage,
   canUndoStage,
@@ -72,7 +78,55 @@ import { createAuthUser, deleteAuthUser, updateAuthUser } from "@/lib/supabase/a
 import { normalizeUserRoles, primaryRole, isSystemAdminUser, isDoctorUser } from "@/lib/user-roles";
 import { assertUserCanBeDeleted } from "@/lib/people/protected-users";
 import { uploadAudit } from "@/lib/orders/upload-audit";
+import { normalizeSplintTypeIds, primarySplintTypeId, syncWorkTypesWithSplint } from "@/lib/orders/splint-types";
 import type { AuditLogEntry, Warehouse } from "@/lib/types";
+
+function resolveOrderBridgeGroups(
+  _selectedTeeth: number[] | undefined,
+  bridgeGroups: number[][] | undefined,
+): number[][] | undefined {
+  // Explicit groups from the chart (including []). Do not auto-derive.
+  if (bridgeGroups !== undefined) return bridgeGroups;
+  return undefined;
+}
+
+const DEFAULT_SPLINT_TYPES: Array<{
+  id: string;
+  code: string;
+  name: string;
+  sortOrder: number;
+}> = [
+  { id: "splint_night_guard", code: "NIGHT_GUARD", name: "🦷 סד לילה", sortOrder: 10 },
+  { id: "splint_whitening", code: "WHITENING", name: "✨ סד הלבנה", sortOrder: 20 },
+  { id: "splint_surgical", code: "SURGICAL", name: "🛡️ סד חרוט", sortOrder: 30 },
+  { id: "splint_omnivac", code: "OMNIVAC", name: "🔹 OMNIVAC", sortOrder: 40 },
+];
+
+async function ensureDefaultOrderCatalog(): Promise<void> {
+  const count = await prisma.orderCatalogOption.count();
+  if (count > 0) return;
+  await prisma.orderCatalogOption.createMany({
+    data: DEFAULT_CATALOG_SEED.map((t) => ({
+      ...t,
+      isActive: true,
+      isSystem: true,
+    })),
+    skipDuplicates: true,
+  });
+}
+
+async function ensureDefaultSplintTypes(): Promise<void> {
+  const count = await prisma.splintType.count();
+  if (count > 0) return;
+  await prisma.splintType.createMany({
+    data: DEFAULT_SPLINT_TYPES.map((t) => ({
+      ...t,
+      isActive: true,
+      isSystem: true,
+    })),
+    skipDuplicates: true,
+  });
+}
 
 function toPrismaAttendanceMethod(method: AttendanceMethod): $Enums.AttendanceMethod {
   const map = $Enums.AttendanceMethod;
@@ -105,6 +159,8 @@ export interface AppDataSnapshot {
   labSettings: LabSettings;
   warehouses: Warehouse[];
   auditLogs: AuditLogEntry[];
+  splintTypes: SplintType[];
+  orderCatalog: OrderCatalogOption[];
 }
 
 export class AppDataService {
@@ -124,9 +180,15 @@ export class AppDataService {
   }
 
   async getSnapshot(orderWhere?: Prisma.OrderWhereInput): Promise<AppDataSnapshot> {
+    await ensureDefaultSplintTypes();
+    await ensureDefaultOrderCatalog();
+
+    const excludeHidden: Prisma.OrderWhereInput = {
+      status: { notIn: ["DRAFT", "DELETED"] },
+    };
     const where: Prisma.OrderWhereInput = orderWhere
-      ? { AND: [{ status: { not: "DRAFT" } }, orderWhere] }
-      : { status: { not: "DRAFT" } };
+      ? { AND: [excludeHidden, orderWhere] }
+      : excludeHidden;
     const ordersQuery = prisma.order.findMany({
       where,
       include: ORDER_INCLUDE,
@@ -146,6 +208,8 @@ export class AppDataService {
       attendance,
       labSettingsRows,
       warehouses,
+      splintTypes,
+      orderCatalog,
     ] = await Promise.all([
       prisma.user.findMany({ orderBy: { name: "asc" } }),
       prisma.doctor.findMany({ orderBy: { name: "asc" } }),
@@ -155,10 +219,17 @@ export class AppDataService {
       prisma.inventoryItem.findMany({ orderBy: { name: "asc" } }),
       prisma.inventoryCategory.findMany({ orderBy: { name: "asc" } }),
       prisma.inventoryMovement.findMany({ orderBy: { createdAt: "desc" } }),
-      prisma.shipment.findMany({ orderBy: { createdAt: "desc" } }),
+      prisma.shipment.findMany({
+        where: { order: { status: { notIn: ["DRAFT", "DELETED"] } } },
+        orderBy: { createdAt: "desc" },
+      }),
       prisma.attendanceRecord.findMany({ orderBy: { checkIn: "desc" } }),
       prisma.labSettings.findMany(),
       prisma.warehouse.findMany({ where: { isActive: true }, orderBy: { name: "asc" } }),
+      prisma.splintType.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
+      prisma.orderCatalogOption.findMany({
+        orderBy: [{ category: "asc" }, { sortOrder: "asc" }, { label: "asc" }],
+      }),
     ]);
 
     return {
@@ -175,6 +246,8 @@ export class AppDataService {
       labSettings: mapLabSettings(labSettingsRows),
       warehouses,
       auditLogs: [],
+      splintTypes: splintTypes.map(mapSplintType),
+      orderCatalog: orderCatalog.map(mapOrderCatalogOption),
     };
   }
 
@@ -233,6 +306,10 @@ export class AppDataService {
         },
       });
 
+      const selectedTeeth = input.selectedTeeth ?? [];
+      const splintTypeIds = normalizeSplintTypeIds(input.splintTypeIds, input.splintTypeId);
+      const splintTypeId = primarySplintTypeId(splintTypeIds);
+      const workTypes = syncWorkTypesWithSplint(input.workTypes ?? [], splintTypeIds);
       const order = await tx.order.create({
         data: {
           serialNumber: generateSerialNumber(),
@@ -241,8 +318,11 @@ export class AppDataService {
           completionDate: input.completionDate ?? null,
           shade: input.shade ?? null,
           materials: input.materials ?? [],
-          workTypes: input.workTypes ?? [],
-          selectedTeeth: input.selectedTeeth ?? [],
+          workTypes,
+          selectedTeeth,
+          bridgeGroups: resolveOrderBridgeGroups(selectedTeeth, input.bridgeGroups) ?? [],
+          splintTypeIds,
+          splintTypeId,
           description: input.description ?? null,
           totalPrice: input.totalPrice ?? null,
         },
@@ -277,6 +357,13 @@ export class AppDataService {
       }
 
       return mapOrder(order);
+    }).then(async (order) => {
+      await this.syncOrderCompletionToCalendar(order, userId, {
+        doctorName: input.doctorName,
+        patientName: input.patientName,
+        deliveryAt: input.completionDate ?? null,
+      });
+      return order;
     });
   }
 
@@ -310,6 +397,7 @@ export class AppDataService {
         materials: [],
         workTypes: [],
         selectedTeeth: [],
+        bridgeGroups: [],
       },
     });
 
@@ -434,6 +522,10 @@ export class AppDataService {
       const hasFiles = existing.files.length > 0;
       const finalStatus = hasFiles ? "DESIGN" : "RECEIVED";
 
+      const selectedTeeth = input.selectedTeeth ?? [];
+      const splintTypeIds = normalizeSplintTypeIds(input.splintTypeIds, input.splintTypeId);
+      const splintTypeId = primarySplintTypeId(splintTypeIds);
+      const workTypes = syncWorkTypesWithSplint(input.workTypes ?? [], splintTypeIds);
       const order = await tx.order.update({
         where: { id: existing.id },
         data: {
@@ -441,8 +533,11 @@ export class AppDataService {
           completionDate: input.completionDate ?? null,
           shade: input.shade ?? null,
           materials: input.materials ?? [],
-          workTypes: input.workTypes ?? [],
-          selectedTeeth: input.selectedTeeth ?? [],
+          workTypes,
+          selectedTeeth,
+          bridgeGroups: resolveOrderBridgeGroups(selectedTeeth, input.bridgeGroups) ?? [],
+          splintTypeIds,
+          splintTypeId,
           description: input.description ?? null,
           totalPrice: input.totalPrice ?? null,
           status: finalStatus,
@@ -499,7 +594,7 @@ export class AppDataService {
       }
 
       return mapOrder(order);
-    }).then((order) => {
+    }).then(async (order) => {
       uploadAudit({
         step: "FINALIZE_DRAFT",
         orderId: order.id,
@@ -516,6 +611,11 @@ export class AppDataService {
       if (fileCountBefore === 0) {
         console.warn("[upload-audit] FINALIZE with ZERO files on order", order.id);
       }
+      await this.syncOrderCompletionToCalendar(order, userId, {
+        doctorName: input.doctorName,
+        patientName: input.patientName,
+        deliveryAt: input.completionDate ?? null,
+      });
       return order;
     });
   }
@@ -570,11 +670,288 @@ export class AppDataService {
     });
   }
 
+  /**
+   * Soft-delete an order (ADMIN/OWNER). Keeps files/storage for restore.
+   * Hidden from all operational lists via status = DELETED.
+   */
+  async softDeleteOrder(input: {
+    orderId: string;
+    userId: string;
+    reason?: string | null;
+    ip?: string | null;
+  }): Promise<Order> {
+    const order = await prisma.order.findUnique({
+      where: { id: input.orderId },
+      include: { doctor: true, patient: true },
+    });
+    if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+    if (order.status === "DRAFT") {
+      throw new AppError("VALIDATION_ERROR", "למחיקת טיוטה השתמש במחיקת טיוטה", 400);
+    }
+    if (order.status === "DELETED") {
+      throw new AppError("VALIDATION_ERROR", "ההזמנה כבר נמחקה", 400);
+    }
+
+    const now = new Date();
+    const reason = input.reason?.trim() || null;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.order.update({
+        where: { id: order.id },
+        data: {
+          status: "DELETED",
+          statusBeforeDelete: order.status,
+          deletedAt: now,
+          deletedBy: input.userId,
+          deleteReason: reason,
+          updatedAt: now,
+        },
+      });
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId: order.id,
+          status: "DELETED",
+          changedBy: input.userId,
+          notes: reason ? `מחיקה: ${reason}` : "מחיקת הזמנה",
+        },
+      });
+      return row;
+    });
+
+    await writeAuditLog({
+      userId: input.userId,
+      action: "ORDER_SOFT_DELETE",
+      entityType: "order",
+      entityId: order.id,
+      details: {
+        serialNumber: order.serialNumber,
+        patientName: order.patient.name,
+        doctorName: order.doctor?.name ?? null,
+        previousStatus: order.status,
+        reason,
+        ip: input.ip ?? null,
+        at: now.toISOString(),
+      },
+    });
+
+    return mapOrder(updated);
+  }
+
+  async restoreDeletedOrder(input: {
+    orderId: string;
+    userId: string;
+    ip?: string | null;
+  }): Promise<Order> {
+    const order = await prisma.order.findUnique({
+      where: { id: input.orderId },
+      include: { doctor: true, patient: true },
+    });
+    if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+    if (order.status !== "DELETED") {
+      throw new AppError("VALIDATION_ERROR", "ההזמנה אינה במצב מחוקה", 400);
+    }
+
+    const restoreStatus = order.statusBeforeDelete && order.statusBeforeDelete !== "DELETED"
+      ? order.statusBeforeDelete
+      : "RECEIVED";
+    const now = new Date();
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.order.update({
+        where: { id: order.id },
+        data: {
+          status: restoreStatus,
+          deletedAt: null,
+          deletedBy: null,
+          deleteReason: null,
+          statusBeforeDelete: null,
+          updatedAt: now,
+        },
+      });
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId: order.id,
+          status: restoreStatus,
+          changedBy: input.userId,
+          notes: "שחזור הזמנה ממחיקה",
+        },
+      });
+      return row;
+    });
+
+    await writeAuditLog({
+      userId: input.userId,
+      action: "ORDER_RESTORE",
+      entityType: "order",
+      entityId: order.id,
+      details: {
+        serialNumber: order.serialNumber,
+        restoredStatus: restoreStatus,
+        ip: input.ip ?? null,
+        at: now.toISOString(),
+      },
+    });
+
+    return mapOrder(updated);
+  }
+
+  /**
+   * Hard-delete a soft-deleted order: storage + related DB rows.
+   */
+  async permanentlyDeleteOrder(input: {
+    orderId: string;
+    userId: string;
+    confirm: string;
+    ip?: string | null;
+  }): Promise<void> {
+    if (input.confirm !== "DELETE") {
+      throw new AppError("VALIDATION_ERROR", 'יש להקליד DELETE לאישור מחיקה סופית', 400);
+    }
+
+    const order = await prisma.order.findUnique({
+      where: { id: input.orderId },
+      include: {
+        files: true,
+        shipment: true,
+        doctor: true,
+        patient: true,
+      },
+    });
+    if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+    if (order.status !== "DELETED") {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "מחיקה סופית אפשרית רק להזמנות שנמחקו (soft delete)",
+        400,
+      );
+    }
+
+    const orderId = order.id;
+    const serialNumber = order.serialNumber;
+    const patientId = order.patientId;
+
+    for (const file of order.files) {
+      if (file.storagePath) {
+        try {
+          await deleteFile(STORAGE_BUCKETS.ORDER_FILES, file.storagePath);
+        } catch (err) {
+          console.warn("[order:permanent-delete] storage failed", file.id, err);
+        }
+      }
+      if (file.thumbnailPath) {
+        try {
+          await deleteFile(STORAGE_BUCKETS.ORDER_FILES, file.thumbnailPath);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    if (order.shipment?.recipientSignaturePath) {
+      try {
+        const { removeShipmentSignaturePng } = await import("@/lib/shipping/signature-storage");
+        await removeShipmentSignaturePng(order.shipment.recipientSignaturePath);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.inventoryUsage.deleteMany({ where: { orderId } });
+      await tx.payment.deleteMany({ where: { orderId } });
+      if (order.shipment) {
+        await tx.shipment.delete({ where: { orderId } });
+      }
+      await tx.orderStatusHistory.deleteMany({ where: { orderId } });
+      await tx.orderFile.deleteMany({ where: { orderId } });
+      await tx.order.delete({ where: { id: orderId } });
+      const otherOrders = await tx.order.count({ where: { patientId } });
+      if (otherOrders === 0) {
+        await tx.patient.delete({ where: { id: patientId } }).catch(() => undefined);
+      }
+    });
+
+    await writeAuditLog({
+      userId: input.userId,
+      action: "ORDER_PERMANENT_DELETE",
+      entityType: "order",
+      entityId: orderId,
+      details: {
+        serialNumber,
+        patientName: order.patient.name,
+        doctorName: order.doctor?.name ?? null,
+        fileCount: order.files.length,
+        hadShipment: !!order.shipment,
+        deleteReason: order.deleteReason,
+        ip: input.ip ?? null,
+        at: new Date().toISOString(),
+      },
+    });
+  }
+
+  async listDeletedOrders(input: {
+    q?: string;
+    from?: Date | null;
+    to?: Date | null;
+    deletedBy?: string | null;
+  }): Promise<
+    Array<
+      OrderWithRelations & {
+        deletedByUser?: { id: string; name: string; username: string } | null;
+      }
+    >
+  > {
+    const q = input.q?.trim();
+    const where: Prisma.OrderWhereInput = {
+      status: "DELETED",
+      ...(input.deletedBy ? { deletedBy: input.deletedBy } : {}),
+      ...(input.from || input.to
+        ? {
+            deletedAt: {
+              ...(input.from ? { gte: input.from } : {}),
+              ...(input.to ? { lte: input.to } : {}),
+            },
+          }
+        : {}),
+      ...(q
+        ? {
+            OR: [
+              { serialNumber: { contains: q, mode: "insensitive" } },
+              { deleteReason: { contains: q, mode: "insensitive" } },
+              { patient: { name: { contains: q, mode: "insensitive" } } },
+              { doctor: { name: { contains: q, mode: "insensitive" } } },
+            ],
+          }
+        : {}),
+    };
+
+    const rows = await prisma.order.findMany({
+      where,
+      include: {
+        ...ORDER_INCLUDE,
+        deletedByUser: { select: { id: true, name: true, username: true } },
+      },
+      orderBy: { deletedAt: "desc" },
+      take: 500,
+    });
+
+    return Promise.all(
+      rows.map(async (row) => {
+        const { deletedByUser, ...rest } = row;
+        const mapped = await mapOrderWithRelations(rest);
+        return { ...mapped, deletedByUser: deletedByUser ?? null };
+      }),
+    );
+  }
+
   async updateOrder(input: UpdateOrderInput, userId: string): Promise<void> {
     const now = new Date();
     await prisma.$transaction(async (tx) => {
       const order = await tx.order.findUnique({ where: { id: input.orderId } });
       if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+      if (order.status === "DELETED") {
+        throw new AppError("VALIDATION_ERROR", "לא ניתן לערוך הזמנה שנמחקה", 400);
+      }
 
       let doctorId: string | null | undefined = input.doctorId ?? order.doctorId;
       if (input.doctorName !== undefined || input.doctorId !== undefined) {
@@ -611,14 +988,35 @@ export class AppDataService {
         });
       }
 
+      const resolvedSplintIds =
+        input.splintTypeIds !== undefined
+          ? normalizeSplintTypeIds(input.splintTypeIds, null)
+          : input.splintTypeId !== undefined
+            ? normalizeSplintTypeIds(null, input.splintTypeId)
+            : undefined;
+
       await tx.order.update({
         where: { id: input.orderId },
         data: {
           doctorId,
           shade: input.shade !== undefined ? input.shade : undefined,
           materials: input.materials,
-          workTypes: input.workTypes,
+          workTypes:
+            input.workTypes !== undefined || resolvedSplintIds !== undefined
+              ? syncWorkTypesWithSplint(
+                  input.workTypes ?? order.workTypes,
+                  resolvedSplintIds ??
+                    normalizeSplintTypeIds(order.splintTypeIds, order.splintTypeId),
+                )
+              : undefined,
           selectedTeeth: input.selectedTeeth,
+          bridgeGroups: resolveOrderBridgeGroups(input.selectedTeeth, input.bridgeGroups),
+          ...(resolvedSplintIds !== undefined
+            ? {
+                splintTypeIds: resolvedSplintIds,
+                splintTypeId: primarySplintTypeId(resolvedSplintIds),
+              }
+            : {}),
           description: input.description !== undefined ? input.description : undefined,
           completionDate: input.completionDate !== undefined ? input.completionDate : undefined,
           totalPrice: input.totalPrice !== undefined ? input.totalPrice : undefined,
@@ -633,12 +1031,33 @@ export class AppDataService {
           data: { patientName },
         });
       }
-
-      void userId;
     });
+
+    if (input.completionDate !== undefined) {
+      const order = await prisma.order.findUnique({
+        where: { id: input.orderId },
+        include: { doctor: true, patient: true },
+      });
+      if (order) {
+        await this.syncOrderCompletionToCalendar(mapOrder(order), userId, {
+          doctorName: order.doctor?.name ?? input.doctorName,
+          patientName: order.patient?.name ?? input.patientName,
+          deliveryAt: input.completionDate,
+        });
+      }
+    }
   }
 
   async updateOrderStatus(input: UpdateOrderStatusInput): Promise<void> {
+    const existing = await prisma.order.findUnique({ where: { id: input.orderId } });
+    if (!existing) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+    if (existing.status === "DELETED") {
+      throw new AppError("VALIDATION_ERROR", "לא ניתן לשנות סטטוס להזמנה שנמחקה", 400);
+    }
+    if (input.status === "DELETED" || input.status === "DRAFT") {
+      throw new AppError("VALIDATION_ERROR", "שינוי סטטוס זה אינו מותר דרך עדכון רגיל", 400);
+    }
+
     const now = new Date();
     await prisma.$transaction([
       prisma.order.update({
@@ -1014,6 +1433,22 @@ export class AppDataService {
     });
     console.info("[shipment] create:audit-ok", { shipmentId: created.id });
 
+    try {
+      const full = await prisma.order.findUnique({
+        where: { id: orderId },
+        include: { doctor: true, patient: true },
+      });
+      if (full) {
+        await this.syncOrderCompletionToCalendar(mapOrder(full), userId, {
+          doctorName: full.doctor?.name,
+          patientName: full.patient?.name,
+          deliveryAt: created.shippedAt ?? now,
+        });
+      }
+    } catch (calErr) {
+      console.error("[shipment] calendar-sync-failed", calErr);
+    }
+
     if (signature?.dataUrl) {
       try {
         console.info("[shipment] create:signature-start", { shipmentId: created.id });
@@ -1266,6 +1701,194 @@ export class AppDataService {
         data: { id, name, color, isSystem: false },
       }),
     );
+  }
+
+  async listSplintTypes(): Promise<SplintType[]> {
+    await ensureDefaultSplintTypes();
+    const rows = await prisma.splintType.findMany({
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    });
+    return rows.map(mapSplintType);
+  }
+
+  async createSplintType(input: {
+    name: string;
+    code?: string;
+    sortOrder?: number;
+  }): Promise<SplintType> {
+    const name = input.name.trim();
+    if (!name) throw new AppError("VALIDATION_ERROR", "שם סוג סד נדרש", 400);
+    const code =
+      input.code?.trim().toUpperCase().replace(/\s+/g, "_") ||
+      `CUSTOM_${Date.now().toString(36).toUpperCase()}`;
+    const maxSort = await prisma.splintType.aggregate({ _max: { sortOrder: true } });
+    const row = await prisma.splintType.create({
+      data: {
+        name,
+        code,
+        sortOrder: input.sortOrder ?? (maxSort._max.sortOrder ?? 0) + 10,
+        isActive: true,
+        isSystem: false,
+      },
+    });
+    return mapSplintType(row);
+  }
+
+  async updateSplintType(input: {
+    id: string;
+    name?: string;
+    isActive?: boolean;
+    sortOrder?: number;
+  }): Promise<SplintType> {
+    const existing = await prisma.splintType.findUnique({ where: { id: input.id } });
+    if (!existing) throw new AppError("NOT_FOUND", "סוג סד לא נמצא", 404);
+    const row = await prisma.splintType.update({
+      where: { id: input.id },
+      data: {
+        name: input.name?.trim() || undefined,
+        isActive: input.isActive,
+        sortOrder: input.sortOrder,
+      },
+    });
+    return mapSplintType(row);
+  }
+
+  async reorderSplintTypes(orderedIds: string[]): Promise<SplintType[]> {
+    await prisma.$transaction(
+      orderedIds.map((id, index) =>
+        prisma.splintType.update({
+          where: { id },
+          data: { sortOrder: (index + 1) * 10 },
+        }),
+      ),
+    );
+    return this.listSplintTypes();
+  }
+
+  async deleteSplintType(id: string): Promise<{ archived: boolean }> {
+    const existing = await prisma.splintType.findUnique({ where: { id } });
+    if (!existing) throw new AppError("NOT_FOUND", "סוג סד לא נמצא", 404);
+    const inUse = await prisma.order.count({
+      where: {
+        OR: [{ splintTypeId: id }, { splintTypeIds: { has: id } }],
+      },
+    });
+    if (inUse > 0 || existing.isSystem) {
+      await prisma.splintType.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      return { archived: true };
+    }
+    await prisma.splintType.delete({ where: { id } });
+    return { archived: false };
+  }
+
+  async listOrderCatalog(category?: OrderCatalogCategory): Promise<OrderCatalogOption[]> {
+    await ensureDefaultOrderCatalog();
+    const rows = await prisma.orderCatalogOption.findMany({
+      where: category ? { category } : undefined,
+      orderBy: [{ category: "asc" }, { sortOrder: "asc" }, { label: "asc" }],
+    });
+    return rows.map(mapOrderCatalogOption);
+  }
+
+  async createOrderCatalogOption(input: {
+    category: OrderCatalogCategory;
+    label: string;
+    code?: string;
+    color?: string | null;
+    group?: string | null;
+    sortOrder?: number;
+  }): Promise<OrderCatalogOption> {
+    const label = input.label.trim();
+    if (!label) throw new AppError("VALIDATION_ERROR", "שם האפשרות נדרש", 400);
+    let code = (input.code?.trim() || slugifyCatalogCode(label)).toUpperCase();
+    const existing = await prisma.orderCatalogOption.findUnique({
+      where: { category_code: { category: input.category, code } },
+    });
+    if (existing) code = `${code}_${Date.now().toString(36).toUpperCase()}`;
+    const maxSort = await prisma.orderCatalogOption.aggregate({
+      where: { category: input.category },
+      _max: { sortOrder: true },
+    });
+    const row = await prisma.orderCatalogOption.create({
+      data: {
+        category: input.category,
+        code,
+        label,
+        color: input.color ?? null,
+        group: input.group ?? null,
+        sortOrder: input.sortOrder ?? (maxSort._max.sortOrder ?? 0) + 10,
+        isActive: true,
+        isSystem: false,
+      },
+    });
+    return mapOrderCatalogOption(row);
+  }
+
+  async updateOrderCatalogOption(input: {
+    id: string;
+    label?: string;
+    color?: string | null;
+    group?: string | null;
+    isActive?: boolean;
+    sortOrder?: number;
+  }): Promise<OrderCatalogOption> {
+    const existing = await prisma.orderCatalogOption.findUnique({ where: { id: input.id } });
+    if (!existing) throw new AppError("NOT_FOUND", "אפשרות לא נמצאה", 404);
+    const row = await prisma.orderCatalogOption.update({
+      where: { id: input.id },
+      data: {
+        label: input.label?.trim() || undefined,
+        color: input.color !== undefined ? input.color : undefined,
+        group: input.group !== undefined ? input.group : undefined,
+        isActive: input.isActive,
+        sortOrder: input.sortOrder,
+      },
+    });
+    return mapOrderCatalogOption(row);
+  }
+
+  async reorderOrderCatalog(category: OrderCatalogCategory, orderedIds: string[]): Promise<OrderCatalogOption[]> {
+    await prisma.$transaction(
+      orderedIds.map((id, index) =>
+        prisma.orderCatalogOption.update({
+          where: { id },
+          data: { sortOrder: (index + 1) * 10 },
+        }),
+      ),
+    );
+    return this.listOrderCatalog(category);
+  }
+
+  async deleteOrderCatalogOption(id: string): Promise<{ archived: boolean }> {
+    const existing = await prisma.orderCatalogOption.findUnique({ where: { id } });
+    if (!existing) throw new AppError("NOT_FOUND", "אפשרות לא נמצאה", 404);
+
+    let inUse = 0;
+    if (existing.category === "MATERIAL") {
+      inUse = await prisma.order.count({
+        where: { materials: { has: existing.code } },
+      });
+    } else if (existing.category === "WORK_TYPE") {
+      inUse = await prisma.order.count({
+        where: { workTypes: { has: existing.code } },
+      });
+    } else if (existing.category === "SHADE") {
+      inUse = await prisma.order.count({ where: { shade: existing.code } });
+    }
+
+    if (inUse > 0 || existing.isSystem) {
+      await prisma.orderCatalogOption.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      return { archived: true };
+    }
+
+    await prisma.orderCatalogOption.delete({ where: { id } });
+    return { archived: false };
   }
 
   async addPayment(payment: Omit<Payment, "id" | "createdAt">): Promise<void> {
@@ -2401,6 +3024,37 @@ export class AppDataService {
       orderBy: { name: "asc" },
     });
     return users.map(mapUser);
+  }
+
+  /** Push order delivery date into manager calendar (best-effort). */
+  private async syncOrderCompletionToCalendar(
+    order: Order,
+    userId: string,
+    meta: {
+      doctorName?: string | null;
+      patientName?: string | null;
+      deliveryAt?: Date | null;
+    },
+  ): Promise<void> {
+    if (meta.deliveryAt === undefined) return;
+    try {
+      const { calendarService } = await import("@/lib/services/calendar.service");
+      await calendarService.syncOrderSchedule({
+        orderId: order.id,
+        serialNumber: order.serialNumber,
+        doctorId: order.doctorId,
+        patientId: order.patientId,
+        doctorName: meta.doctorName,
+        patientName: meta.patientName,
+        deliveryAt: meta.deliveryAt,
+        userId,
+      });
+    } catch (err) {
+      console.error("[calendar] syncOrderCompletion failed", {
+        orderId: order.id,
+        error: err instanceof Error ? err.message : err,
+      });
+    }
   }
 }
 

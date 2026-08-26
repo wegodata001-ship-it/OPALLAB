@@ -1,8 +1,6 @@
 import type {
   UserRole,
   OrderStatus,
-  MaterialType,
-  WorkType,
   Gender,
   InventoryType,
   FileType,
@@ -38,6 +36,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   SHIPPED: "מוכנה למשלוח",
   DELIVERED: "נמסרה",
   CANCELLED: "בוטלה",
+  DELETED: "נמחקה",
 };
 
 export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
@@ -53,9 +52,10 @@ export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
   SHIPPED: "bg-green-100 text-green-700",
   DELIVERED: "bg-emerald-100 text-emerald-700",
   CANCELLED: "bg-red-100 text-red-700",
+  DELETED: "bg-slate-200 text-slate-600",
 };
 
-export const MATERIAL_TYPE_LABELS: Record<MaterialType, string> = {
+export const MATERIAL_TYPE_LABELS: Record<string, string> = {
   TEMPORARY: "זמני",
   DENTURE: "תותבת",
   PFM: "PFM",
@@ -64,7 +64,7 @@ export const MATERIAL_TYPE_LABELS: Record<MaterialType, string> = {
   MODEL: "מודל",
 };
 
-export const WORK_TYPE_LABELS: Record<WorkType, string> = {
+export const WORK_TYPE_LABELS: Record<string, string> = {
   SCREWED: "מוברג",
   ABUTMENTS: "מבנים",
   MOCKUP: "Mockup",

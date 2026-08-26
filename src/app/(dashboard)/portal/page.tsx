@@ -10,11 +10,12 @@ import { ExportActions } from "@/components/shared/export-actions";
 import { DoctorOrderForm } from "@/components/portal/doctor-order-form";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { cn } from "@/lib/utils";
-import { ORDER_STATUS_LABELS, PAYMENT_STATUS_LABELS, MATERIAL_TYPE_LABELS, PAYMENT_METHOD_LABELS } from "@/lib/constants/labels";
+import { ORDER_STATUS_LABELS, PAYMENT_STATUS_LABELS, PAYMENT_METHOD_LABELS } from "@/lib/constants/labels";
+import { catalogLabel } from "@/lib/orders/order-catalog";
 import { Stethoscope, CreditCard, Package, ChevronDown, ChevronUp, Plus } from "lucide-react";
 
 export default function DoctorPortalPage() {
-  const { currentUser, getDoctorForUser, getOrdersByDoctor, payments } = useApp();
+  const { currentUser, getDoctorForUser, getOrdersByDoctor, payments, orderCatalog } = useApp();
   const [tab, setTab] = useState<"orders" | "new" | "ledger">("orders");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [savedSerial, setSavedSerial] = useState<string | null>(null);
@@ -186,7 +187,7 @@ export default function DoctorPortalPage() {
                       <WorkflowTracker currentStatus={order.status} />
                       {order.materials.length > 0 ? (
                         <p className="text-sm text-slate-600">
-                          חומר: {order.materials.map((m) => MATERIAL_TYPE_LABELS[m]).join(", ")}
+                          חומר: {order.materials.map((m) => catalogLabel(orderCatalog, "MATERIAL", m)).join(", ")}
                         </p>
                       ) : null}
                       {order.description ? <p className="text-sm text-slate-500">{order.description}</p> : null}

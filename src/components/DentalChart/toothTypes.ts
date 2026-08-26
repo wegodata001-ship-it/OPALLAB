@@ -25,12 +25,30 @@ export interface ToothProps {
   selected: boolean;
   status: ToothStatus;
   disabled: boolean;
-  onClick: () => void;
+  /** Blue border — range start/end (Shift / long-press). */
+  rangeEndpoint?: boolean;
+  /** Brief pulse after a range is applied. */
+  rangeFlash?: boolean;
+  interaction: {
+    // React synthetic events — kept loose to avoid DOM/React type clashes
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onClick: (e: any) => void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onPointerDown: (e: any) => void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onPointerEnter: (e: any) => void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onPointerUp: (e: any) => void;
+    onPointerCancel: () => void;
+  };
 }
 
 export interface DentalChartProps {
   selectedTeeth: number[];
   onChange: (teeth: number[]) => void;
+  /** Explicit bridge pairs (e.g. [[14,15],[15,16]]). Not auto-derived from selection. */
+  bridgeGroups?: number[][];
+  onBridgeGroupsChange?: (groups: number[][]) => void;
   readOnly?: boolean;
   className?: string;
   toothStatuses?: Partial<Record<number, ToothStatus>>;

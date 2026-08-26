@@ -21,17 +21,19 @@ function ToothComponent({
   selected,
   status,
   disabled,
-  onClick,
+  rangeEndpoint,
+  rangeFlash,
+  interaction,
 }: ToothProps) {
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<SVGGElement>) => {
       if (disabled) return;
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        onClick();
+        interaction.onClick(e as never);
       }
     },
-    [disabled, onClick],
+    [disabled, interaction],
   );
 
   const visualSelected = selected || status === "selected";
@@ -44,6 +46,8 @@ function ToothComponent({
           "dc-tooth",
           !disabled ? "dc-tooth--interactive" : "dc-tooth--disabled",
           statusClass(status, selected),
+          rangeEndpoint ? "dc-tooth--range-end" : "",
+          rangeFlash ? "dc-tooth--range-flash" : "",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -54,7 +58,11 @@ function ToothComponent({
         aria-disabled={disabled || undefined}
         data-tooth={number}
         data-kind={kind}
-        onClick={disabled ? undefined : onClick}
+        onClick={disabled ? undefined : interaction.onClick}
+        onPointerDown={disabled ? undefined : interaction.onPointerDown}
+        onPointerEnter={disabled ? undefined : interaction.onPointerEnter}
+        onPointerUp={disabled ? undefined : interaction.onPointerUp}
+        onPointerCancel={disabled ? undefined : interaction.onPointerCancel}
         onKeyDown={handleKeyDown}
       >
         <title>{`Tooth ${number}`}</title>
@@ -85,7 +93,9 @@ function propsEqual(a: ToothProps, b: ToothProps) {
     a.selected === b.selected &&
     a.status === b.status &&
     a.disabled === b.disabled &&
-    a.onClick === b.onClick
+    a.rangeEndpoint === b.rangeEndpoint &&
+    a.rangeFlash === b.rangeFlash &&
+    a.interaction === b.interaction
   );
 }
 

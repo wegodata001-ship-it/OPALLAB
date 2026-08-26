@@ -8,7 +8,9 @@ import { LoadingOverlay } from "@/components/ui/loading-overlay";
 
 const PATH_MODULE: Record<string, AppModule> = {
   "/dashboard": "dashboard",
+  "/orders/deleted": "deleted-orders",
   "/orders": "orders",
+  "/calendar": "calendar",
   "/workflow": "workflow",
   "/inventory": "inventory",
   "/accounts": "accounts",
@@ -37,8 +39,13 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     }
     if (!currentUser) return;
 
-    const base = "/" + pathname.split("/").filter(Boolean)[0];
-    const module = PATH_MODULE[base];
+    const segments = pathname.split("/").filter(Boolean);
+    const twoSeg = segments.length >= 2 ? `/${segments[0]}/${segments[1]}` : null;
+    const oneSeg = segments.length >= 1 ? `/${segments[0]}` : "/";
+    const module =
+      (twoSeg && PATH_MODULE[twoSeg]) ||
+      PATH_MODULE[oneSeg] ||
+      undefined;
     // /system/* pages render their own 403 UI — do not hide them behind a redirect (looks like 404).
     if (module && !canAccessUser(currentUser, module) && !pathname.startsWith("/system/")) {
       router.replace(getDefaultRoute(currentUser));

@@ -71,6 +71,11 @@ export function isSystemAdminUser(user: Pick<User, "role" | "roles">): boolean {
   return userHasAnyRole(user, ["ADMIN", "OWNER", "SECRETARY"]);
 }
 
+/** System administrator only (ADMIN / OWNER) — order soft/permanent delete. */
+export function canDeleteOrders(user: Pick<User, "role" | "roles">): boolean {
+  return userHasAnyRole(user, ["ADMIN", "OWNER"]);
+}
+
 export function getDoctorIdForUser(
   user: Pick<User, "id" | "role" | "roles">,
   doctors: Pick<Doctor, "id" | "userId">[],

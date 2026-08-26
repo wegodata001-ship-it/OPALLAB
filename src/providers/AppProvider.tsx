@@ -9,7 +9,7 @@ import {
   useEffect,
   type ReactNode,
 } from "react";
-import { apiGet, apiPatch, apiPost } from "@/lib/api/client";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api/client";
 import { shippingLog, shippingTimed } from "@/lib/shipping/action-log";
 import { uploadOrderFileWithProgress } from "@/lib/orders/upload-with-progress";
 import { defaultLabSettings } from "@/lib/constants/lab-settings";
@@ -44,6 +44,8 @@ import type {
   AttendanceLocationMeta,
   Warehouse,
   AuditLogEntry,
+  SplintType,
+  OrderCatalogOption,
 } from "@/lib/types";
 import { getUserRoles } from "@/lib/user-roles";
 import { useLoading } from "@/providers/LoadingProvider";
@@ -74,6 +76,8 @@ interface AppContextValue {
   shipments: Shipment[];
   attendance: AttendanceRecord[];
   warehouses: Warehouse[];
+  splintTypes: SplintType[];
+  orderCatalog: OrderCatalogOption[];
   getOrderById: (id: string) => OrderWithRelations | undefined;
   getOrdersByStatus: (status: OrderStatus) => OrderWithRelations[];
   getOrdersByDoctor: (doctorId: string) => OrderWithRelations[];
@@ -125,6 +129,15 @@ interface AppContextValue {
   ) => Promise<InventoryItem>;
   addInventoryMovement: (mov: Omit<InventoryMovement, "id" | "createdAt">) => Promise<void>;
   addInventoryCategory: (name: string, color: string) => Promise<InventoryCategory>;
+  createSplintType: (input: { name: string; code?: string }) => Promise<SplintType>;
+  updateSplintType: (input: {
+    id: string;
+    name?: string;
+    isActive?: boolean;
+    sortOrder?: number;
+  }) => Promise<void>;
+  reorderSplintTypes: (orderedIds: string[]) => Promise<void>;
+  deleteSplintType: (id: string) => Promise<void>;
   checkIn: (userId: string, method?: AttendanceMethod, meta?: AttendanceCheckInMeta) => Promise<void>;
   checkOut: (userId: string, method?: AttendanceMethod, meta?: AttendanceLocationMeta) => Promise<void>;
   updateAttendance: (id: string, updates: Partial<Pick<AttendanceRecord, "checkIn" | "checkOut" | "notes">>) => Promise<void>;
@@ -172,6 +185,8 @@ const emptySnapshot: AppDataSnapshot = {
   labSettings: defaultLabSettings,
   warehouses: [],
   auditLogs: [],
+  splintTypes: [],
+  orderCatalog: [],
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -503,6 +518,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, "שומר...");
   }, [withLoading, refreshInternal]);
 
+  const createSplintType = useCallback(
+    async (input: { name: string; code?: string }) => {
+      return withLoading(async () => {
+        const result = await apiPost<{ splintType: SplintType }>("/api/splint-types", input);
+        await refreshInternal();
+        return result.splintType;
+      }, "שומר...");
+    },
+    [withLoading, refreshInternal],
+  );
+
+  const updateSplintType = useCallback(
+    async (input: { id: string; name?: string; isActive?: boolean; sortOrder?: number }) => {
+      await withLoading(async () => {
+        await apiPatch("/api/splint-types", input);
+        await refreshInternal();
+      }, "שומר...");
+    },
+    [withLoading, refreshInternal],
+  );
+
+  const reorderSplintTypes = useCallback(
+    async (orderedIds: string[]) => {
+      await withLoading(async () => {
+        await apiPatch("/api/splint-types", { orderedIds });
+        await refreshInternal();
+      }, "שומר...");
+    },
+    [withLoading, refreshInternal],
+  );
+
+  const deleteSplintType = useCallback(
+    async (id: string) => {
+      await withLoading(async () => {
+        await apiDelete(`/api/splint-types?id=${encodeURIComponent(id)}`);
+        await refreshInternal();
+      }, "מוחק...");
+    },
+    [withLoading, refreshInternal],
+  );
+
   const addPayment = useCallback(async (payment: Omit<Payment, "id" | "createdAt">) => {
     await withLoading(async () => {
       await apiPost("/api/payments", { action: "add", payment });
@@ -663,6 +719,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     shipments: store.shipments,
     attendance: store.attendance,
     warehouses: store.warehouses,
+    splintTypes: store.splintTypes ?? [],
+    orderCatalog: store.orderCatalog ?? [],
     getOrderById,
     getOrdersByStatus,
     getOrdersByDoctor,
@@ -689,6 +747,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     addInventoryItem,
     addInventoryMovement,
     addInventoryCategory,
+    createSplintType,
+    updateSplintType,
+    reorderSplintTypes,
+    deleteSplintType,
     checkIn,
     checkOut,
     updateAttendance,

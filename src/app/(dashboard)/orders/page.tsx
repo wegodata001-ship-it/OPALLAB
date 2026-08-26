@@ -26,8 +26,12 @@ import { OrderStageIndicator } from "@/components/orders/order-stage-indicator";
 import { ExportActions } from "@/components/shared/export-actions";
 import { useApp } from "@/providers/AppProvider";
 import { useOrderCreateDraft } from "@/hooks/use-order-create-draft";
-import { LAB_INFO, MATERIAL_TYPE_LABELS, WORK_TYPE_LABELS, GENDER_LABELS, ORDER_STATUS_LABELS } from "@/lib/constants/labels";
+import { LAB_INFO, GENDER_LABELS, ORDER_STATUS_LABELS } from "@/lib/constants/labels";
+import { catalogLabel } from "@/lib/orders/order-catalog";
 import type { Order } from "@/lib/types";
+import { syncWorkTypesWithSplint } from "@/lib/orders/splint-types";
+import { SplintTypeSelect } from "@/components/orders/splint-type-select";
+import { CatalogChipField } from "@/components/orders/catalog-chip-field";
 import {
   getOrderStageRelevance,
   isPrivilegedRole,
@@ -47,7 +51,7 @@ function OrdersContent() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab") === "new" ? "new" : "list";
 
-  const { orders, doctors, addOrderFile, currentUser, refresh } = useApp();
+  const { orders, doctors, addOrderFile, currentUser, refresh, refreshQuiet, orderCatalog } = useApp();
   const uploadRef = useRef<OrderUploadTilesHandle>(null);
   const [formError, setFormError] = useState("");
   const [search, setSearch] = useState("");
@@ -64,7 +68,9 @@ function OrdersContent() {
   const [shade, setShade] = useState("");
   const [materials, setMaterials] = useState<MaterialType[]>([]);
   const [workTypes, setWorkTypes] = useState<WorkType[]>([]);
+  const [splintTypeIds, setSplintTypeIds] = useState<string[]>([]);
   const [selectedTeeth, setSelectedTeeth] = useState<number[]>([]);
+  const [bridgeGroups, setBridgeGroups] = useState<number[][]>([]);
   const [description, setDescription] = useState("");
   const [completionDate, setCompletionDate] = useState("");
   const [totalPrice, setTotalPrice] = useState("");
@@ -135,6 +141,11 @@ function OrdersContent() {
   const toggleWorkType = (w: WorkType) =>
     setWorkTypes((p) => (p.includes(w) ? p.filter((x) => x !== w) : [...p, w]));
 
+  const onSplintTypeChange = (ids: string[]) => {
+    setSplintTypeIds(ids);
+    setWorkTypes((prev) => syncWorkTypesWithSplint(prev, ids));
+  };
+
   // Resume form fields from a kept draft (browser reopen / save-draft leave).
   useEffect(() => {
     const h = draft.hydrateFromDraft;
@@ -147,7 +158,16 @@ function OrdersContent() {
       if (h.shade) setShade(h.shade);
       if (h.materials?.length) setMaterials(h.materials);
       if (h.workTypes?.length) setWorkTypes(h.workTypes);
+      if (h.splintTypeIds?.length) setSplintTypeIds(h.splintTypeIds);
+      else if (h.splintTypeId) setSplintTypeIds([h.splintTypeId]);
       if (h.selectedTeeth?.length) setSelectedTeeth(h.selectedTeeth);
+      if (h.bridgeGroups != null) {
+        setBridgeGroups(
+          Array.isArray(h.bridgeGroups)
+            ? h.bridgeGroups.filter((g): g is number[] => Array.isArray(g))
+            : [],
+        );
+      }
       if (h.description) setDescription(h.description);
       if (h.completionDate) {
         setCompletionDate(new Date(h.completionDate).toISOString().slice(0, 10));
@@ -183,7 +203,9 @@ function OrdersContent() {
         shade: shade || null,
         materials,
         workTypes,
+        splintTypeIds,
         selectedTeeth,
+        bridgeGroups,
         description: description || null,
         completionDate: completionDate ? new Date(completionDate) : null,
         totalPrice: totalPrice ? parseFloat(totalPrice) : null,
@@ -200,7 +222,9 @@ function OrdersContent() {
     shade,
     materials,
     workTypes,
+    splintTypeIds,
     selectedTeeth,
+    bridgeGroups,
     description,
     completionDate,
     totalPrice,
@@ -215,7 +239,9 @@ function OrdersContent() {
     setShade("");
     setMaterials([]);
     setWorkTypes([]);
+    setSplintTypeIds([]);
     setSelectedTeeth([]);
+    setBridgeGroups([]);
     setDescription("");
     setCompletionDate("");
     setTotalPrice("");
@@ -251,11 +277,13 @@ function OrdersContent() {
       shade: shade || undefined,
       materials,
       workTypes,
-      selectedTeeth,
-      description: description || undefined,
-      completionDate: completionDate ? new Date(completionDate) : undefined,
-      totalPrice: totalPrice ? parseFloat(totalPrice) : undefined,
-    });
+      splintTypeIds,
+        selectedTeeth,
+        bridgeGroups,
+        description: description || undefined,
+        completionDate: completionDate ? new Date(completionDate) : undefined,
+        totalPrice: totalPrice ? parseFloat(totalPrice) : undefined,
+      });
 
     if (!order?.id) {
       throw new Error("ההזמנה נשמרה ללא מזהה");
@@ -471,7 +499,9 @@ function OrdersContent() {
                         </div>
                         <p className="text-sm text-slate-600 mt-0.5">{order.doctor?.name ?? "—"} · {order.patient.name}</p>
                         <p className="text-xs text-slate-400">
-                          {order.materials.map((m) => MATERIAL_TYPE_LABELS[m]).join(", ")}
+                          {order.materials
+                            .map((m) => catalogLabel(orderCatalog, "MATERIAL", m))
+                            .join(", ")}
                           {order.selectedTeeth.length > 0 && ` · שיניים ${order.selectedTeeth.join(",")}`}
                         </p>
                       </div>
@@ -521,7 +551,7 @@ function OrdersContent() {
                   </div>
                 </div>
                 <div><Label>שם המטופל</Label><Input value={patientName} onChange={(e) => setPatientName(e.target.value)} placeholder="אופציונלי" /></div>
-                <div><Label>צבע Shade</Label><ShadePicker value={shade} onChange={setShade} /></div>
+                <div className="sm:col-span-1"><ShadePicker value={shade} onChange={setShade} /></div>
               </div>
               <div className="grid sm:grid-cols-4 gap-4">
                 <div><Label>גיל</Label><Input type="number" value={patientAge} onChange={(e) => setPatientAge(e.target.value)} /></div>
@@ -538,29 +568,29 @@ function OrdersContent() {
                 <div><Label>תאריך סיום</Label><Input type="date" value={completionDate} onChange={(e) => setCompletionDate(e.target.value)} /></div>
                 <div><Label>מחיר ₪</Label><Input type="number" value={totalPrice} onChange={(e) => setTotalPrice(e.target.value)} /></div>
               </div>
-              <div>
-                <Label>סוג חומר</Label>
-                <div className="flex flex-wrap gap-2 mt-1.5">
-                  {(Object.keys(MATERIAL_TYPE_LABELS) as MaterialType[]).map((m) => (
-                    <label key={m} className={cn("px-3 py-1.5 rounded-lg border text-sm cursor-pointer transition-colors", materials.includes(m) ? "border-opal-gold bg-opal-gold/10 text-opal-gold-dark font-medium" : "border-slate-200 hover:border-slate-300")}>
-                      <input type="checkbox" className="sr-only" checked={materials.includes(m)} onChange={() => toggleMaterial(m)} />
-                      {MATERIAL_TYPE_LABELS[m]}
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <Label>סוג עבודה</Label>
-                <div className="flex flex-wrap gap-2 mt-1.5">
-                  {(Object.keys(WORK_TYPE_LABELS) as WorkType[]).map((w) => (
-                    <label key={w} className={cn("px-3 py-1.5 rounded-lg border text-sm cursor-pointer transition-colors", workTypes.includes(w) ? "border-opal-gold bg-opal-gold/10 text-opal-gold-dark font-medium" : "border-slate-200")}>
-                      <input type="checkbox" className="sr-only" checked={workTypes.includes(w)} onChange={() => toggleWorkType(w)} />
-                      {WORK_TYPE_LABELS[w]}
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <DentalChart selectedTeeth={selectedTeeth} onChange={setSelectedTeeth} />
+              <CatalogChipField
+                category="MATERIAL"
+                title="סוג חומר"
+                catalog={orderCatalog}
+                selected={materials}
+                onToggle={toggleMaterial}
+                onCatalogChanged={refreshQuiet}
+              />
+              <CatalogChipField
+                category="WORK_TYPE"
+                title="סוג עבודה"
+                catalog={orderCatalog}
+                selected={workTypes}
+                onToggle={toggleWorkType}
+                onCatalogChanged={refreshQuiet}
+              />
+              <SplintTypeSelect value={splintTypeIds} onChange={onSplintTypeChange} />
+              <DentalChart
+                selectedTeeth={selectedTeeth}
+                onChange={setSelectedTeeth}
+                bridgeGroups={bridgeGroups}
+                onBridgeGroupsChange={setBridgeGroups}
+              />
               <div><Label>תיאור עבודה</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} /></div>
               <div>
                 <Label>תמונות וסריקות</Label>
@@ -626,6 +656,7 @@ function OrdersContent() {
                 materials,
                 workTypes,
                 selectedTeeth,
+                bridgeGroups,
                 description: description || null,
                 completionDate: completionDate ? new Date(completionDate) : null,
                 totalPrice: totalPrice ? parseFloat(totalPrice) : null,

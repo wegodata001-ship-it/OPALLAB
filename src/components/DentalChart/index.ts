@@ -17,3 +17,12 @@ export {
   UPPER_JAW_NUMBERS,
   LOWER_JAW_NUMBERS,
 } from "./toothData";
+export {
+  computeBridgeGroups,
+  formatBridgeLabel,
+  resolveBridgeGroups,
+  toggleBridgePair,
+  pruneBridgeGroups,
+  listArchAdjacentPairs,
+} from "@/lib/orders/bridge-groups";
+export { getArchRange, sameArch } from "./tooth-range";

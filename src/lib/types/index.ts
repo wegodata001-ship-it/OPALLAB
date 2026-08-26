@@ -12,20 +12,25 @@ export type UserRole =
 
 export type Gender = "MALE" | "FEMALE";
 
-export type MaterialType =
-  | "TEMPORARY"
-  | "DENTURE"
-  | "PFM"
-  | "ZIRCONIA"
-  | "TITANIUM"
-  | "MODEL";
+export type MaterialType = string;
 
-export type WorkType =
-  | "SCREWED"
-  | "ABUTMENTS"
-  | "MOCKUP"
-  | "BAR"
-  | "NIGHT_GUARD_WHITENING_MILLED";
+export type WorkType = string;
+
+export type OrderCatalogCategory = "MATERIAL" | "WORK_TYPE" | "SHADE";
+
+export interface OrderCatalogOption {
+  id: string;
+  category: OrderCatalogCategory;
+  code: string;
+  label: string;
+  color?: string | null;
+  group?: string | null;
+  sortOrder: number;
+  isActive: boolean;
+  isSystem: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 export type OrderStatus =
   | "DRAFT"
@@ -39,7 +44,8 @@ export type OrderStatus =
   | "PACKAGING"
   | "SHIPPED"
   | "DELIVERED"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "DELETED";
 
 export type InventoryType = string;
 
@@ -48,6 +54,18 @@ export interface InventoryCategory {
   name: string;
   color: string;
   isSystem: boolean;
+}
+
+/** Admin-managed splint / night-guard product catalog. */
+export interface SplintType {
+  id: string;
+  code: string;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+  isSystem: boolean;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export type FileType =
@@ -188,6 +206,12 @@ export interface Order {
   materials: MaterialType[];
   workTypes: WorkType[];
   selectedTeeth: number[];
+  /** Auto-detected contiguous FDI bridge groups, e.g. [[13,14,15]]. */
+  bridgeGroups: number[][];
+  /** Selected splint catalog option ids (multi-select). */
+  splintTypeIds: string[];
+  /** Legacy primary id — mirrors splintTypeIds[0]. */
+  splintTypeId?: string | null;
   description?: string | null;
   status: OrderStatus;
   assignedDesignerId?: string | null;
@@ -196,6 +220,10 @@ export interface Order {
   totalPrice?: number | null;
   notes?: string | null;
   completedStages: Partial<Record<OrderStatus, StageCompletion>>;
+  deletedAt?: Date | null;
+  deletedBy?: string | null;
+  deleteReason?: string | null;
+  statusBeforeDelete?: OrderStatus | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -428,6 +456,10 @@ export interface OrderWithRelations extends Order {
   files: OrderFile[];
   statusHistory: OrderStatusHistory[];
   shipment?: Shipment | null;
+  /** Primary / first selected splint (legacy). */
+  splintType?: SplintType | null;
+  /** All selected splint types resolved for display. */
+  splintTypes?: SplintType[];
 }
 
 export interface CreateOrderInput {
@@ -440,6 +472,10 @@ export interface CreateOrderInput {
   materials?: MaterialType[];
   workTypes?: WorkType[];
   selectedTeeth?: number[];
+  bridgeGroups?: number[][];
+  splintTypeIds?: string[];
+  /** @deprecated Prefer splintTypeIds — still accepted for older clients. */
+  splintTypeId?: string | null;
   description?: string;
   completionDate?: Date;
   totalPrice?: number;
@@ -456,6 +492,10 @@ export interface UpdateOrderInput {
   materials?: MaterialType[];
   workTypes?: WorkType[];
   selectedTeeth?: number[];
+  bridgeGroups?: number[][];
+  splintTypeIds?: string[];
+  /** @deprecated Prefer splintTypeIds — still accepted for older clients. */
+  splintTypeId?: string | null;
   description?: string | null;
   completionDate?: Date | null;
   totalPrice?: number | null;

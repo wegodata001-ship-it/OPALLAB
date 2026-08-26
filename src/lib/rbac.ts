@@ -5,7 +5,7 @@
 import { AppError } from "@/lib/errors/app-error";
 import { writeAuditLog } from "@/lib/audit-log";
 import { requireSessionUserId } from "@/lib/auth/session";
-import { canAccessModule, canCreateOrders, canEditOrders, canManageSettings, type AppModule } from "@/lib/permissions";
+import { canAccessModule, canCreateOrders, canEditOrders, canManageOrderCatalog, canManageSettings, type AppModule } from "@/lib/permissions";
 import {
   getStagesForRole,
   hasStageCompletionRole,
@@ -17,6 +17,7 @@ import {
   getUserRoles,
   isDoctorUser,
   isSystemAdminUser,
+  canDeleteOrders,
   PRODUCTION_ROLES,
   userHasAnyRole,
   userHasRole,
@@ -106,6 +107,13 @@ export async function assertCanEditOrder(user: User): Promise<void> {
   }
 }
 
+/** Soft delete / restore / permanent delete — ADMIN & OWNER only. */
+export async function assertCanDeleteOrder(user: User, action = "ORDER_DELETE"): Promise<void> {
+  if (!canDeleteOrders(user)) {
+    await forbid(user, action, "רק מנהל מערכת יכול למחוק הזמנות");
+  }
+}
+
 /**
  * Free-form status changes — Owner / Admin / Secretary.
  * Packaging may only set PACKAGING / SHIPPED (shipping desk).
@@ -165,6 +173,13 @@ export async function assertCanManageShipments(user: User): Promise<void> {
 export async function assertCanManageLabSettings(user: User): Promise<void> {
   if (!canManageSettings(user)) {
     await forbid(user, "LAB_SETTINGS", "אין הרשאה לערוך הגדרות מעבדה");
+  }
+}
+
+/** ADMIN / OWNER only — order form catalog (materials, work types, shades). */
+export async function assertCanManageOrderCatalog(user: User): Promise<void> {
+  if (!canManageOrderCatalog(user)) {
+    await forbid(user, "ORDER_CATALOG", "ניהול אפשרויות טופס הזמנה זמין למנהל מערכת בלבד");
   }
 }
 

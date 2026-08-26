@@ -43,6 +43,13 @@ enum WorkType {
   NIGHT_GUARD_WHITENING_MILLED
 }
 
+/// Admin-managed options for order form chips (materials / work types / shades).
+enum OrderCatalogCategory {
+  MATERIAL
+  WORK_TYPE
+  SHADE
+}
+
 enum OrderStatus {
   DRAFT
   RECEIVED
@@ -56,6 +63,7 @@ enum OrderStatus {
   SHIPPED
   DELIVERED
   CANCELLED
+  DELETED
 }
 
 enum InventoryType {
@@ -160,6 +168,9 @@ model User {
   assignedOrders     Order[]              @relation("AssignedDesigner")
   processingOrders   Order[]              @relation("ProcessingEmployee")
   finishOrders       Order[]              @relation("FinishEmployee")
+  deletedOrders      Order[]              @relation("OrderDeletedBy")
+  calendarEventsCreated CalendarEvent[]   @relation("CalendarEventCreatedBy")
+  calendarEventsOwned   CalendarEvent[]   @relation("CalendarEventOwner")
   statusChanges      OrderStatusHistory[]
   attendanceRecords  AttendanceRecord[]
   trustedDevices     TrustedDevice[]
@@ -215,6 +226,7 @@ model Doctor {
   user     User?     @relation(fields: [userId], references: [id])
   orders   Order[]
   payments Payment[]
+  calendarEvents CalendarEvent[]
 
   @@index([name])
   @@index([paymentStatus])
@@ -241,6 +253,7 @@ model Patient {
   updatedAt DateTime @updatedAt
 
   orders Order[]
+  calendarEvents CalendarEvent[]
 
   @@index([name])
 }
@@ -253,9 +266,17 @@ model Order {
   entryDate            DateTime       @default(now())
   completionDate       DateTime?
   shade                String?
-  materials            MaterialType[]
-  workTypes            WorkType[]
+  /// Codes from OrderCatalogOption (MATERIAL) — stored as text for admin-extensible catalog.
+  materials            String[]
+  /// Codes from OrderCatalogOption (WORK_TYPE) — stored as text for admin-extensible catalog.
+  workTypes            String[]
   selectedTeeth        Int[]
+  /// Contiguous FDI bridge groups, e.g. [[13,14,15],[21,22]]
+  bridgeGroups         Json           @default("[]")
+  /// Selected splint catalog ids (multi-select). Legacy single FK kept in sync as first id.
+  splintTypeIds        String[]       @default([])
+  /// Primary / legacy single relation — always equals splintTypeIds[0] when present.
+  splintTypeId         String?
   description          String?
   status               OrderStatus    @default(RECEIVED)
   assignedDesignerId   String?
@@ -264,6 +285,11 @@ model Order {
   totalPrice           Float?
   notes                String?
   completedStages      Json           @default("{}")
+  /// Soft-delete metadata (status = DELETED). Permanent delete clears the row.
+  deletedAt            DateTime?
+  deletedBy            String?
+  deleteReason         String?
+  statusBeforeDelete   OrderStatus?
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -272,16 +298,21 @@ model Order {
   assignedDesigner   User?                @relation("AssignedDesigner", fields: [assignedDesignerId], references: [id])
   processingEmployee User?                @relation("ProcessingEmployee", fields: [processingEmployeeId], references: [id])
   finishEmployee     User?                @relation("FinishEmployee", fields: [finishEmployeeId], references: [id])
+  deletedByUser      User?                @relation("OrderDeletedBy", fields: [deletedBy], references: [id])
+  splintType         SplintType?          @relation(fields: [splintTypeId], references: [id])
   files              OrderFile[]
   statusHistory      OrderStatusHistory[]
   shipment           Shipment?
   inventoryUsages    InventoryUsage[]
   payments           Payment[]
+  calendarEvents     CalendarEvent[]
 
   @@index([status])
   @@index([doctorId])
   @@index([entryDate])
   @@index([createdAt])
+  @@index([deletedAt])
+  @@index([splintTypeId])
 }
 
 model OrderFile {
@@ -340,6 +371,42 @@ model InventoryCategory {
   isSystem Boolean @default(false)
 
   @@index([isSystem])
+}
+
+/// Admin-managed catalog of order-form options (materials, work types, shades).
+model OrderCatalogOption {
+  id        String               @id @default(cuid())
+  category  OrderCatalogCategory
+  code      String
+  label     String
+  /// Hex color for shade swatches (optional).
+  color     String?
+  /// Shade group: A | B | C | D | BL
+  group     String?
+  sortOrder Int                  @default(0)
+  isActive  Boolean              @default(true)
+  isSystem  Boolean              @default(false)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  @@unique([category, code])
+  @@index([category, isActive, sortOrder])
+}
+
+/// Admin-managed catalog of splint / night-guard product types (chips on orders).
+model SplintType {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  isSystem  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[]
+
+  @@index([isActive, sortOrder])
 }
 
 model Warehouse {
@@ -534,4 +601,71 @@ model AuditLog {
   @@index([entityType, entityId, createdAt])
   @@index([userId, createdAt])
   @@index([action, createdAt])
+}
+
+/// Manager Calendar V1 — modular calendar engine (calendarKey allows future staff/courier calendars).
+enum CalendarEventType {
+  DOCTOR_MEETING
+  NEW_CLIENT
+  DELIVERY
+  PICKUP
+  TASK
+  VACATION
+  BLOCKED
+  REVIEW
+  TEAM_MEETING
+  REMINDER
+}
+
+enum CalendarEventStatus {
+  CONFIRMED
+  PENDING
+  DONE
+  CANCELLED
+  NO_SHOW
+  RESCHEDULED
+}
+
+model CalendarEvent {
+  id            String              @id @default(cuid())
+  /// Future multi-calendar: "manager" | "user:{id}" | "dept:cad" etc.
+  calendarKey   String              @default("manager")
+  title         String
+  description   String?
+  location      String?
+  type          CalendarEventType
+  status        CalendarEventStatus @default(CONFIRMED)
+  color         String?
+  startsAt      DateTime
+  endsAt        DateTime
+  allDay        Boolean             @default(false)
+  /// Auto-created from orders/shipments — secretary cannot delete.
+  isSystem      Boolean             @default(false)
+  notes         String?
+  phone         String?
+  patientName   String?
+  doctorName    String?
+  orderId       String?
+  doctorId      String?
+  patientId     String?
+  createdById   String?
+  ownerUserId   String?
+  /// Simple recurrence: { freq: "DAILY"|"WEEKLY"|"MONTHLY"|"YEARLY", until?: ISO, count?: number, interval?: number }
+  recurrence    Json?
+  /// Reminders: [{ minutesBefore: 10|30|60|1440|10080, channel: "APP"|"WHATSAPP"|"EMAIL" }]
+  reminders     Json                @default("[]")
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  doctor    Doctor?  @relation(fields: [doctorId], references: [id], onDelete: SetNull)
+  patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  createdBy User?    @relation("CalendarEventCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  owner     User?    @relation("CalendarEventOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  @@index([calendarKey, startsAt])
+  @@index([startsAt, endsAt])
+  @@index([type, status])
+  @@index([orderId])
+  @@index([doctorId])
 }

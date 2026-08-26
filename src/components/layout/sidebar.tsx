@@ -17,6 +17,8 @@ import {
   UserCircle,
   ClipboardClock,
   CalendarDays,
+  Trash2,
+  Calendar,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/providers/AppProvider";
@@ -36,6 +38,8 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: "/dashboard", label: "לוח בקרה", icon: LayoutDashboard, module: "dashboard" },
   { href: "/orders", label: "הזמנות", icon: ClipboardList, module: "orders" },
+  { href: "/calendar", label: "יומן מנהל", icon: Calendar, module: "calendar" },
+  { href: "/orders/deleted", label: "הזמנות שנמחקו", icon: Trash2, module: "deleted-orders" },
   { href: "/workflow", label: "מעקב ייצור", icon: Workflow, module: "workflow" },
   { href: "/my-work", label: "העבודה שלי", icon: UserCircle, module: "my-work" },
   { href: "/my-attendance", label: "הנוכחות שלי", icon: CalendarDays, module: "my-attendance" },
@@ -73,7 +77,11 @@ export function Sidebar() {
       <nav className="flex-1 py-4 px-3 space-y-0.5">
         {filteredNav.map((item) => {
           const Icon = item.icon;
-          const active = pathname === item.href || pathname.startsWith(item.href + "/");
+          const active =
+            item.href === "/orders"
+              ? pathname === "/orders" ||
+                (pathname.startsWith("/orders/") && !pathname.startsWith("/orders/deleted"))
+              : pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}

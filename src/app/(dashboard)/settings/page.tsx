@@ -14,8 +14,9 @@ import { cn } from "@/lib/utils";
 import { RoleMultiSelect } from "@/components/settings/role-multi-select";
 import { DoctorFormModal } from "@/components/settings/doctor-form-modal";
 import { SystemResetPanel } from "@/components/settings/system-reset-panel";
+import { SplintTypesSettingsPanel } from "@/components/settings/splint-types-settings-panel";
 import { getUserRoles, primaryRole } from "@/lib/user-roles";
-import { UserPlus, Stethoscope, Truck, Pencil, Trash2 } from "lucide-react";
+import { UserPlus, Stethoscope, Truck, Pencil, Trash2, Shield } from "lucide-react";
 
 type DeleteTarget =
   | { kind: "employee"; id: string; name: string }
@@ -30,7 +31,7 @@ export default function SettingsPage() {
     deleteDoctor,
   } = useApp();
 
-  const [tab, setTab] = useState<"employees" | "doctors" | "couriers">("employees");
+  const [tab, setTab] = useState<"employees" | "doctors" | "couriers" | "splints">("employees");
   const [doctorModal, setDoctorModal] = useState<null | { mode: "create" } | { mode: "edit"; doctor: Doctor }>(null);
 
   const [newEmp, setNewEmp] = useState({
@@ -157,6 +158,7 @@ export default function SettingsPage() {
           { key: "employees" as const, label: "עובדים", icon: UserPlus },
           { key: "doctors" as const, label: "רופאים", icon: Stethoscope },
           { key: "couriers" as const, label: "שליחים", icon: Truck },
+          { key: "splints" as const, label: "סוגי סדים", icon: Shield },
         ]).map(({ key, label, icon: Icon }) => (
           <button key={key} onClick={() => setTab(key)} className={cn("flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium", tab === key ? "bg-opal-gold text-white" : "bg-white border")}>
             <Icon className="h-4 w-4" />{label}
@@ -444,6 +446,8 @@ export default function SettingsPage() {
           <Button onClick={() => { if (editCourier) void updateCourier(editCourier.id, editCourierForm).then(() => setEditCourier(null)); }} className="w-full">שמירה</Button>
         </div>
       </Modal>
+
+      {tab === "splints" && <SplintTypesSettingsPanel />}
 
       <SystemResetPanel />
     </>
