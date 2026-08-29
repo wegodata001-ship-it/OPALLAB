@@ -17,7 +17,7 @@ export type MaterialType = string;
 
 export type WorkType = string;
 
-export type OrderCatalogCategory = "MATERIAL" | "WORK_TYPE" | "SHADE";
+export type OrderCatalogCategory = "MATERIAL" | "WORK_TYPE" | "SHADE" | "BILLABLE";
 
 export interface OrderCatalogOption {
   id: string;
@@ -32,6 +32,28 @@ export interface OrderCatalogOption {
   createdAt: Date;
   updatedAt: Date;
 }
+
+export interface DoctorPrice {
+  id: string;
+  doctorId: string;
+  catalogOptionId: string;
+  price: number;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  /** Joined from catalog when available */
+  code?: string;
+  label?: string;
+}
+
+export type OrderPriceLine = {
+  catalogOptionId: string;
+  code: string;
+  nameSnapshot: string;
+  unitPrice: number;
+  quantity: number;
+  lineTotal: number;
+};
 
 export type OrderStatus =
   | "DRAFT"
@@ -219,6 +241,8 @@ export interface Order {
   processingEmployeeId?: string | null;
   finishEmployeeId?: string | null;
   totalPrice?: number | null;
+  /** Priced lines snapshot at order save (historical). */
+  priceLines: OrderPriceLine[];
   notes?: string | null;
   completedStages: Partial<Record<OrderStatus, StageCompletion>>;
   deletedAt?: Date | null;
@@ -480,6 +504,7 @@ export interface CreateOrderInput {
   description?: string;
   completionDate?: Date;
   totalPrice?: number;
+  priceLines?: OrderPriceLine[];
 }
 
 export interface UpdateOrderInput {
@@ -500,6 +525,7 @@ export interface UpdateOrderInput {
   description?: string | null;
   completionDate?: Date | null;
   totalPrice?: number | null;
+  priceLines?: OrderPriceLine[];
   notes?: string | null;
 }
 

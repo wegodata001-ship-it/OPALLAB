@@ -4,6 +4,7 @@ export const CATALOG_CATEGORY_LABELS: Record<OrderCatalogCategory, string> = {
   MATERIAL: "סוג חומר",
   WORK_TYPE: "סוג עבודה",
   SHADE: "צבע / Shade",
+  BILLABLE: "פריט מחירון",
 };
 
 /** Legacy hardcoded labels — fallback for historic codes missing from catalog. */

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { OrderWithRelations, MaterialType, WorkType, Gender } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
@@ -10,14 +10,23 @@ import { ShadePicker } from "@/components/orders/shade-picker";
 import { TelegramOrderButton } from "@/components/orders/telegram-order-button";
 import { SplintTypeSelect } from "@/components/orders/splint-type-select";
 import { CatalogChipField } from "@/components/orders/catalog-chip-field";
+import { OrderPricePanel } from "@/components/orders/order-price-panel";
 import { GENDER_LABELS } from "@/lib/constants/labels";
 import { syncWorkTypesWithSplint } from "@/lib/orders/splint-types";
+import { useDoctorOrderPricing } from "@/hooks/use-doctor-order-pricing";
 import { useApp } from "@/providers/AppProvider";
 import { Pencil, X, Save } from "lucide-react";
 
 interface OrderEditFormProps {
   order: OrderWithRelations;
   onDone: () => void;
+}
+
+function sameStringArray(a: string[], b: string[]) {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((v, i) => v === sb[i]);
 }
 
 export function OrderEditForm({ order, onDone }: OrderEditFormProps) {
@@ -46,6 +55,54 @@ export function OrderEditForm({ order, onDone }: OrderEditFormProps) {
   const [notes, setNotes] = useState(order.notes ?? "");
 
   const matched = doctors.find((d) => d.name.trim() === doctorName.trim());
+  const resolvedDoctorId = matched?.id ?? order.doctorId ?? "";
+
+  const originalSplintIds = order.splintTypeIds?.length
+    ? order.splintTypeIds
+    : order.splintTypeId
+      ? [order.splintTypeId]
+      : [];
+
+  const compositionChanged = useMemo(() => {
+    return (
+      resolvedDoctorId !== (order.doctorId ?? "") ||
+      !sameStringArray(materials, order.materials) ||
+      !sameStringArray(workTypes, order.workTypes) ||
+      !sameStringArray(splintTypeIds, originalSplintIds)
+    );
+  }, [
+    resolvedDoctorId,
+    order.doctorId,
+    materials,
+    order.materials,
+    workTypes,
+    order.workTypes,
+    splintTypeIds,
+    originalSplintIds,
+  ]);
+
+  const pricing = useDoctorOrderPricing({
+    doctorId: resolvedDoctorId,
+    materials,
+    workTypes,
+    splintTypeIds,
+  });
+
+  useEffect(() => {
+    if (!compositionChanged) {
+      setTotalPrice(order.totalPrice?.toString() ?? "");
+      return;
+    }
+    if (!pricing.hasSelections) return;
+    if (pricing.total != null) setTotalPrice(String(pricing.total));
+    else setTotalPrice("");
+  }, [
+    compositionChanged,
+    pricing.hasSelections,
+    pricing.total,
+    pricing.missing.length,
+    order.totalPrice,
+  ]);
 
   const onSplintTypeChange = (ids: string[]) => {
     setSplintTypeIds(ids);
@@ -69,6 +126,7 @@ export function OrderEditForm({ order, onDone }: OrderEditFormProps) {
       description: description || null,
       completionDate: completionDate ? new Date(completionDate) : null,
       totalPrice: totalPrice ? parseFloat(totalPrice) : null,
+      ...(compositionChanged ? { priceLines: pricing.lines } : {}),
       notes: notes || null,
     });
     onDone();
@@ -101,8 +159,18 @@ export function OrderEditForm({ order, onDone }: OrderEditFormProps) {
             </div>
           </div>
           <div><Label>תאריך סיום</Label><Input type="date" value={completionDate} onChange={(e) => setCompletionDate(e.target.value)} /></div>
-          <div><Label>מחיר ₪</Label><Input type="number" value={totalPrice} onChange={(e) => setTotalPrice(e.target.value)} /></div>
+          <div>
+            <Label>מחיר ₪</Label>
+            <Input type="number" value={totalPrice} onChange={(e) => setTotalPrice(e.target.value)} />
+          </div>
         </div>
+        <OrderPricePanel
+          pricing={pricing}
+          doctorId={resolvedDoctorId || undefined}
+          useSnapshot={!compositionChanged}
+          snapshotLines={order.priceLines}
+          snapshotTotal={order.totalPrice}
+        />
         <ShadePicker value={shade} onChange={setShade} />
         <CatalogChipField
           category="MATERIAL"

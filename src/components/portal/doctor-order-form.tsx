@@ -14,8 +14,10 @@ import {
 import { FmSaveUploadHint } from "@/components/file-manager-v2/fm-global-progress";
 import { TelegramOrderButton } from "@/components/orders/telegram-order-button";
 import { CatalogChipField } from "@/components/orders/catalog-chip-field";
+import { OrderPricePanel } from "@/components/orders/order-price-panel";
 import { useApp } from "@/providers/AppProvider";
 import { useOrderCreateDraft } from "@/hooks/use-order-create-draft";
+import { useDoctorOrderPricing } from "@/hooks/use-doctor-order-pricing";
 import { GENDER_LABELS } from "@/lib/constants/labels";
 import { syncWorkTypesWithSplint } from "@/lib/orders/splint-types";
 import { SplintTypeSelect } from "@/components/orders/splint-type-select";
@@ -49,6 +51,13 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
   const [uploadState, setUploadState] = useState<FmUploadAggregate | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  const pricing = useDoctorOrderPricing({
+    doctorId,
+    materials,
+    workTypes,
+    splintTypeIds,
+  });
 
   const draftKey = `doctor-order-${doctorId}`;
   const draft = useOrderCreateDraft(draftKey, { doctorId, enabled: true });
@@ -180,6 +189,8 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
       bridgeGroups,
       description: description || undefined,
       completionDate: completionDate ? new Date(completionDate) : undefined,
+      totalPrice: pricing.total ?? undefined,
+      priceLines: pricing.lines,
     });
 
     if (!order?.id) {
@@ -296,6 +307,8 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
               <SplintTypeSelect value={splintTypeIds} onChange={onSplintTypeChange} />
             </div>
           </div>
+
+          <OrderPricePanel pricing={pricing} doctorId={doctorId} />
 
           <div>
             <Label>מבנה שיניים</Label>

@@ -15,6 +15,7 @@ import type {
   User as PrismaUser,
 } from "@prisma/client";
 import { normalizeSplintTypeIds, primarySplintTypeId } from "@/lib/orders/splint-types";
+import { parsePriceLines } from "@/lib/orders/doctor-pricing";
 import type {
   AttendanceRecord,
   Courier,
@@ -154,6 +155,9 @@ export function mapOrder(order: PrismaOrder): Order {
     bridgeGroups: stored,
     splintTypeIds,
     splintTypeId: primarySplintTypeId(splintTypeIds),
+    priceLines: parsePriceLines(
+      "priceLines" in order ? (order as { priceLines?: unknown }).priceLines : [],
+    ),
     completedStages: parseCompletedStages(order.completedStages),
   };
 }

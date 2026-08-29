@@ -42,6 +42,8 @@ import type { MaterialType, WorkType, Gender, OrderStatus, DateRange } from "@/l
 import { Search, Plus, Upload, List, UserPlus } from "lucide-react";
 import { DateRangeFilter } from "@/components/shared/date-range-filter";
 import { DoctorFormModal } from "@/components/settings/doctor-form-modal";
+import { OrderPricePanel } from "@/components/orders/order-price-panel";
+import { useDoctorOrderPricing } from "@/hooks/use-doctor-order-pricing";
 import { cn } from "@/lib/utils";
 
 const STAFF_DRAFT_KEY = "staff-order-create";
@@ -78,6 +80,22 @@ function OrdersContent() {
   const [uploadState, setUploadState] = useState<FmUploadAggregate | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [leaveBusy, setLeaveBusy] = useState(false);
+
+  const pricing = useDoctorOrderPricing({
+    doctorId,
+    materials,
+    workTypes,
+    splintTypeIds,
+  });
+
+  useEffect(() => {
+    if (!doctorId || !pricing.hasSelections) return;
+    if (pricing.total != null) {
+      setTotalPrice(String(pricing.total));
+    } else {
+      setTotalPrice("");
+    }
+  }, [doctorId, pricing.hasSelections, pricing.total, pricing.missing.length]);
 
   const isAdmin = currentUser ? isPrivilegedRole(currentUser) : false;
   const tab = !isAdmin && tabParam === "new" ? "list" : tabParam;
@@ -209,6 +227,7 @@ function OrdersContent() {
         description: description || null,
         completionDate: completionDate ? new Date(completionDate) : null,
         totalPrice: totalPrice ? parseFloat(totalPrice) : null,
+        priceLines: pricing.lines,
       });
     }, 900);
     return () => window.clearTimeout(t);
@@ -228,6 +247,7 @@ function OrdersContent() {
     description,
     completionDate,
     totalPrice,
+    pricing.lines,
     saveDraftFields,
   ]);
 
@@ -283,6 +303,7 @@ function OrdersContent() {
         description: description || undefined,
         completionDate: completionDate ? new Date(completionDate) : undefined,
         totalPrice: totalPrice ? parseFloat(totalPrice) : undefined,
+        priceLines: pricing.lines,
       });
 
     if (!order?.id) {
@@ -566,8 +587,17 @@ function OrdersContent() {
                   </div>
                 </div>
                 <div><Label>תאריך סיום</Label><Input type="date" value={completionDate} onChange={(e) => setCompletionDate(e.target.value)} /></div>
-                <div><Label>מחיר ₪</Label><Input type="number" value={totalPrice} onChange={(e) => setTotalPrice(e.target.value)} /></div>
+                <div>
+                  <Label>מחיר ₪</Label>
+                  <Input
+                    type="number"
+                    value={totalPrice}
+                    onChange={(e) => setTotalPrice(e.target.value)}
+                    placeholder={pricing.missing.length ? "לא הוגדר" : undefined}
+                  />
+                </div>
               </div>
+              <OrderPricePanel pricing={pricing} doctorId={doctorId || undefined} />
               <CatalogChipField
                 category="MATERIAL"
                 title="סוג חומר"
@@ -660,6 +690,7 @@ function OrdersContent() {
                 description: description || null,
                 completionDate: completionDate ? new Date(completionDate) : null,
                 totalPrice: totalPrice ? parseFloat(totalPrice) : null,
+                priceLines: pricing.lines,
               });
               draft.keepAndLeave();
               setLeaveOpen(false);

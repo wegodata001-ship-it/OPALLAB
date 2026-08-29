@@ -127,6 +127,11 @@ export function canManageOrderCatalog(user: Pick<User, "role" | "roles">): boole
   return canDeleteOrders(user);
 }
 
+/** ADMIN / OWNER only — per-doctor price books. */
+export function canManageDoctorPrices(user: Pick<User, "role" | "roles">): boolean {
+  return canManageOrderCatalog(user);
+}
+
 export function getDefaultRoute(user: Pick<User, "role" | "roles">): string {
   if (isDoctorPortalUser(user)) return "/portal";
   if (isAssistantOnlyUser(user) || canAccessModule(user, "assistant-attendance")) {

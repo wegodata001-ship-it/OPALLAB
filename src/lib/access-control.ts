@@ -50,6 +50,7 @@ export function filterSnapshotForUser(snapshot: AppDataSnapshot, user: User): Ap
       auditLogs: [],
       splintTypes: [],
       orderCatalog: [],
+      doctorPrices: [],
     };
   }
 
@@ -80,6 +81,9 @@ export function filterSnapshotForUser(snapshot: AppDataSnapshot, user: User): Ap
         : [],
       warehouses: [],
       auditLogs: [],
+      doctorPrices: doctorId
+        ? (snapshot.doctorPrices ?? []).filter((p) => p.doctorId === doctorId)
+        : [],
     };
   }
 

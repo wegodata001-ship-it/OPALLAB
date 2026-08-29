@@ -4,8 +4,10 @@ import { useEffect, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
-import { useApp } from "@/providers/AppProvider";
 import type { CreateDoctorInput, Doctor, UpdateDoctorInput, User } from "@/lib/types";
+import { DoctorPriceBook } from "@/components/settings/doctor-price-book";
+import { canManageDoctorPrices } from "@/lib/permissions";
+import { useApp } from "@/providers/AppProvider";
 
 export const emptyDoctorForm = {
   name: "",
@@ -40,10 +42,12 @@ export function DoctorFormModal({
   linkedUser,
   onSaved,
 }: DoctorFormModalProps) {
-  const { addDoctor, updateDoctor } = useApp();
+  const { addDoctor, updateDoctor, currentUser } = useApp();
   const [form, setForm] = useState<DoctorFormState>(emptyDoctorForm);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const showPriceBook =
+    mode === "edit" && !!doctor && !!currentUser && canManageDoctorPrices(currentUser);
 
   useEffect(() => {
     if (!open) return;
@@ -134,7 +138,7 @@ export function DoctorFormModal({
       open={open}
       onClose={onClose}
       title={mode === "create" ? "הוספת רופא" : "עריכת רופא"}
-      className="max-w-2xl"
+      className="max-w-2xl max-h-[90vh] overflow-y-auto"
     >
       <div className="space-y-5">
         <section>
@@ -230,6 +234,8 @@ export function DoctorFormModal({
             </label>
           </section>
         )}
+
+        {showPriceBook && doctor && <DoctorPriceBook doctorId={doctor.id} />}
 
         {error && <p className="text-sm text-red-600">{error}</p>}
 

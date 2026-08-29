@@ -44,11 +44,13 @@ enum WorkType {
   NIGHT_GUARD_WHITENING_MILLED
 }
 
-/// Admin-managed options for order form chips (materials / work types / shades).
+/// Admin-managed options for order form chips (materials / work types / shades / billable SKUs).
 enum OrderCatalogCategory {
   MATERIAL
   WORK_TYPE
   SHADE
+  /// Doctor price-book line items (may combine material + work semantics).
+  BILLABLE
 }
 
 enum OrderStatus {
@@ -228,6 +230,7 @@ model Doctor {
   orders   Order[]
   payments Payment[]
   calendarEvents CalendarEvent[]
+  prices   DoctorPrice[]
 
   @@index([name])
   @@index([paymentStatus])
@@ -284,6 +287,8 @@ model Order {
   processingEmployeeId String?
   finishEmployeeId     String?
   totalPrice           Float?
+  /// Snapshot of priced lines at save time — never rewritten when price book changes.
+  priceLines           Json           @default("[]")
   notes                String?
   completedStages      Json           @default("{}")
   /// Soft-delete metadata (status = DELETED). Permanent delete clears the row.
@@ -392,6 +397,26 @@ model OrderCatalogOption {
 
   @@unique([category, code])
   @@index([category, isActive, sortOrder])
+
+  doctorPrices DoctorPrice[]
+}
+
+/// Per-doctor unit price for a BILLABLE catalog option.
+model DoctorPrice {
+  id               String   @id @default(cuid())
+  doctorId         String
+  catalogOptionId  String
+  price            Float
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  doctor        Doctor             @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  catalogOption OrderCatalogOption @relation(fields: [catalogOptionId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorId, catalogOptionId])
+  @@index([doctorId, isActive])
+  @@index([catalogOptionId])
 }
 
 /// Admin-managed catalog of splint / night-guard product types (chips on orders).

@@ -46,6 +46,7 @@ import type {
   AuditLogEntry,
   SplintType,
   OrderCatalogOption,
+  DoctorPrice,
 } from "@/lib/types";
 import { getUserRoles } from "@/lib/user-roles";
 import { useLoading } from "@/providers/LoadingProvider";
@@ -78,6 +79,11 @@ interface AppContextValue {
   warehouses: Warehouse[];
   splintTypes: SplintType[];
   orderCatalog: OrderCatalogOption[];
+  doctorPrices: DoctorPrice[];
+  saveDoctorPrices: (
+    doctorId: string,
+    items: Array<{ catalogOptionId: string; price: number | null }>,
+  ) => Promise<DoctorPrice[]>;
   getOrderById: (id: string) => OrderWithRelations | undefined;
   getOrdersByStatus: (status: OrderStatus) => OrderWithRelations[];
   getOrdersByDoctor: (doctorId: string) => OrderWithRelations[];
@@ -187,6 +193,7 @@ const emptySnapshot: AppDataSnapshot = {
   auditLogs: [],
   splintTypes: [],
   orderCatalog: [],
+  doctorPrices: [],
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -559,6 +566,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [withLoading, refreshInternal],
   );
 
+  const saveDoctorPrices = useCallback(
+    async (
+      doctorId: string,
+      items: Array<{ catalogOptionId: string; price: number | null }>,
+    ) => {
+      return withLoading(async () => {
+        const result = await apiPost<{ prices: DoctorPrice[] }>("/api/doctor-prices", {
+          doctorId,
+          items,
+        });
+        await refreshInternal();
+        return result.prices;
+      }, "שומר מחירון...");
+    },
+    [withLoading, refreshInternal],
+  );
+
   const addPayment = useCallback(async (payment: Omit<Payment, "id" | "createdAt">) => {
     await withLoading(async () => {
       await apiPost("/api/payments", { action: "add", payment });
@@ -721,6 +745,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     warehouses: store.warehouses,
     splintTypes: store.splintTypes ?? [],
     orderCatalog: store.orderCatalog ?? [],
+    doctorPrices: store.doctorPrices ?? [],
+    saveDoctorPrices,
     getOrderById,
     getOrdersByStatus,
     getOrdersByDoctor,

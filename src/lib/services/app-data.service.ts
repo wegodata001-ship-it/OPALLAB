@@ -40,6 +40,8 @@ import type {
   OrderWithRelations,
   Payment,
   PaymentStatus,
+  DoctorPrice,
+  OrderPriceLine,
   Shipment,
   SplintType,
   UndoStageInput,
@@ -51,6 +53,7 @@ import type {
 } from "@/lib/types";
 import { generateDeliveryNote, generateSerialNumber } from "@/lib/utils";
 import { DEFAULT_CATALOG_SEED, slugifyCatalogCode } from "@/lib/orders/order-catalog";
+import { DEFAULT_BILLABLE_SEED, buildPriceLines, resolveBillableCodes } from "@/lib/orders/doctor-pricing";
 import {
   canCompleteStage,
   canUndoStage,
@@ -112,10 +115,23 @@ function cleanSplintDisplayName(name: string): string {
 
 async function ensureDefaultOrderCatalog(): Promise<void> {
   const count = await prisma.orderCatalogOption.count();
-  if (count > 0) return;
+  if (count === 0) {
+    await prisma.orderCatalogOption.createMany({
+      data: DEFAULT_CATALOG_SEED.map((t) => ({
+        ...t,
+        isActive: true,
+        isSystem: true,
+      })),
+      skipDuplicates: true,
+    });
+  }
+  // Always ensure billable SKUs exist (additive — never wipes custom rows).
   await prisma.orderCatalogOption.createMany({
-    data: DEFAULT_CATALOG_SEED.map((t) => ({
-      ...t,
+    data: DEFAULT_BILLABLE_SEED.map((t) => ({
+      category: "BILLABLE" as const,
+      code: t.code,
+      label: t.label,
+      sortOrder: t.sortOrder,
       isActive: true,
       isSystem: true,
     })),
@@ -148,6 +164,43 @@ async function ensureDefaultSplintTypes(): Promise<void> {
       });
     }
   }
+}
+
+/** Server-side price snapshot from doctor price book (never invents 0). */
+async function resolveOrderPriceSnapshot(
+  tx: Prisma.TransactionClient,
+  doctorId: string,
+  materials: string[],
+  workTypes: string[],
+  splintTypeIds: string[],
+): Promise<{ lines: OrderPriceLine[]; total: number | null }> {
+  const [billableRows, priceRows, splintRows] = await Promise.all([
+    tx.orderCatalogOption.findMany({
+      where: { category: "BILLABLE", isActive: true },
+      orderBy: { sortOrder: "asc" },
+    }),
+    tx.doctorPrice.findMany({
+      where: { doctorId, isActive: true },
+    }),
+    tx.splintType.findMany({ select: { id: true, code: true, isActive: true } }),
+  ]);
+
+  const codes = resolveBillableCodes({
+    materials,
+    workTypes,
+    splintTypeIds,
+    splintTypes: splintRows,
+  });
+
+  const pricesByOptionId = new Map(priceRows.map((p) => [p.catalogOptionId, p.price]));
+  const built = buildPriceLines({
+    codes,
+    billableOptions: billableRows.map(mapOrderCatalogOption),
+    pricesByOptionId,
+    quantity: 1,
+  });
+
+  return { lines: built.lines, total: built.total };
 }
 
 function toPrismaAttendanceMethod(method: AttendanceMethod): $Enums.AttendanceMethod {
@@ -183,6 +236,7 @@ export interface AppDataSnapshot {
   auditLogs: AuditLogEntry[];
   splintTypes: SplintType[];
   orderCatalog: OrderCatalogOption[];
+  doctorPrices: DoctorPrice[];
 }
 
 export class AppDataService {
@@ -232,6 +286,7 @@ export class AppDataService {
       warehouses,
       splintTypes,
       orderCatalog,
+      doctorPrices,
     ] = await Promise.all([
       prisma.user.findMany({ orderBy: { name: "asc" } }),
       prisma.doctor.findMany({ orderBy: { name: "asc" } }),
@@ -252,6 +307,11 @@ export class AppDataService {
       prisma.orderCatalogOption.findMany({
         orderBy: [{ category: "asc" }, { sortOrder: "asc" }, { label: "asc" }],
       }),
+      prisma.doctorPrice.findMany({
+        where: { isActive: true },
+        include: { catalogOption: { select: { code: true, label: true } } },
+        orderBy: { updatedAt: "desc" },
+      }),
     ]);
 
     return {
@@ -270,6 +330,17 @@ export class AppDataService {
       auditLogs: [],
       splintTypes: splintTypes.map(mapSplintType),
       orderCatalog: orderCatalog.map(mapOrderCatalogOption),
+      doctorPrices: doctorPrices.map((row) => ({
+        id: row.id,
+        doctorId: row.doctorId,
+        catalogOptionId: row.catalogOptionId,
+        price: row.price,
+        isActive: row.isActive,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        code: row.catalogOption.code,
+        label: row.catalogOption.label,
+      })),
     };
   }
 
@@ -332,6 +403,18 @@ export class AppDataService {
       const splintTypeIds = normalizeSplintTypeIds(input.splintTypeIds, input.splintTypeId);
       const splintTypeId = primarySplintTypeId(splintTypeIds);
       const workTypes = syncWorkTypesWithSplint(input.workTypes ?? [], splintTypeIds);
+      const materials = input.materials ?? [];
+      const snapshot = await resolveOrderPriceSnapshot(
+        tx,
+        doctorId!,
+        materials,
+        workTypes,
+        splintTypeIds,
+      );
+      const priceLines = snapshot.lines.length > 0 ? snapshot.lines : (input.priceLines ?? []);
+      const totalPrice =
+        snapshot.lines.length > 0 ? snapshot.total : (input.totalPrice ?? null);
+
       const order = await tx.order.create({
         data: {
           serialNumber: generateSerialNumber(),
@@ -339,14 +422,15 @@ export class AppDataService {
           patientId: patient.id,
           completionDate: input.completionDate ?? null,
           shade: input.shade ?? null,
-          materials: input.materials ?? [],
+          materials,
           workTypes,
           selectedTeeth,
           bridgeGroups: resolveOrderBridgeGroups(selectedTeeth, input.bridgeGroups) ?? [],
           splintTypeIds,
           splintTypeId,
           description: input.description ?? null,
-          totalPrice: input.totalPrice ?? null,
+          totalPrice,
+          priceLines,
         },
       });
 
@@ -359,14 +443,14 @@ export class AppDataService {
         },
       });
 
-      if (input.totalPrice) {
+      if (totalPrice) {
         await tx.payment.create({
           data: {
             doctorId: doctorId!,
             orderId: order.id,
             serialNumber: order.serialNumber,
             patientName,
-            amount: input.totalPrice,
+            amount: totalPrice,
             type: "CHARGE",
             status: "PENDING",
             description: `חיוב עבודה ${order.serialNumber}`,
@@ -374,7 +458,7 @@ export class AppDataService {
         });
         await tx.doctor.update({
           where: { id: doctorId! },
-          data: { balance: { decrement: input.totalPrice }, updatedAt: now },
+          data: { balance: { decrement: totalPrice }, updatedAt: now },
         });
       }
 
@@ -548,20 +632,33 @@ export class AppDataService {
       const splintTypeIds = normalizeSplintTypeIds(input.splintTypeIds, input.splintTypeId);
       const splintTypeId = primarySplintTypeId(splintTypeIds);
       const workTypes = syncWorkTypesWithSplint(input.workTypes ?? [], splintTypeIds);
+      const materials = input.materials ?? [];
+      const snapshot = await resolveOrderPriceSnapshot(
+        tx,
+        doctorId!,
+        materials,
+        workTypes,
+        splintTypeIds,
+      );
+      const priceLines = snapshot.lines.length > 0 ? snapshot.lines : (input.priceLines ?? []);
+      const totalPrice =
+        snapshot.lines.length > 0 ? snapshot.total : (input.totalPrice ?? null);
+
       const order = await tx.order.update({
         where: { id: existing.id },
         data: {
           doctorId: doctorId!,
           completionDate: input.completionDate ?? null,
           shade: input.shade ?? null,
-          materials: input.materials ?? [],
+          materials,
           workTypes,
           selectedTeeth,
           bridgeGroups: resolveOrderBridgeGroups(selectedTeeth, input.bridgeGroups) ?? [],
           splintTypeIds,
           splintTypeId,
           description: input.description ?? null,
-          totalPrice: input.totalPrice ?? null,
+          totalPrice,
+          priceLines,
           status: finalStatus,
           entryDate: now,
           updatedAt: now,
@@ -596,14 +693,14 @@ export class AppDataService {
         });
       }
 
-      if (input.totalPrice) {
+      if (totalPrice) {
         await tx.payment.create({
           data: {
             doctorId: doctorId!,
             orderId: order.id,
             serialNumber: order.serialNumber,
             patientName,
-            amount: input.totalPrice,
+            amount: totalPrice,
             type: "CHARGE",
             status: "PENDING",
             description: `חיוב עבודה ${order.serialNumber}`,
@@ -611,7 +708,7 @@ export class AppDataService {
         });
         await tx.doctor.update({
           where: { id: doctorId! },
-          data: { balance: { decrement: input.totalPrice }, updatedAt: now },
+          data: { balance: { decrement: totalPrice }, updatedAt: now },
         });
       }
 
@@ -1042,6 +1139,7 @@ export class AppDataService {
           description: input.description !== undefined ? input.description : undefined,
           completionDate: input.completionDate !== undefined ? input.completionDate : undefined,
           totalPrice: input.totalPrice !== undefined ? input.totalPrice : undefined,
+          priceLines: input.priceLines !== undefined ? input.priceLines : undefined,
           notes: input.notes !== undefined ? input.notes : undefined,
           updatedAt: now,
         },
@@ -1904,6 +2002,8 @@ export class AppDataService {
       });
     } else if (existing.category === "SHADE") {
       inUse = await prisma.order.count({ where: { shade: existing.code } });
+    } else if (existing.category === "BILLABLE") {
+      inUse = await prisma.doctorPrice.count({ where: { catalogOptionId: id } });
     }
 
     if (inUse > 0 || existing.isSystem) {
@@ -1916,6 +2016,75 @@ export class AppDataService {
 
     await prisma.orderCatalogOption.delete({ where: { id } });
     return { archived: false };
+  }
+
+  async listDoctorPrices(doctorId?: string): Promise<DoctorPrice[]> {
+    await ensureDefaultOrderCatalog();
+    const rows = await prisma.doctorPrice.findMany({
+      where: {
+        ...(doctorId ? { doctorId } : {}),
+        isActive: true,
+      },
+      include: { catalogOption: { select: { code: true, label: true } } },
+      orderBy: { updatedAt: "desc" },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      doctorId: row.doctorId,
+      catalogOptionId: row.catalogOptionId,
+      price: row.price,
+      isActive: row.isActive,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      code: row.catalogOption.code,
+      label: row.catalogOption.label,
+    }));
+  }
+
+  /** Batch upsert doctor price book. Empty/null price removes that row. */
+  async saveDoctorPrices(
+    doctorId: string,
+    items: Array<{ catalogOptionId: string; price: number | null }>,
+  ): Promise<DoctorPrice[]> {
+    const doctor = await prisma.doctor.findUnique({ where: { id: doctorId } });
+    if (!doctor) throw new AppError("NOT_FOUND", "רופא לא נמצא", 404);
+
+    await prisma.$transaction(async (tx) => {
+      for (const item of items) {
+        const opt = await tx.orderCatalogOption.findUnique({
+          where: { id: item.catalogOptionId },
+        });
+        if (!opt || opt.category !== "BILLABLE") {
+          throw new AppError("VALIDATION_ERROR", "פריט מחירון לא תקין", 400);
+        }
+        if (item.price == null || !Number.isFinite(item.price) || item.price < 0) {
+          await tx.doctorPrice.deleteMany({
+            where: { doctorId, catalogOptionId: item.catalogOptionId },
+          });
+          continue;
+        }
+        await tx.doctorPrice.upsert({
+          where: {
+            doctorId_catalogOptionId: {
+              doctorId,
+              catalogOptionId: item.catalogOptionId,
+            },
+          },
+          create: {
+            doctorId,
+            catalogOptionId: item.catalogOptionId,
+            price: item.price,
+            isActive: true,
+          },
+          update: {
+            price: item.price,
+            isActive: true,
+          },
+        });
+      }
+    });
+
+    return this.listDoctorPrices(doctorId);
   }
 
   async addPayment(payment: Omit<Payment, "id" | "createdAt">): Promise<void> {

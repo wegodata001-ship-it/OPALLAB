@@ -128,7 +128,26 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
             <span className="text-slate-500">צבע</span><span>{order.shade || "—"}</span>
             <span className="text-slate-500">כניסה</span><span>{formatDate(order.entryDate)}</span>
             <span className="text-slate-500">יעד</span><span>{formatDate(order.completionDate)}</span>
-            <span className="text-slate-500">מחיר</span><span className="font-semibold text-opal-gold-dark">{order.totalPrice ? formatCurrency(order.totalPrice) : "—"}</span>
+            <span className="text-slate-500">מחיר</span>
+            <span className="font-semibold text-opal-gold-dark">
+              {order.totalPrice != null ? formatCurrency(order.totalPrice) : "—"}
+            </span>
+            {order.priceLines?.length > 0 && (
+              <>
+                <span className="text-slate-500 col-span-2">פירוט מחיר (Snapshot)</span>
+                <ul className="col-span-2 space-y-1 text-sm">
+                  {order.priceLines.map((line) => (
+                    <li key={`${line.catalogOptionId}-${line.code}`} className="flex justify-between gap-2">
+                      <span>
+                        {line.nameSnapshot}
+                        {line.quantity > 1 ? ` × ${line.quantity}` : ""}
+                      </span>
+                      <span className="tabular-nums">{formatCurrency(line.lineTotal)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
             <span className="text-slate-500 col-span-2">חומרים</span><span className="col-span-2">{materialLabels.join(", ") || "—"}</span>
             <span className="text-slate-500 col-span-2">עבודה</span>
             <span className="col-span-2">
