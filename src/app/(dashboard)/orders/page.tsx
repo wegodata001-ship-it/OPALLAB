@@ -43,7 +43,12 @@ import { Search, Plus, Upload, List, UserPlus } from "lucide-react";
 import { DateRangeFilter } from "@/components/shared/date-range-filter";
 import { DoctorFormModal } from "@/components/settings/doctor-form-modal";
 import { OrderPricePanel } from "@/components/orders/order-price-panel";
-import { useDoctorOrderPricing } from "@/hooks/use-doctor-order-pricing";
+import { useOrderPricingForm } from "@/hooks/use-order-pricing-form";
+import {
+  OTHER_WORK_TYPE_CODE,
+  type OtherWorkKind,
+  type PricingMode,
+} from "@/lib/orders/doctor-pricing";
 import { cn } from "@/lib/utils";
 
 const STAFF_DRAFT_KEY = "staff-order-create";
@@ -76,26 +81,52 @@ function OrdersContent() {
   const [description, setDescription] = useState("");
   const [completionDate, setCompletionDate] = useState("");
   const [totalPrice, setTotalPrice] = useState("");
+  const [otherWorkKind, setOtherWorkKind] = useState<OtherWorkKind | null>(null);
+  const [otherWorkNotes, setOtherWorkNotes] = useState("");
+  const [pricingMode, setPricingMode] = useState<PricingMode>("REGULAR");
+  const [allInXType, setAllInXType] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploadState, setUploadState] = useState<FmUploadAggregate | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [leaveBusy, setLeaveBusy] = useState(false);
 
-  const pricing = useDoctorOrderPricing({
+  const pricing = useOrderPricingForm({
     doctorId,
+    pricingMode,
     materials,
     workTypes,
     splintTypeIds,
+    selectedTeeth,
+    otherWorkKind,
+    allInXType,
   });
 
-  useEffect(() => {
-    if (!doctorId || !pricing.hasSelections) return;
-    if (pricing.total != null) {
-      setTotalPrice(String(pricing.total));
+  const handlePricingModeChange = (mode: PricingMode) => {
+    setPricingMode(mode);
+    if (mode === "ALL_IN_X") {
+      setMaterials([]);
+      setWorkTypes([]);
+      setSplintTypeIds([]);
+      setOtherWorkKind(null);
+      setOtherWorkNotes("");
+    } else if (mode === "OTHER") {
+      setMaterials([]);
+      setWorkTypes([OTHER_WORK_TYPE_CODE]);
+      setSplintTypeIds([]);
+      setAllInXType(null);
     } else {
-      setTotalPrice("");
+      setAllInXType(null);
+      setOtherWorkKind(null);
+      setOtherWorkNotes("");
+      setWorkTypes((prev) => prev.filter((w) => w !== OTHER_WORK_TYPE_CODE));
     }
-  }, [doctorId, pricing.hasSelections, pricing.total, pricing.missing.length]);
+  };
+
+  // Keep legacy string field in sync for draft autosave display.
+  useEffect(() => {
+    if (pricing.finalPrice != null) setTotalPrice(String(pricing.finalPrice));
+    else setTotalPrice("");
+  }, [pricing.finalPrice]);
 
   const isAdmin = currentUser ? isPrivilegedRole(currentUser) : false;
   const tab = !isAdmin && tabParam === "new" ? "list" : tabParam;
@@ -157,7 +188,14 @@ function OrdersContent() {
   const toggleMaterial = (m: MaterialType) =>
     setMaterials((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
   const toggleWorkType = (w: WorkType) =>
-    setWorkTypes((p) => (p.includes(w) ? p.filter((x) => x !== w) : [...p, w]));
+    setWorkTypes((p) => {
+      const next = p.includes(w) ? p.filter((x) => x !== w) : [...p, w];
+      if (!next.includes(OTHER_WORK_TYPE_CODE)) {
+        setOtherWorkKind(null);
+        setOtherWorkNotes("");
+      }
+      return next;
+    });
 
   const onSplintTypeChange = (ids: string[]) => {
     setSplintTypeIds(ids);
@@ -226,8 +264,18 @@ function OrdersContent() {
         bridgeGroups,
         description: description || null,
         completionDate: completionDate ? new Date(completionDate) : null,
-        totalPrice: totalPrice ? parseFloat(totalPrice) : null,
+        totalPrice: pricing.finalPrice,
         priceLines: pricing.lines,
+        priceUnit: pricing.unitPrice,
+        priceQuantity: pricing.quantity,
+        calculatedPrice: pricing.calculatedPrice,
+        priceManuallyEdited: pricing.priceManuallyEdited,
+        pricingMode,
+        allInXType: pricingMode === "ALL_IN_X" ? allInXType : null,
+        pricePerJaw: pricing.pricePerJaw,
+        jawCount: pricing.jawCount,
+        otherWorkKind: pricingMode === "OTHER" ? otherWorkKind : null,
+        otherWorkNotes: otherWorkNotes.trim() || null,
       });
     }, 900);
     return () => window.clearTimeout(t);
@@ -246,8 +294,18 @@ function OrdersContent() {
     bridgeGroups,
     description,
     completionDate,
-    totalPrice,
+    pricing.finalPrice,
     pricing.lines,
+    pricing.unitPrice,
+    pricing.quantity,
+    pricing.calculatedPrice,
+    pricing.priceManuallyEdited,
+    pricing.pricePerJaw,
+    pricing.jawCount,
+    pricingMode,
+    allInXType,
+    otherWorkKind,
+    otherWorkNotes,
     saveDraftFields,
   ]);
 
@@ -265,6 +323,10 @@ function OrdersContent() {
     setDescription("");
     setCompletionDate("");
     setTotalPrice("");
+    setOtherWorkKind(null);
+    setOtherWorkNotes("");
+    setPricingMode("REGULAR");
+    setAllInXType(null);
   };
 
   const saveNewOrder = async (): Promise<Order> => {
@@ -302,8 +364,18 @@ function OrdersContent() {
         bridgeGroups,
         description: description || undefined,
         completionDate: completionDate ? new Date(completionDate) : undefined,
-        totalPrice: totalPrice ? parseFloat(totalPrice) : undefined,
+        totalPrice: pricing.finalPrice ?? undefined,
         priceLines: pricing.lines,
+        priceUnit: pricing.unitPrice,
+        priceQuantity: pricing.quantity,
+        calculatedPrice: pricing.calculatedPrice,
+        priceManuallyEdited: pricing.priceManuallyEdited,
+        pricingMode,
+        allInXType: pricingMode === "ALL_IN_X" ? allInXType : null,
+        pricePerJaw: pricing.pricePerJaw,
+        jawCount: pricing.jawCount,
+        otherWorkKind: pricingMode === "OTHER" ? otherWorkKind : null,
+        otherWorkNotes: otherWorkNotes.trim() || null,
       });
 
     if (!order?.id) {
@@ -587,34 +659,40 @@ function OrdersContent() {
                   </div>
                 </div>
                 <div><Label>תאריך סיום</Label><Input type="date" value={completionDate} onChange={(e) => setCompletionDate(e.target.value)} /></div>
-                <div>
-                  <Label>מחיר ₪</Label>
-                  <Input
-                    type="number"
-                    value={totalPrice}
-                    onChange={(e) => setTotalPrice(e.target.value)}
-                    placeholder={pricing.missing.length ? "לא הוגדר" : undefined}
-                  />
-                </div>
               </div>
-              <OrderPricePanel pricing={pricing} doctorId={doctorId || undefined} />
-              <CatalogChipField
-                category="MATERIAL"
-                title="סוג חומר"
-                catalog={orderCatalog}
-                selected={materials}
-                onToggle={toggleMaterial}
-                onCatalogChanged={refreshQuiet}
+              <OrderPricePanel
+                pricing={pricing}
+                pricingMode={pricingMode}
+                onPricingModeChange={handlePricingModeChange}
+                doctorId={doctorId || undefined}
+                otherWorkKind={otherWorkKind}
+                onOtherWorkKindChange={setOtherWorkKind}
+                otherWorkNotes={otherWorkNotes}
+                onOtherWorkNotesChange={setOtherWorkNotes}
+                allInXType={allInXType}
+                onAllInXTypeChange={setAllInXType}
               />
-              <CatalogChipField
-                category="WORK_TYPE"
-                title="סוג עבודה"
-                catalog={orderCatalog}
-                selected={workTypes}
-                onToggle={toggleWorkType}
-                onCatalogChanged={refreshQuiet}
-              />
-              <SplintTypeSelect value={splintTypeIds} onChange={onSplintTypeChange} />
+              {pricingMode === "REGULAR" && (
+                <>
+                  <CatalogChipField
+                    category="MATERIAL"
+                    title="סוג חומר"
+                    catalog={orderCatalog}
+                    selected={materials}
+                    onToggle={toggleMaterial}
+                    onCatalogChanged={refreshQuiet}
+                  />
+                  <CatalogChipField
+                    category="WORK_TYPE"
+                    title="סוג עבודה"
+                    catalog={orderCatalog}
+                    selected={workTypes}
+                    onToggle={toggleWorkType}
+                    onCatalogChanged={refreshQuiet}
+                  />
+                  <SplintTypeSelect value={splintTypeIds} onChange={onSplintTypeChange} />
+                </>
+              )}
               <DentalChart
                 selectedTeeth={selectedTeeth}
                 onChange={setSelectedTeeth}
@@ -689,8 +767,18 @@ function OrdersContent() {
                 bridgeGroups,
                 description: description || null,
                 completionDate: completionDate ? new Date(completionDate) : null,
-                totalPrice: totalPrice ? parseFloat(totalPrice) : null,
+                totalPrice: pricing.finalPrice,
                 priceLines: pricing.lines,
+                priceUnit: pricing.unitPrice,
+                priceQuantity: pricing.quantity,
+                calculatedPrice: pricing.calculatedPrice,
+                priceManuallyEdited: pricing.priceManuallyEdited,
+                pricingMode,
+                allInXType: pricingMode === "ALL_IN_X" ? allInXType : null,
+                pricePerJaw: pricing.pricePerJaw,
+                jawCount: pricing.jawCount,
+                otherWorkKind: pricingMode === "OTHER" ? otherWorkKind : null,
+                otherWorkNotes: otherWorkNotes.trim() || null,
               });
               draft.keepAndLeave();
               setLeaveOpen(false);

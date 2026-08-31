@@ -55,6 +55,10 @@ export type OrderPriceLine = {
   lineTotal: number;
 };
 
+export type OtherWorkKind = "REWORK_FREE" | "REPAIR_OTHER";
+
+export type PricingMode = "REGULAR" | "ALL_IN_X" | "OTHER";
+
 export type OrderStatus =
   | "DRAFT"
   | "RECEIVED"
@@ -243,6 +247,23 @@ export interface Order {
   totalPrice?: number | null;
   /** Priced lines snapshot at order save (historical). */
   priceLines: OrderPriceLine[];
+  /** Unit price used for calculated total (primary line when single SKU). */
+  priceUnit?: number | null;
+  /** Billing quantity (unique selected teeth) at save. */
+  priceQuantity?: number | null;
+  /** Auto total before manual override. */
+  calculatedPrice?: number | null;
+  /** True when totalPrice differs from calculated due to manual edit. */
+  priceManuallyEdited?: boolean;
+  /** REGULAR | ALL_IN_X | OTHER */
+  pricingMode?: PricingMode;
+  allInXType?: string | null;
+  pricePerJaw?: number | null;
+  jawCount?: number | null;
+  /** OTHER work subtype. */
+  otherWorkKind?: OtherWorkKind | null;
+  /** Free-text notes / repair description for OTHER. */
+  otherWorkNotes?: string | null;
   notes?: string | null;
   completedStages: Partial<Record<OrderStatus, StageCompletion>>;
   deletedAt?: Date | null;
@@ -505,6 +526,16 @@ export interface CreateOrderInput {
   completionDate?: Date;
   totalPrice?: number;
   priceLines?: OrderPriceLine[];
+  priceUnit?: number | null;
+  priceQuantity?: number | null;
+  calculatedPrice?: number | null;
+  priceManuallyEdited?: boolean;
+  pricingMode?: PricingMode;
+  allInXType?: string | null;
+  pricePerJaw?: number | null;
+  jawCount?: number | null;
+  otherWorkKind?: OtherWorkKind | null;
+  otherWorkNotes?: string | null;
 }
 
 export interface UpdateOrderInput {
@@ -526,6 +557,16 @@ export interface UpdateOrderInput {
   completionDate?: Date | null;
   totalPrice?: number | null;
   priceLines?: OrderPriceLine[];
+  priceUnit?: number | null;
+  priceQuantity?: number | null;
+  calculatedPrice?: number | null;
+  priceManuallyEdited?: boolean;
+  pricingMode?: PricingMode;
+  allInXType?: string | null;
+  pricePerJaw?: number | null;
+  jawCount?: number | null;
+  otherWorkKind?: OtherWorkKind | null;
+  otherWorkNotes?: string | null;
   notes?: string | null;
 }
 

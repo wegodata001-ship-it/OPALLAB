@@ -53,7 +53,16 @@ import type {
 } from "@/lib/types";
 import { generateDeliveryNote, generateSerialNumber } from "@/lib/utils";
 import { DEFAULT_CATALOG_SEED, slugifyCatalogCode } from "@/lib/orders/order-catalog";
-import { DEFAULT_BILLABLE_SEED, buildPriceLines, resolveBillableCodes } from "@/lib/orders/doctor-pricing";
+import {
+  DEFAULT_BILLABLE_SEED,
+  DEFAULT_ALL_IN_X_SEED,
+  computeOrderPricing,
+  parseOtherWorkKind,
+  parsePricingMode,
+  resolveFinalPrice,
+  type OtherWorkKind,
+  type PricingMode,
+} from "@/lib/orders/doctor-pricing";
 import {
   canCompleteStage,
   canUndoStage,
@@ -127,7 +136,7 @@ async function ensureDefaultOrderCatalog(): Promise<void> {
   }
   // Always ensure billable SKUs exist (additive — never wipes custom rows).
   await prisma.orderCatalogOption.createMany({
-    data: DEFAULT_BILLABLE_SEED.map((t) => ({
+    data: [...DEFAULT_BILLABLE_SEED, ...DEFAULT_ALL_IN_X_SEED].map((t) => ({
       category: "BILLABLE" as const,
       code: t.code,
       label: t.label,
@@ -135,6 +144,20 @@ async function ensureDefaultOrderCatalog(): Promise<void> {
       isActive: true,
       isSystem: true,
     })),
+    skipDuplicates: true,
+  });
+  // Ensure OTHER work type exists for repair / rework flows.
+  await prisma.orderCatalogOption.createMany({
+    data: [
+      {
+        category: "WORK_TYPE" as const,
+        code: "OTHER",
+        label: "אחר",
+        sortOrder: 50,
+        isActive: true,
+        isSystem: true,
+      },
+    ],
     skipDuplicates: true,
   });
 }
@@ -166,41 +189,94 @@ async function ensureDefaultSplintTypes(): Promise<void> {
   }
 }
 
-/** Server-side price snapshot from doctor price book (never invents 0). */
+/** Server-side price snapshot (REGULAR teeth / ALL_IN_X jaws / OTHER). */
 async function resolveOrderPriceSnapshot(
   tx: Prisma.TransactionClient,
-  doctorId: string,
-  materials: string[],
-  workTypes: string[],
-  splintTypeIds: string[],
-): Promise<{ lines: OrderPriceLine[]; total: number | null }> {
+  input: {
+    doctorId: string;
+    materials: string[];
+    workTypes: string[];
+    splintTypeIds: string[];
+    selectedTeeth: number[];
+    pricingMode?: PricingMode | string | null;
+    allInXType?: string | null;
+    otherWorkKind?: OtherWorkKind | null;
+    repairPrice?: number | null;
+    priceManuallyEdited?: boolean;
+    manualFinalPrice?: number | null;
+  },
+): Promise<{
+  lines: OrderPriceLine[];
+  totalPrice: number | null;
+  calculatedPrice: number | null;
+  priceUnit: number | null;
+  priceQuantity: number;
+  priceManuallyEdited: boolean;
+  pricingMode: PricingMode;
+  otherWorkKind: OtherWorkKind | null;
+  allInXType: string | null;
+  pricePerJaw: number | null;
+  jawCount: number;
+}> {
   const [billableRows, priceRows, splintRows] = await Promise.all([
     tx.orderCatalogOption.findMany({
       where: { category: "BILLABLE", isActive: true },
       orderBy: { sortOrder: "asc" },
     }),
     tx.doctorPrice.findMany({
-      where: { doctorId, isActive: true },
+      where: { doctorId: input.doctorId, isActive: true },
     }),
     tx.splintType.findMany({ select: { id: true, code: true, isActive: true } }),
   ]);
 
-  const codes = resolveBillableCodes({
-    materials,
-    workTypes,
-    splintTypeIds,
-    splintTypes: splintRows,
-  });
-
   const pricesByOptionId = new Map(priceRows.map((p) => [p.catalogOptionId, p.price]));
-  const built = buildPriceLines({
-    codes,
+  let pricingMode = parsePricingMode(input.pricingMode);
+  const otherWorkKind = parseOtherWorkKind(input.otherWorkKind);
+  if (otherWorkKind || input.workTypes.includes("OTHER")) {
+    pricingMode = "OTHER";
+  }
+
+  const computed = computeOrderPricing({
+    pricingMode,
+    materials: pricingMode === "REGULAR" ? input.materials : [],
+    workTypes: pricingMode === "REGULAR" ? input.workTypes : [],
+    splintTypeIds: pricingMode === "REGULAR" ? input.splintTypeIds : [],
+    splintTypes: splintRows,
+    selectedTeeth: input.selectedTeeth,
     billableOptions: billableRows.map(mapOrderCatalogOption),
     pricesByOptionId,
-    quantity: 1,
+    otherWorkKind: pricingMode === "OTHER" ? otherWorkKind : null,
+    repairPrice: input.repairPrice,
+    allInXType: pricingMode === "ALL_IN_X" ? input.allInXType : null,
   });
 
-  return { lines: built.lines, total: built.total };
+  const priceManuallyEdited =
+    computed.mode === "REPAIR_OTHER"
+      ? true
+      : computed.mode === "REWORK_FREE"
+        ? false
+        : Boolean(input.priceManuallyEdited);
+
+  const totalPrice = resolveFinalPrice({
+    calculatedPrice: computed.calculatedPrice,
+    priceManuallyEdited,
+    manualFinalPrice: input.manualFinalPrice,
+    mode: computed.mode,
+  });
+
+  return {
+    lines: computed.lines,
+    totalPrice,
+    calculatedPrice: computed.calculatedPrice,
+    priceUnit: computed.unitPrice,
+    priceQuantity: computed.quantity,
+    priceManuallyEdited,
+    pricingMode: computed.pricingMode,
+    otherWorkKind: pricingMode === "OTHER" ? otherWorkKind : null,
+    allInXType: computed.allInXType,
+    pricePerJaw: computed.pricePerJaw,
+    jawCount: computed.jawCount,
+  };
 }
 
 function toPrismaAttendanceMethod(method: AttendanceMethod): $Enums.AttendanceMethod {
@@ -402,18 +478,38 @@ export class AppDataService {
       const selectedTeeth = input.selectedTeeth ?? [];
       const splintTypeIds = normalizeSplintTypeIds(input.splintTypeIds, input.splintTypeId);
       const splintTypeId = primarySplintTypeId(splintTypeIds);
-      const workTypes = syncWorkTypesWithSplint(input.workTypes ?? [], splintTypeIds);
-      const materials = input.materials ?? [];
-      const snapshot = await resolveOrderPriceSnapshot(
-        tx,
-        doctorId!,
+      let workTypes = syncWorkTypesWithSplint(input.workTypes ?? [], splintTypeIds);
+      let materials = input.materials ?? [];
+      let pricingMode = parsePricingMode(input.pricingMode);
+      const otherWorkKind = parseOtherWorkKind(input.otherWorkKind);
+      if (otherWorkKind) pricingMode = "OTHER";
+      if (pricingMode === "ALL_IN_X") {
+        materials = [];
+        workTypes = [];
+      }
+      if (pricingMode === "OTHER") {
+        if (!workTypes.includes("OTHER")) workTypes = [...workTypes, "OTHER"];
+      }
+      const snapshot = await resolveOrderPriceSnapshot(tx, {
+        doctorId: doctorId!,
         materials,
         workTypes,
-        splintTypeIds,
-      );
-      const priceLines = snapshot.lines.length > 0 ? snapshot.lines : (input.priceLines ?? []);
-      const totalPrice =
-        snapshot.lines.length > 0 ? snapshot.total : (input.totalPrice ?? null);
+        splintTypeIds: pricingMode === "REGULAR" ? splintTypeIds : [],
+        selectedTeeth,
+        pricingMode,
+        allInXType: input.allInXType ?? null,
+        otherWorkKind,
+        repairPrice: otherWorkKind === "REPAIR_OTHER" ? (input.totalPrice ?? null) : null,
+        priceManuallyEdited: input.priceManuallyEdited,
+        manualFinalPrice: input.totalPrice ?? null,
+      });
+      const priceLines =
+        snapshot.lines.length > 0
+          ? snapshot.lines
+          : snapshot.pricingMode !== "REGULAR"
+            ? []
+            : (input.priceLines ?? []);
+      const totalPrice = snapshot.totalPrice;
 
       const order = await tx.order.create({
         data: {
@@ -426,11 +522,21 @@ export class AppDataService {
           workTypes,
           selectedTeeth,
           bridgeGroups: resolveOrderBridgeGroups(selectedTeeth, input.bridgeGroups) ?? [],
-          splintTypeIds,
-          splintTypeId,
+          splintTypeIds: pricingMode === "REGULAR" ? splintTypeIds : [],
+          splintTypeId: pricingMode === "REGULAR" ? splintTypeId : null,
           description: input.description ?? null,
           totalPrice,
           priceLines,
+          priceUnit: snapshot.priceUnit,
+          priceQuantity: snapshot.priceQuantity,
+          calculatedPrice: snapshot.calculatedPrice,
+          priceManuallyEdited: snapshot.priceManuallyEdited,
+          pricingMode: snapshot.pricingMode,
+          allInXType: snapshot.allInXType,
+          pricePerJaw: snapshot.pricePerJaw,
+          jawCount: snapshot.jawCount,
+          otherWorkKind: snapshot.otherWorkKind,
+          otherWorkNotes: input.otherWorkNotes?.trim() || null,
         },
       });
 
@@ -443,7 +549,7 @@ export class AppDataService {
         },
       });
 
-      if (totalPrice) {
+      if (totalPrice != null && totalPrice > 0) {
         await tx.payment.create({
           data: {
             doctorId: doctorId!,
@@ -631,18 +737,38 @@ export class AppDataService {
       const selectedTeeth = input.selectedTeeth ?? [];
       const splintTypeIds = normalizeSplintTypeIds(input.splintTypeIds, input.splintTypeId);
       const splintTypeId = primarySplintTypeId(splintTypeIds);
-      const workTypes = syncWorkTypesWithSplint(input.workTypes ?? [], splintTypeIds);
-      const materials = input.materials ?? [];
-      const snapshot = await resolveOrderPriceSnapshot(
-        tx,
-        doctorId!,
+      let workTypes = syncWorkTypesWithSplint(input.workTypes ?? [], splintTypeIds);
+      let materials = input.materials ?? [];
+      let pricingMode = parsePricingMode(input.pricingMode);
+      const otherWorkKind = parseOtherWorkKind(input.otherWorkKind);
+      if (otherWorkKind) pricingMode = "OTHER";
+      if (pricingMode === "ALL_IN_X") {
+        materials = [];
+        workTypes = [];
+      }
+      if (pricingMode === "OTHER") {
+        if (!workTypes.includes("OTHER")) workTypes = [...workTypes, "OTHER"];
+      }
+      const snapshot = await resolveOrderPriceSnapshot(tx, {
+        doctorId: doctorId!,
         materials,
         workTypes,
-        splintTypeIds,
-      );
-      const priceLines = snapshot.lines.length > 0 ? snapshot.lines : (input.priceLines ?? []);
-      const totalPrice =
-        snapshot.lines.length > 0 ? snapshot.total : (input.totalPrice ?? null);
+        splintTypeIds: pricingMode === "REGULAR" ? splintTypeIds : [],
+        selectedTeeth,
+        pricingMode,
+        allInXType: input.allInXType ?? null,
+        otherWorkKind,
+        repairPrice: otherWorkKind === "REPAIR_OTHER" ? (input.totalPrice ?? null) : null,
+        priceManuallyEdited: input.priceManuallyEdited,
+        manualFinalPrice: input.totalPrice ?? null,
+      });
+      const priceLines =
+        snapshot.lines.length > 0
+          ? snapshot.lines
+          : snapshot.pricingMode !== "REGULAR"
+            ? []
+            : (input.priceLines ?? []);
+      const totalPrice = snapshot.totalPrice;
 
       const order = await tx.order.update({
         where: { id: existing.id },
@@ -654,11 +780,21 @@ export class AppDataService {
           workTypes,
           selectedTeeth,
           bridgeGroups: resolveOrderBridgeGroups(selectedTeeth, input.bridgeGroups) ?? [],
-          splintTypeIds,
-          splintTypeId,
+          splintTypeIds: pricingMode === "REGULAR" ? splintTypeIds : [],
+          splintTypeId: pricingMode === "REGULAR" ? splintTypeId : null,
           description: input.description ?? null,
           totalPrice,
           priceLines,
+          priceUnit: snapshot.priceUnit,
+          priceQuantity: snapshot.priceQuantity,
+          calculatedPrice: snapshot.calculatedPrice,
+          priceManuallyEdited: snapshot.priceManuallyEdited,
+          pricingMode: snapshot.pricingMode,
+          allInXType: snapshot.allInXType,
+          pricePerJaw: snapshot.pricePerJaw,
+          jawCount: snapshot.jawCount,
+          otherWorkKind: snapshot.otherWorkKind,
+          otherWorkNotes: input.otherWorkNotes?.trim() || null,
           status: finalStatus,
           entryDate: now,
           updatedAt: now,
@@ -693,7 +829,7 @@ export class AppDataService {
         });
       }
 
-      if (totalPrice) {
+      if (totalPrice != null && totalPrice > 0) {
         await tx.payment.create({
           data: {
             doctorId: doctorId!,
@@ -1140,6 +1276,17 @@ export class AppDataService {
           completionDate: input.completionDate !== undefined ? input.completionDate : undefined,
           totalPrice: input.totalPrice !== undefined ? input.totalPrice : undefined,
           priceLines: input.priceLines !== undefined ? input.priceLines : undefined,
+          priceUnit: input.priceUnit !== undefined ? input.priceUnit : undefined,
+          priceQuantity: input.priceQuantity !== undefined ? input.priceQuantity : undefined,
+          calculatedPrice: input.calculatedPrice !== undefined ? input.calculatedPrice : undefined,
+          priceManuallyEdited:
+            input.priceManuallyEdited !== undefined ? input.priceManuallyEdited : undefined,
+          pricingMode: input.pricingMode !== undefined ? input.pricingMode : undefined,
+          allInXType: input.allInXType !== undefined ? input.allInXType : undefined,
+          pricePerJaw: input.pricePerJaw !== undefined ? input.pricePerJaw : undefined,
+          jawCount: input.jawCount !== undefined ? input.jawCount : undefined,
+          otherWorkKind: input.otherWorkKind !== undefined ? input.otherWorkKind : undefined,
+          otherWorkNotes: input.otherWorkNotes !== undefined ? input.otherWorkNotes : undefined,
           notes: input.notes !== undefined ? input.notes : undefined,
           updatedAt: now,
         },

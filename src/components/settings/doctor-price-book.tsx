@@ -4,19 +4,61 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { useApp } from "@/providers/AppProvider";
-import { billableOptionsFromCatalog } from "@/lib/orders/doctor-pricing";
+import {
+  allInXBillableOptions,
+  regularBillableOptions,
+} from "@/lib/orders/doctor-pricing";
 import { canManageOrderCatalog } from "@/lib/permissions";
 
 interface DoctorPriceBookProps {
   doctorId: string;
 }
 
-/** Admin-only batch editor for a doctor's billable price list. */
+function PriceRows({
+  options,
+  draft,
+  setDraft,
+}: {
+  options: Array<{ id: string; label: string }>;
+  draft: Record<string, string>;
+  setDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+}) {
+  return (
+    <div className="space-y-2">
+      {options.map((opt) => (
+        <div key={opt.id} className="flex items-center gap-3">
+          <Label className="flex-1 text-sm font-normal text-slate-700 min-w-0 truncate">
+            {opt.label}
+          </Label>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-xs text-slate-400">₪</span>
+            <Input
+              type="number"
+              min={0}
+              step="0.01"
+              className="w-28 text-left"
+              dir="ltr"
+              placeholder="—"
+              value={draft[opt.id] ?? ""}
+              onChange={(e) =>
+                setDraft((prev) => ({ ...prev, [opt.id]: e.target.value }))
+              }
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Admin-only batch editor — regular (per unit) + ALL IN X (per jaw). */
 export function DoctorPriceBook({ doctorId }: DoctorPriceBookProps) {
   const { currentUser, orderCatalog, doctorPrices, saveDoctorPrices } = useApp();
   const canManage = currentUser ? canManageOrderCatalog(currentUser) : false;
 
-  const billable = useMemo(() => billableOptionsFromCatalog(orderCatalog), [orderCatalog]);
+  const regular = useMemo(() => regularBillableOptions(orderCatalog), [orderCatalog]);
+  const allInX = useMemo(() => allInXBillableOptions(orderCatalog), [orderCatalog]);
+  const allOptions = useMemo(() => [...regular, ...allInX], [regular, allInX]);
 
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -25,7 +67,7 @@ export function DoctorPriceBook({ doctorId }: DoctorPriceBookProps) {
 
   useEffect(() => {
     const next: Record<string, string> = {};
-    for (const opt of billable) {
+    for (const opt of allOptions) {
       const row = doctorPrices.find(
         (p) => p.doctorId === doctorId && p.catalogOptionId === opt.id && p.isActive,
       );
@@ -34,7 +76,7 @@ export function DoctorPriceBook({ doctorId }: DoctorPriceBookProps) {
     setDraft(next);
     setMessage("");
     setError("");
-  }, [doctorId, billable, doctorPrices]);
+  }, [doctorId, allOptions, doctorPrices]);
 
   if (!canManage) {
     return (
@@ -47,7 +89,7 @@ export function DoctorPriceBook({ doctorId }: DoctorPriceBookProps) {
     setError("");
     setMessage("");
     try {
-      const items = billable.map((opt) => {
+      const items = allOptions.map((opt) => {
         const raw = (draft[opt.id] ?? "").trim();
         if (!raw) return { catalogOptionId: opt.id, price: null as number | null };
         const n = Number(raw);
@@ -66,40 +108,29 @@ export function DoctorPriceBook({ doctorId }: DoctorPriceBookProps) {
   };
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-3">
+    <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-4">
       <div>
         <p className="text-sm font-semibold text-slate-800">מחירון</p>
-        <p className="text-xs text-slate-500 mt-0.5">
-          מחיר יחידה לפי סוג עבודה לרופא זה. שדה ריק = מחיר לא מוגדר.
-        </p>
+        <p className="text-xs text-slate-500 mt-0.5">שדה ריק = מחיר לא מוגדר.</p>
       </div>
 
-      <div className="space-y-2 max-h-72 overflow-y-auto pe-1">
-        {billable.map((opt) => (
-          <div key={opt.id} className="flex items-center gap-3">
-            <Label className="flex-1 text-sm font-normal text-slate-700 min-w-0 truncate">
-              {opt.label}
-            </Label>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-xs text-slate-400">₪</span>
-              <Input
-                type="number"
-                min={0}
-                step="0.01"
-                className="w-28 text-left"
-                dir="ltr"
-                placeholder="—"
-                value={draft[opt.id] ?? ""}
-                onChange={(e) =>
-                  setDraft((prev) => ({ ...prev, [opt.id]: e.target.value }))
-                }
-              />
-            </div>
-          </div>
-        ))}
-        {billable.length === 0 && (
-          <p className="text-sm text-slate-500">אין פריטי מחירון פעילים בקטלוג.</p>
-        )}
+      <div className="space-y-4 max-h-80 overflow-y-auto pe-1">
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            מחירים רגילים — ליחידה / לשן
+          </p>
+          <PriceRows options={regular} draft={draft} setDraft={setDraft} />
+        </div>
+
+        <div className="border-t border-slate-200 pt-3 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            ALL IN X — מחיר ללסת
+          </p>
+          <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-md px-2 py-1">
+            מחירי ALL IN X הם ללסת אחת. שתי לסתות = מחיר × 2.
+          </p>
+          <PriceRows options={allInX} draft={draft} setDraft={setDraft} />
+        </div>
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}

@@ -15,7 +15,7 @@ import type {
   User as PrismaUser,
 } from "@prisma/client";
 import { normalizeSplintTypeIds, primarySplintTypeId } from "@/lib/orders/splint-types";
-import { parsePriceLines } from "@/lib/orders/doctor-pricing";
+import { parseOtherWorkKind, parsePriceLines, parsePricingMode } from "@/lib/orders/doctor-pricing";
 import type {
   AttendanceRecord,
   Courier,
@@ -158,6 +158,40 @@ export function mapOrder(order: PrismaOrder): Order {
     priceLines: parsePriceLines(
       "priceLines" in order ? (order as { priceLines?: unknown }).priceLines : [],
     ),
+    priceUnit:
+      "priceUnit" in order ? ((order as { priceUnit?: number | null }).priceUnit ?? null) : null,
+    priceQuantity:
+      "priceQuantity" in order
+        ? ((order as { priceQuantity?: number | null }).priceQuantity ?? null)
+        : null,
+    calculatedPrice:
+      "calculatedPrice" in order
+        ? ((order as { calculatedPrice?: number | null }).calculatedPrice ?? null)
+        : null,
+    priceManuallyEdited:
+      "priceManuallyEdited" in order
+        ? Boolean((order as { priceManuallyEdited?: boolean }).priceManuallyEdited)
+        : false,
+    pricingMode: parsePricingMode(
+      "pricingMode" in order ? (order as { pricingMode?: unknown }).pricingMode : "REGULAR",
+    ),
+    allInXType:
+      "allInXType" in order
+        ? ((order as { allInXType?: string | null }).allInXType ?? null)
+        : null,
+    pricePerJaw:
+      "pricePerJaw" in order
+        ? ((order as { pricePerJaw?: number | null }).pricePerJaw ?? null)
+        : null,
+    jawCount:
+      "jawCount" in order ? ((order as { jawCount?: number | null }).jawCount ?? null) : null,
+    otherWorkKind: parseOtherWorkKind(
+      "otherWorkKind" in order ? (order as { otherWorkKind?: unknown }).otherWorkKind : null,
+    ),
+    otherWorkNotes:
+      "otherWorkNotes" in order
+        ? ((order as { otherWorkNotes?: string | null }).otherWorkNotes ?? null)
+        : null,
     completedStages: parseCompletedStages(order.completedStages),
   };
 }

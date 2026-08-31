@@ -132,6 +132,11 @@ export function canManageDoctorPrices(user: Pick<User, "role" | "roles">): boole
   return canManageOrderCatalog(user);
 }
 
+/** ADMIN / OWNER only — edit order final price override. */
+export function canEditOrderFinalPrice(user: Pick<User, "role" | "roles">): boolean {
+  return canEditOrders(user);
+}
+
 export function getDefaultRoute(user: Pick<User, "role" | "roles">): string {
   if (isDoctorPortalUser(user)) return "/portal";
   if (isAssistantOnlyUser(user) || canAccessModule(user, "assistant-attendance")) {

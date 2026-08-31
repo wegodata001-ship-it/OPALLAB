@@ -132,23 +132,118 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
             <span className="font-semibold text-opal-gold-dark">
               {order.totalPrice != null ? formatCurrency(order.totalPrice) : "—"}
             </span>
-            {order.priceLines?.length > 0 && (
+            {(order.priceQuantity != null ||
+              order.calculatedPrice != null ||
+              order.otherWorkKind ||
+              order.pricingMode === "ALL_IN_X" ||
+              (order.priceLines?.length ?? 0) > 0) && (
               <>
-                <span className="text-slate-500 col-span-2">פירוט מחיר (Snapshot)</span>
-                <ul className="col-span-2 space-y-1 text-sm">
-                  {order.priceLines.map((line) => (
-                    <li key={`${line.catalogOptionId}-${line.code}`} className="flex justify-between gap-2">
-                      <span>
-                        {line.nameSnapshot}
-                        {line.quantity > 1 ? ` × ${line.quantity}` : ""}
-                      </span>
-                      <span className="tabular-nums">{formatCurrency(line.lineTotal)}</span>
-                    </li>
-                  ))}
-                </ul>
+                <span className="text-slate-500 col-span-2">פירוט תמחור</span>
+                <div className="col-span-2 space-y-1 text-sm">
+                  {order.pricingMode === "ALL_IN_X" && (
+                    <>
+                      <div className="flex justify-between gap-2">
+                        <span>ALL IN X</span>
+                        <span>{order.allInXType ?? "—"}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span>מחיר ללסת</span>
+                        <span className="tabular-nums">
+                          {order.pricePerJaw != null ? formatCurrency(order.pricePerJaw) : "—"}
+                        </span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span>מספר לסתות</span>
+                        <span className="tabular-nums">{order.jawCount ?? "—"}</span>
+                      </div>
+                    </>
+                  )}
+                  {order.otherWorkKind === "REWORK_FREE" && (
+                    <p>
+                      עבודה חוזרת – ללא חיוב
+                      {order.otherWorkNotes ? (
+                        <span className="block text-slate-500 whitespace-pre-wrap mt-1">
+                          {order.otherWorkNotes}
+                        </span>
+                      ) : null}
+                    </p>
+                  )}
+                  {order.otherWorkKind === "REPAIR_OTHER" && (
+                    <p>
+                      תיקון / עבודה אחרת
+                      {order.otherWorkNotes ? (
+                        <span className="block text-slate-500 whitespace-pre-wrap mt-1">
+                          {order.otherWorkNotes}
+                        </span>
+                      ) : null}
+                    </p>
+                  )}
+                  {(!order.pricingMode || order.pricingMode === "REGULAR") &&
+                    !order.otherWorkKind &&
+                    order.priceLines?.length === 1 && (
+                    <>
+                      <div className="flex justify-between gap-2">
+                        <span>מחיר ליחידה</span>
+                        <span className="tabular-nums">
+                          {formatCurrency(order.priceUnit ?? order.priceLines[0].unitPrice)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span>כמות</span>
+                        <span className="tabular-nums">
+                          {order.priceQuantity ?? order.priceLines[0].quantity}
+                        </span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span>מחיר מחושב</span>
+                        <span className="tabular-nums">
+                          {formatCurrency(
+                            order.calculatedPrice ?? order.priceLines[0].lineTotal,
+                          )}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  {(!order.pricingMode || order.pricingMode === "REGULAR") &&
+                    !order.otherWorkKind &&
+                    (order.priceLines?.length ?? 0) > 1 &&
+                    order.priceLines.map((line) => (
+                      <div
+                        key={`${line.catalogOptionId}-${line.code}`}
+                        className="flex justify-between gap-2"
+                      >
+                        <span>
+                          {line.nameSnapshot} · {formatCurrency(line.unitPrice)} × {line.quantity}
+                        </span>
+                        <span className="tabular-nums">{formatCurrency(line.lineTotal)}</span>
+                      </div>
+                    ))}
+                  {order.calculatedPrice != null &&
+                    (order.pricingMode === "ALL_IN_X" || order.priceManuallyEdited) && (
+                    <div className="flex justify-between gap-2">
+                      <span>מחיר מחושב</span>
+                      <span className="tabular-nums">{formatCurrency(order.calculatedPrice)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between gap-2 border-t border-slate-100 pt-1 font-semibold">
+                    <span>סה״כ</span>
+                    <span className="tabular-nums text-opal-gold-dark">
+                      {order.totalPrice != null ? formatCurrency(order.totalPrice) : "—"}
+                    </span>
+                  </div>
+                  {order.priceManuallyEdited &&
+                    order.calculatedPrice != null &&
+                    order.totalPrice != null &&
+                    order.totalPrice !== order.calculatedPrice && (
+                      <p className="text-xs text-slate-400">
+                        נערך ידנית (מחושב: {formatCurrency(order.calculatedPrice)})
+                      </p>
+                    )}
+                </div>
               </>
             )}
-            <span className="text-slate-500 col-span-2">חומרים</span><span className="col-span-2">{materialLabels.join(", ") || "—"}</span>
+            <span className="text-slate-500 col-span-2">חומרים</span>
+            <span className="col-span-2">{materialLabels.join(", ") || "—"}</span>
             <span className="text-slate-500 col-span-2">עבודה</span>
             <span className="col-span-2">
               {[...workLabels, ...splintLabels].filter(Boolean).join(", ") || "—"}

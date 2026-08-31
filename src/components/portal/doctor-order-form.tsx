@@ -17,7 +17,12 @@ import { CatalogChipField } from "@/components/orders/catalog-chip-field";
 import { OrderPricePanel } from "@/components/orders/order-price-panel";
 import { useApp } from "@/providers/AppProvider";
 import { useOrderCreateDraft } from "@/hooks/use-order-create-draft";
-import { useDoctorOrderPricing } from "@/hooks/use-doctor-order-pricing";
+import { useOrderPricingForm } from "@/hooks/use-order-pricing-form";
+import {
+  OTHER_WORK_TYPE_CODE,
+  type OtherWorkKind,
+  type PricingMode,
+} from "@/lib/orders/doctor-pricing";
 import { GENDER_LABELS } from "@/lib/constants/labels";
 import { syncWorkTypesWithSplint } from "@/lib/orders/splint-types";
 import { SplintTypeSelect } from "@/components/orders/splint-type-select";
@@ -51,13 +56,42 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
   const [uploadState, setUploadState] = useState<FmUploadAggregate | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [otherWorkKind, setOtherWorkKind] = useState<OtherWorkKind | null>(null);
+  const [otherWorkNotes, setOtherWorkNotes] = useState("");
+  const [pricingMode, setPricingMode] = useState<PricingMode>("REGULAR");
+  const [allInXType, setAllInXType] = useState<string | null>(null);
 
-  const pricing = useDoctorOrderPricing({
+  const pricing = useOrderPricingForm({
     doctorId,
+    pricingMode,
     materials,
     workTypes,
     splintTypeIds,
+    selectedTeeth,
+    otherWorkKind,
+    allInXType,
   });
+
+  const handlePricingModeChange = (mode: PricingMode) => {
+    setPricingMode(mode);
+    if (mode === "ALL_IN_X") {
+      setMaterials([]);
+      setWorkTypes([]);
+      setSplintTypeIds([]);
+      setOtherWorkKind(null);
+      setOtherWorkNotes("");
+    } else if (mode === "OTHER") {
+      setMaterials([]);
+      setWorkTypes([OTHER_WORK_TYPE_CODE]);
+      setSplintTypeIds([]);
+      setAllInXType(null);
+    } else {
+      setAllInXType(null);
+      setOtherWorkKind(null);
+      setOtherWorkNotes("");
+      setWorkTypes((prev) => prev.filter((w) => w !== OTHER_WORK_TYPE_CODE));
+    }
+  };
 
   const draftKey = `doctor-order-${doctorId}`;
   const draft = useOrderCreateDraft(draftKey, { doctorId, enabled: true });
@@ -72,7 +106,14 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
   const toggleMaterial = (m: string) =>
     setMaterials((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
   const toggleWorkType = (w: string) =>
-    setWorkTypes((p) => (p.includes(w) ? p.filter((x) => x !== w) : [...p, w]));
+    setWorkTypes((p) => {
+      const next = p.includes(w) ? p.filter((x) => x !== w) : [...p, w];
+      if (!next.includes(OTHER_WORK_TYPE_CODE)) {
+        setOtherWorkKind(null);
+        setOtherWorkNotes("");
+      }
+      return next;
+    });
 
   const onSplintTypeChange = (ids: string[]) => {
     setSplintTypeIds(ids);
@@ -163,6 +204,10 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
     setSelectedTeeth([]);
     setDescription("");
     setCompletionDate("");
+    setOtherWorkKind(null);
+    setOtherWorkNotes("");
+    setPricingMode("REGULAR");
+    setAllInXType(null);
   };
 
   const saveOrder = async (): Promise<Order> => {
@@ -189,8 +234,18 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
       bridgeGroups,
       description: description || undefined,
       completionDate: completionDate ? new Date(completionDate) : undefined,
-      totalPrice: pricing.total ?? undefined,
+      totalPrice: pricing.finalPrice ?? undefined,
       priceLines: pricing.lines,
+      priceUnit: pricing.unitPrice,
+      priceQuantity: pricing.quantity,
+      calculatedPrice: pricing.calculatedPrice,
+      priceManuallyEdited: pricing.priceManuallyEdited,
+      pricingMode,
+      allInXType: pricingMode === "ALL_IN_X" ? allInXType : null,
+      pricePerJaw: pricing.pricePerJaw,
+      jawCount: pricing.jawCount,
+      otherWorkKind: pricingMode === "OTHER" ? otherWorkKind : null,
+      otherWorkNotes: otherWorkNotes.trim() || null,
     });
 
     if (!order?.id) {
@@ -285,30 +340,45 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
             </div>
           </div>
 
-          <CatalogChipField
-            category="MATERIAL"
-            title="סוג חומר"
-            catalog={orderCatalog}
-            selected={materials}
-            onToggle={toggleMaterial}
-            onCatalogChanged={refreshQuiet}
+          <OrderPricePanel
+            pricing={pricing}
+            pricingMode={pricingMode}
+            onPricingModeChange={handlePricingModeChange}
+            doctorId={doctorId}
+            otherWorkKind={otherWorkKind}
+            onOtherWorkKindChange={setOtherWorkKind}
+            otherWorkNotes={otherWorkNotes}
+            onOtherWorkNotesChange={setOtherWorkNotes}
+            allInXType={allInXType}
+            onAllInXTypeChange={setAllInXType}
+            allowFinalEdit={false}
           />
 
-          <div className="space-y-2">
-            <CatalogChipField
-              category="WORK_TYPE"
-              title="סוג עבודה"
-              catalog={orderCatalog}
-              selected={workTypes}
-              onToggle={toggleWorkType}
-              onCatalogChanged={refreshQuiet}
-            />
-            <div className="max-w-xs">
-              <SplintTypeSelect value={splintTypeIds} onChange={onSplintTypeChange} />
-            </div>
-          </div>
-
-          <OrderPricePanel pricing={pricing} doctorId={doctorId} />
+          {pricingMode === "REGULAR" && (
+            <>
+              <CatalogChipField
+                category="MATERIAL"
+                title="סוג חומר"
+                catalog={orderCatalog}
+                selected={materials}
+                onToggle={toggleMaterial}
+                onCatalogChanged={refreshQuiet}
+              />
+              <div className="space-y-2">
+                <CatalogChipField
+                  category="WORK_TYPE"
+                  title="סוג עבודה"
+                  catalog={orderCatalog}
+                  selected={workTypes}
+                  onToggle={toggleWorkType}
+                  onCatalogChanged={refreshQuiet}
+                />
+                <div className="max-w-xs">
+                  <SplintTypeSelect value={splintTypeIds} onChange={onSplintTypeChange} />
+                </div>
+              </div>
+            </>
+          )}
 
           <div>
             <Label>מבנה שיניים</Label>

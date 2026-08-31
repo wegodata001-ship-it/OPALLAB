@@ -22,6 +22,7 @@ export const LEGACY_WORK_TYPE_LABELS: Record<string, string> = {
   ABUTMENTS: "מבנים",
   MOCKUP: "Mockup",
   BAR: "באר",
+  OTHER: "אחר",
   NIGHT_GUARD_WHITENING_MILLED: "סד לילה / הלבנה / חרוט",
 };
 
@@ -44,6 +45,7 @@ export const DEFAULT_CATALOG_SEED: Array<{
   { category: "WORK_TYPE", code: "ABUTMENTS", label: "מבנים", sortOrder: 20 },
   { category: "WORK_TYPE", code: "MOCKUP", label: "Mockup", sortOrder: 30 },
   { category: "WORK_TYPE", code: "BAR", label: "באר", sortOrder: 40 },
+  { category: "WORK_TYPE", code: "OTHER", label: "אחר", sortOrder: 50 },
   // NIGHT_GUARD kept in DB for legacy orders but hidden from chip UI via selectableWorkTypes
 
   { category: "SHADE", code: "A1", label: "A1", color: "#f5e6c8", group: "A", sortOrder: 10 },

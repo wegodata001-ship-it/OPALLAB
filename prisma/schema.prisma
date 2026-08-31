@@ -289,6 +289,26 @@ model Order {
   totalPrice           Float?
   /// Snapshot of priced lines at save time — never rewritten when price book changes.
   priceLines           Json           @default("[]")
+  /// Effective unit price used for the calculated total (primary line when single SKU).
+  priceUnit            Float?
+  /// Billing quantity at save — unique selected teeth count (or 1 for non-tooth / repair).
+  priceQuantity        Int?
+  /// Auto total before manual override (unit × quantity or sum of lines).
+  calculatedPrice      Float?
+  /// True when totalPrice was edited away from calculatedPrice.
+  priceManuallyEdited  Boolean        @default(false)
+  /// Pricing path: REGULAR | ALL_IN_X | OTHER
+  pricingMode          String         @default("REGULAR")
+  /// ALL IN X catalog code (e.g. ALL_IN_X_ZIRCONIA)
+  allInXType           String?
+  /// Snapshot: price per jaw for ALL_IN_X at save time.
+  pricePerJaw          Float?
+  /// Snapshot: number of jaws billed (0–2).
+  jawCount             Int?
+  /// OTHER work subtype: REWORK_FREE | REPAIR_OTHER
+  otherWorkKind        String?
+  /// Free-text description / notes for OTHER work.
+  otherWorkNotes       String?
   notes                String?
   completedStages      Json           @default("{}")
   /// Soft-delete metadata (status = DELETED). Permanent delete clears the row.
