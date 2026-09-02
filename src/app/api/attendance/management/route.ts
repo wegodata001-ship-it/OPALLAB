@@ -132,3 +132,40 @@ export async function GET(request: NextRequest) {
     return jsonError(error);
   }
 }
+
+/** Manual check-in / check-out time edit — ADMIN / OWNER / SECRETARY only. */
+export async function PATCH(request: NextRequest) {
+  try {
+    const userId = await requireSessionUserId();
+    await requireAttendanceManager(userId);
+
+    const body = (await request.json()) as {
+      recordId?: string;
+      field?: "checkIn" | "checkOut";
+      time?: string;
+    };
+
+    if (!body.recordId?.trim()) {
+      return jsonError(new AppError("VALIDATION_ERROR", "חסר מזהה רשומה", 400));
+    }
+    if (body.field !== "checkIn" && body.field !== "checkOut") {
+      return jsonError(new AppError("VALIDATION_ERROR", "שדה לא תקין", 400));
+    }
+    if (!body.time?.trim()) {
+      return jsonError(new AppError("VALIDATION_ERROR", "חסרה שעה", 400));
+    }
+
+    const { editAttendanceTime } = await import(
+      "@/lib/attendance/management/edit-attendance-time"
+    );
+    const record = await editAttendanceTime({
+      recordId: body.recordId.trim(),
+      field: body.field,
+      timeHHmm: body.time.trim(),
+      actorId: userId,
+    });
+    return jsonOk(record);
+  } catch (error) {
+    return jsonError(error);
+  }
+}

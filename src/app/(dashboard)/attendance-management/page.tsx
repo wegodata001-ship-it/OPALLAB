@@ -708,6 +708,10 @@ export default function AttendanceManagementPage() {
         labGeo={labGeo}
         onClose={() => setSelected(null)}
         onDevicesChanged={() => void loadShell()}
+        onAttendanceChanged={() => {
+          void loadRecords();
+          void loadShell();
+        }}
       />
 
       <AttendancePdfPreview

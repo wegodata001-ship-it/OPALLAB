@@ -2680,11 +2680,14 @@ export class AppDataService {
     const doctor = await prisma.doctor.findUnique({ where: { id } });
     if (!doctor) throw new AppError("NOT_FOUND", "רופא לא נמצא", 404);
 
-    const orderCount = await prisma.order.count({ where: { doctorId: id } });
-    if (orderCount > 0) {
+    // Main orders list hides DRAFT + DELETED — only real orders should block deletion.
+    const activeOrderCount = await prisma.order.count({
+      where: { doctorId: id, status: { notIn: ["DRAFT", "DELETED"] } },
+    });
+    if (activeOrderCount > 0) {
       throw new AppError(
         "VALIDATION_ERROR",
-        `לא ניתן למחוק רופא עם ${orderCount} הזמנות קיימות`,
+        `לא ניתן למחוק רופא עם ${activeOrderCount} הזמנות קיימות`,
         409,
       );
     }
@@ -2692,6 +2695,30 @@ export class AppDataService {
     const linkedUserId = doctor.userId;
 
     await prisma.$transaction(async (tx) => {
+      // Abandoned drafts are invisible in the orders list but still FK-block doctor delete.
+      const draftOrders = await tx.order.findMany({
+        where: { doctorId: id, status: "DRAFT" },
+        select: { id: true, patientId: true },
+      });
+      for (const draft of draftOrders) {
+        await tx.inventoryUsage.deleteMany({ where: { orderId: draft.id } });
+        await tx.payment.deleteMany({ where: { orderId: draft.id } });
+        await tx.shipment.deleteMany({ where: { orderId: draft.id } });
+        await tx.orderStatusHistory.deleteMany({ where: { orderId: draft.id } });
+        await tx.orderFile.deleteMany({ where: { orderId: draft.id } });
+        await tx.order.delete({ where: { id: draft.id } });
+        const otherOrders = await tx.order.count({ where: { patientId: draft.patientId } });
+        if (otherOrders === 0) {
+          await tx.patient.delete({ where: { id: draft.patientId } }).catch(() => undefined);
+        }
+      }
+
+      // Soft-deleted orders stay in recycle bin — detach doctor so history remains.
+      await tx.order.updateMany({
+        where: { doctorId: id, status: "DELETED" },
+        data: { doctorId: null },
+      });
+
       await tx.payment.deleteMany({ where: { doctorId: id } });
       await tx.doctor.delete({ where: { id } });
     });

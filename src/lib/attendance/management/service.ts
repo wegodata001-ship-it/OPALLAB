@@ -19,6 +19,7 @@ import {
   detectAttendanceAnomalies,
   methodChannelLabel,
 } from "@/lib/attendance/management/status";
+import { loadTimeEditMetaForRecords } from "@/lib/attendance/management/edit-attendance-time";
 
 const LATE_HOUR = 9;
 const GPS_MAX_ACCURACY = 100;
@@ -86,7 +87,7 @@ function mapEmployee(user: {
   };
 }
 
-function enrichRecord(
+export function enrichAttendanceRecord(
   record: ReturnType<typeof mapAttendance>,
   user: Parameters<typeof mapEmployee>[0],
   labGeo?: AttendanceLabGeo | null,
@@ -121,6 +122,16 @@ function enrichRecord(
     isOvertime: flags.isOvertime,
     channelLabel: methodChannelLabel(record.method, record.nfcTagId),
   };
+}
+
+async function withTimeEditMeta(
+  records: AttendanceManagementRecord[],
+): Promise<AttendanceManagementRecord[]> {
+  const edits = await loadTimeEditMetaForRecords(records.map((r) => r.id));
+  return records.map((r) => ({
+    ...r,
+    timeEdits: edits.get(r.id) ?? {},
+  }));
 }
 
 function employeeWhere(query: AttendanceManagementQuery): Prisma.UserWhereInput {
@@ -395,7 +406,7 @@ export async function getActiveAttendanceRecords(
   const now = Date.now();
   const labGeo = await getAttendanceLabGeo();
   return rows.map((row) => {
-    const base = enrichRecord(mapAttendance(row), row.user, labGeo);
+    const base = enrichAttendanceRecord(mapAttendance(row), row.user, labGeo);
     return {
       ...base,
       liveDurationMs: now - base.checkIn.getTime(),
@@ -457,7 +468,9 @@ export async function getAttendanceRecords(
     ]);
 
     return {
-      records: rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo)),
+      records: await withTimeEditMeta(
+        rows.map((row) => enrichAttendanceRecord(mapAttendance(row), row.user, labGeo)),
+      ),
       total,
       page,
       limit,
@@ -474,7 +487,7 @@ export async function getAttendanceRecords(
     take: MAX_EXPORT,
   });
 
-  let records = rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo));
+  let records = rows.map((row) => enrichAttendanceRecord(mapAttendance(row), row.user, labGeo));
   if (query.overtimeOnly) records = records.filter((r) => r.isOvertime);
   if (query.anomaliesOnly) records = records.filter((r) => r.complianceStatus !== "ok");
   if (query.compliance) {
@@ -484,7 +497,7 @@ export async function getAttendanceRecords(
   const total = records.length;
   const start = (page - 1) * limit;
   return {
-    records: records.slice(start, start + limit),
+    records: await withTimeEditMeta(records.slice(start, start + limit)),
     total,
     page,
     limit,
@@ -509,7 +522,7 @@ export async function getEmployeeAttendanceStats(
     take: MAX_EXPORT,
   });
 
-  const records = rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo));
+  const records = rows.map((row) => enrichAttendanceRecord(mapAttendance(row), row.user, labGeo));
 
   const workDayKeys = new Set(
     records.map((r) =>
@@ -571,7 +584,7 @@ export async function getAttendanceRecordsForExport(
     take: MAX_EXPORT,
   });
 
-  let records = rows.map((row) => enrichRecord(mapAttendance(row), row.user, labGeo));
+  let records = rows.map((row) => enrichAttendanceRecord(mapAttendance(row), row.user, labGeo));
   if (exportQuery.overtimeOnly) records = records.filter((r) => r.isOvertime);
   if (exportQuery.anomaliesOnly) records = records.filter((r) => r.complianceStatus !== "ok");
   if (exportQuery.compliance) {
@@ -589,5 +602,8 @@ export async function getAttendanceRecordById(id: string): Promise<AttendanceMan
     },
   });
   if (!row) return null;
-  return enrichRecord(mapAttendance(row), row.user, labGeo);
+  const [enriched] = await withTimeEditMeta([
+    enrichAttendanceRecord(mapAttendance(row), row.user, labGeo),
+  ]);
+  return enriched;
 }

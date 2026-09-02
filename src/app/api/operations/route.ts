@@ -75,7 +75,47 @@ export async function POST(request: Request) {
     if (body.action === "update") {
       const user = await requireSessionUser();
       await assertCanManagePeople(user);
-      await appDataService.updateAttendance(body.id, body.updates);
+      const updates = body.updates ?? {};
+      const { editAttendanceTime } = await import(
+        "@/lib/attendance/management/edit-attendance-time"
+      );
+      if (updates.checkIn !== undefined) {
+        const d = new Date(updates.checkIn as Date | string);
+        if (Number.isNaN(d.getTime())) {
+          throw new AppError("VALIDATION_ERROR", "שעת כניסה לא חוקית", 400);
+        }
+        await editAttendanceTime({
+          recordId: body.id,
+          field: "checkIn",
+          absoluteIso: d.toISOString(),
+          actorId: user.id,
+        });
+      }
+      if (updates.checkOut !== undefined) {
+        if (updates.checkOut == null) {
+          throw new AppError("VALIDATION_ERROR", "לא ניתן למחוק יציאה דרך עדכון זה", 400);
+        }
+        const d = new Date(updates.checkOut as Date | string);
+        if (Number.isNaN(d.getTime())) {
+          throw new AppError("VALIDATION_ERROR", "שעת יציאה לא חוקית", 400);
+        }
+        await editAttendanceTime({
+          recordId: body.id,
+          field: "checkOut",
+          absoluteIso: d.toISOString(),
+          actorId: user.id,
+        });
+      }
+      if (updates.notes !== undefined) {
+        await appDataService.updateAttendance(body.id, { notes: updates.notes });
+      }
+      if (
+        updates.checkIn === undefined &&
+        updates.checkOut === undefined &&
+        updates.notes === undefined
+      ) {
+        await appDataService.updateAttendance(body.id, updates);
+      }
       return jsonOk({ ok: true });
     }
     if (body.action === "lab-settings") {

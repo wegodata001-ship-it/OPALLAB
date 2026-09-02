@@ -40,6 +40,18 @@ export interface AttendanceEmployeeSummary {
   color: string | null;
 }
 
+/** Latest manual HH:mm edit for a punch field (from AuditLog). */
+export interface AttendanceTimeEditMeta {
+  field: "checkIn" | "checkOut";
+  oldValue: string | null;
+  newValue: string;
+  editedByUserId: string;
+  editedByName: string;
+  editedAt: string;
+  oldDisplay: string | null;
+  newDisplay: string;
+}
+
 export interface AttendanceManagementRecord extends AttendanceRecord {
   employee: AttendanceEmployeeSummary;
   durationHours: number | null;
@@ -51,6 +63,11 @@ export interface AttendanceManagementRecord extends AttendanceRecord {
   isEarlyLeave: boolean;
   isOvertime: boolean;
   channelLabel: string;
+  /** Present when check-in / check-out was manually edited. */
+  timeEdits?: {
+    checkIn?: AttendanceTimeEditMeta;
+    checkOut?: AttendanceTimeEditMeta;
+  };
 }
 
 export interface AttendanceEmployeeStats {

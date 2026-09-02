@@ -121,6 +121,23 @@ export async function fetchAttendanceRecord(id: string): Promise<AttendanceManag
   return reviveRecord(row) as AttendanceManagementRecord;
 }
 
+/** Manual HH:mm edit for check-in / check-out — manager/secretary only. */
+export async function patchAttendanceTime(input: {
+  recordId: string;
+  field: "checkIn" | "checkOut";
+  time: string;
+}): Promise<AttendanceManagementRecord> {
+  const res = await fetch("/api/attendance/management", {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const json = await res.json();
+  if (!json.success) throw new Error(json.error?.message ?? "שגיאה בעדכון שעה");
+  return reviveRecord(json.data as AttendanceManagementRecord) as AttendanceManagementRecord;
+}
+
 export function attendanceExportUrl(query: AttendanceManagementQuery, format: "csv" | "pdf"): string {
   if (format === "pdf") {
     const qs = toQueryString({ ...query, scope: "management" });

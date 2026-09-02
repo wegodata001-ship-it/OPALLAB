@@ -7,6 +7,7 @@ import {
   attendanceExportUrl,
   fetchAttendanceRecords,
   fetchEmployeeAttendanceStats,
+  patchAttendanceTime,
 } from "@/lib/attendance/management/client";
 import { AttendancePdfPreview } from "@/components/attendance/pdf/AttendancePdfPreview";
 import type {
@@ -14,6 +15,7 @@ import type {
   AttendanceEmployeeStats,
   AttendanceLabGeo,
   AttendanceManagementRecord,
+  AttendanceTimeEditMeta,
 } from "@/lib/attendance/management/types";
 import type { ConnectedDeviceRow } from "@/components/attendance/management/ConnectedDevicesTab";
 import { EmployeeAvatar } from "@/components/attendance/management/EmployeeAvatar";
@@ -21,6 +23,9 @@ import { distanceMeters } from "@/lib/attendance/gate/geofence";
 import { googleMapsEmbedUrl, googleMapsUrl } from "@/lib/geocode";
 import { USER_ROLE_LABELS } from "@/lib/constants/labels";
 import { formatDate, formatDateTime, formatTime, cn } from "@/lib/utils";
+import { formatHHmmJerusalem } from "@/lib/attendance/management/edit-time";
+import { canEditAttendanceTimes } from "@/lib/attendance/management/access";
+import { useApp } from "@/providers/AppProvider";
 import {
   AlertTriangle,
   ChevronDown,
@@ -33,8 +38,10 @@ import {
   LogIn,
   LogOut,
   MapPin,
+  Pencil,
   Phone,
   Smartphone,
+  X,
 } from "lucide-react";
 
 type RangePreset = "day" | "week" | "month" | "year";
@@ -71,20 +78,73 @@ function MapsButton({
   );
 }
 
+function EditedBadge({ meta }: { meta: AttendanceTimeEditMeta }) {
+  const title = [
+    meta.oldDisplay ? `שעה מקורית: ${meta.oldDisplay}` : "שעה מקורית: —",
+    `שעה מתוקנת: ${meta.newDisplay}`,
+    `נערך על ידי: ${meta.editedByName}`,
+    formatDateTime(meta.editedAt),
+  ].join("\n");
+  return (
+    <span
+      title={title}
+      className="inline-flex cursor-help items-center rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"
+    >
+      נערך
+    </span>
+  );
+}
+
 function PunchCard({
   kind,
   at,
   address,
   lat,
   lng,
+  canEdit,
+  editMeta,
+  onSaveTime,
 }: {
   kind: "in" | "out";
   at?: Date | string | null;
   address?: string | null;
   lat?: number | null;
   lng?: number | null;
+  canEdit?: boolean;
+  editMeta?: AttendanceTimeEditMeta | null;
+  onSaveTime?: (hhmm: string) => Promise<void>;
 }) {
   const isIn = kind === "in";
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const openEdit = () => {
+    setError(null);
+    setValue(at ? formatHHmmJerusalem(new Date(at)) : "");
+    setEditing(true);
+  };
+
+  const cancel = () => {
+    setEditing(false);
+    setError(null);
+  };
+
+  const save = async () => {
+    if (!onSaveTime) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSaveTime(value);
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "שגיאה בשמירה");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div
       className={cn(
@@ -99,15 +159,64 @@ function PunchCard({
           <LogOut className="h-5 w-5 text-sky-600" />
         )}
         <h4 className="font-bold text-slate-900">{isIn ? "כניסה" : "יציאה"}</h4>
+        {editMeta && <EditedBadge meta={editMeta} />}
       </div>
-      {!at ? (
-        <p className="text-sm text-slate-500">לא בוצעה {isIn ? "כניסה" : "יציאה"}</p>
+      {!at && !editing ? (
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm text-slate-500">לא בוצעה {isIn ? "כניסה" : "יציאה"}</p>
+          {canEdit && !isIn && onSaveTime && (
+            <button
+              type="button"
+              onClick={openEdit}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              aria-label="הוסף שעת יציאה"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              הוסף שעה
+            </button>
+          )}
+        </div>
+      ) : editing ? (
+        <div className="space-y-2">
+          <label className="block text-[11px] text-slate-500">שעה (HH:mm)</label>
+          <input
+            type="time"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+            dir="ltr"
+            autoFocus
+          />
+          {error && <p className="text-xs text-red-600">{error}</p>}
+          <div className="flex gap-2 justify-end">
+            <Button size="sm" variant="outline" onClick={cancel} disabled={saving}>
+              <X className="h-3.5 w-3.5 ml-1" />
+              ביטול
+            </Button>
+            <Button size="sm" onClick={() => void save()} disabled={saving || !value}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin ml-1" /> : null}
+              שמור
+            </Button>
+          </div>
+        </div>
       ) : (
         <>
           <div className="grid grid-cols-2 gap-2 text-sm">
             <div>
               <p className="text-[11px] text-slate-500">שעה</p>
-              <p className="font-bold text-slate-900">{formatTime(at)}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="font-bold text-slate-900">{formatTime(at)}</p>
+                {canEdit && onSaveTime && (
+                  <button
+                    type="button"
+                    onClick={openEdit}
+                    className="rounded p-1 text-slate-500 hover:bg-white/80 hover:text-slate-800"
+                    aria-label={isIn ? "ערוך שעת כניסה" : "ערוך שעת יציאה"}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
             <div>
               <p className="text-[11px] text-slate-500">תאריך</p>
@@ -166,7 +275,7 @@ function TechnicalDetails({ record }: { record: AttendanceManagementRecord }) {
           />
           <TechRow label="דפדפן" value={record.checkInDeviceBrowser || "—"} />
           <TechRow label="מזהה מכשיר מהימן" value={record.trustedDeviceId || "—"} ltr />
-          <TechRow label="מקור הפעולה" value="QR" />
+          <TechRow label="מקור הפעולה" value={record.channelLabel || "—"} />
           <TechRow
             label="שיטה"
             value={record.method === "TRUSTED_DEVICE" ? "מכשיר מאושר" : record.method}
@@ -225,13 +334,18 @@ export function EmployeeAttendanceCard({
   labGeo,
   onClose,
   onDevicesChanged,
+  onAttendanceChanged,
 }: {
   open: boolean;
   row: AttendanceEmployeeRosterRow | null;
   labGeo: AttendanceLabGeo;
   onClose: () => void;
   onDevicesChanged?: () => void;
+  /** Refresh management table / KPIs after a time edit. */
+  onAttendanceChanged?: () => void;
 }) {
+  const { currentUser } = useApp();
+  const canEdit = Boolean(currentUser && canEditAttendanceTimes(currentUser));
   const [preset, setPreset] = useState<RangePreset>("month");
   const [records, setRecords] = useState<AttendanceManagementRecord[]>([]);
   const [stats, setStats] = useState<AttendanceEmployeeStats | null>(null);
@@ -268,7 +382,11 @@ export function EmployeeAttendanceCard({
       ]);
       if (result.mode === "records") {
         setRecords(result.records);
-        setSelectedId(result.records[0]?.id ?? null);
+        setSelectedId((prev) =>
+          prev && result.records.some((r) => r.id === prev)
+            ? prev
+            : (result.records[0]?.id ?? null),
+        );
       } else {
         setRecords([]);
         setSelectedId(null);
@@ -291,6 +409,24 @@ export function EmployeeAttendanceCard({
   }, [open, row, load]);
 
   const selected = records.find((r) => r.id === selectedId) ?? records[0] ?? null;
+
+  const savePunchTime = async (field: "checkIn" | "checkOut", time: string) => {
+    if (!selected) return;
+    const updated = await patchAttendanceTime({
+      recordId: selected.id,
+      field,
+      time,
+    });
+    setRecords((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+    if (row) {
+      const employeeStats = await fetchEmployeeAttendanceStats(row.employee.id, {
+        from: range.from,
+        to: range.to,
+      });
+      setStats(employeeStats);
+    }
+    onAttendanceChanged?.();
+  };
 
   const mapUrl = useMemo(() => {
     if (!selected) return null;
@@ -348,7 +484,6 @@ export function EmployeeAttendanceCard({
         className="max-w-3xl"
       >
         <div className="space-y-5">
-          {/* Profile */}
           <section className="flex items-start gap-3">
             <EmployeeAvatar name={emp.name} color={emp.color} />
             <div className="flex-1 min-w-0">
@@ -365,7 +500,6 @@ export function EmployeeAttendanceCard({
             </div>
           </section>
 
-          {/* Approved devices */}
           <section className="rounded-2xl border border-slate-200 p-4 space-y-3">
             <h3 className="font-bold text-slate-900 flex items-center gap-2">
               <Smartphone className="h-4 w-4 text-opal-gold" />
@@ -513,12 +647,19 @@ export function EmployeeAttendanceCard({
                       )}
                     >
                       {formatDate(r.checkIn)} · {formatTime(r.checkIn)}
+                      {r.durationHours != null ? ` · ${r.durationHours.toFixed(1)}ש׳` : ""}
                     </button>
                   ))}
                 </div>
 
                 {selected && (
                   <div className="space-y-4">
+                    {selected.durationHours != null && (
+                      <p className="text-sm text-slate-700">
+                        סה״כ שעות לרשומה:{" "}
+                        <span className="font-bold">{selected.durationHours.toFixed(2)}</span>
+                      </p>
+                    )}
                     <div className="grid sm:grid-cols-2 gap-3">
                       <PunchCard
                         kind="in"
@@ -526,6 +667,9 @@ export function EmployeeAttendanceCard({
                         address={selected.checkInAddress}
                         lat={inLat}
                         lng={inLng}
+                        canEdit={canEdit}
+                        editMeta={selected.timeEdits?.checkIn}
+                        onSaveTime={(time) => savePunchTime("checkIn", time)}
                       />
                       <PunchCard
                         kind="out"
@@ -533,10 +677,12 @@ export function EmployeeAttendanceCard({
                         address={selected.checkOutAddress}
                         lat={selected.checkOutLatitude}
                         lng={selected.checkOutLongitude}
+                        canEdit={canEdit}
+                        editMeta={selected.timeEdits?.checkOut}
+                        onSaveTime={(time) => savePunchTime("checkOut", time)}
                       />
                     </div>
 
-                    {/* GPS card */}
                     <div className="rounded-2xl border border-slate-200 p-4 space-y-3">
                       <h4 className="font-bold text-slate-900 flex items-center gap-2">
                         <MapPin className="h-4 w-4 text-opal-gold" />
@@ -580,7 +726,6 @@ export function EmployeeAttendanceCard({
                       )}
                     </div>
 
-                    {/* Photos — selfie removed from system */}
                     <div className="rounded-2xl border border-slate-200 p-4 space-y-3">
                       <h4 className="font-bold text-slate-900">תמונות</h4>
                       <div className="grid sm:grid-cols-2 gap-3">

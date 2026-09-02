@@ -26,6 +26,7 @@ export type AuditAction =
   | "ORDER_SOFT_DELETE"
   | "ORDER_RESTORE"
   | "ORDER_PERMANENT_DELETE"
+  | "ATTENDANCE_TIME_EDIT"
   | "FORBIDDEN_ATTEMPT";
 
 export async function writeAuditLog(input: {
