@@ -150,6 +150,11 @@ interface AppContextValue {
   checkOut: (userId: string, method?: AttendanceMethod, meta?: AttendanceLocationMeta) => Promise<void>;
   updateAttendance: (id: string, updates: Partial<Pick<AttendanceRecord, "checkIn" | "checkOut" | "notes">>) => Promise<void>;
   addPayment: (payment: Omit<Payment, "id" | "createdAt">) => Promise<void>;
+  adjustWorkChargePrice: (input: {
+    orderId: string;
+    newPrice: number;
+    reason: string;
+  }) => Promise<void>;
   updateDoctorBalance: (doctorId: string, amount: number, status?: PaymentStatus) => Promise<void>;
   addUser: (user: Omit<User, "id" | "createdAt" | "updatedAt">) => Promise<User>;
   updateUser: (id: string, updates: Partial<User> & { password?: string }) => Promise<void>;
@@ -611,6 +616,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, "שומר...");
   }, [withLoading, refreshInternal]);
 
+  const adjustWorkChargePrice = useCallback(
+    async (input: { orderId: string; newPrice: number; reason: string }) => {
+      await withLoading(async () => {
+        await apiPost("/api/payments/work-charge-adjust", input);
+        await refreshInternal();
+      }, "מעדכן חיוב...");
+    },
+    [withLoading, refreshInternal],
+  );
+
   const updateDoctorBalance = useCallback(async (doctorId: string, amount: number, status?: PaymentStatus) => {
     await withLoading(async () => {
       await apiPost("/api/payments", { action: "balance", doctorId, amount, status });
@@ -803,6 +818,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     checkOut,
     updateAttendance,
     addPayment,
+    adjustWorkChargePrice,
     updateDoctorBalance,
     addUser,
     updateUser,

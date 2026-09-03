@@ -411,7 +411,7 @@ export type ShipmentSignatureInput = {
   deviceId?: string | null;
 };
 
-export type TransactionType = "PAYMENT" | "CHARGE" | "SALARY";
+export type TransactionType = "PAYMENT" | "CHARGE" | "SALARY" | "ADJUSTMENT";
 
 export interface Payment {
   id: string;

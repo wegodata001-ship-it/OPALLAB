@@ -455,6 +455,192 @@ export function resolveFinalPrice(input: {
   return input.calculatedPrice;
 }
 
+/** Fields persisted on Order as the pricing snapshot. */
+export type OrderPricingSnapshotFields = {
+  totalPrice: number | null;
+  calculatedPrice: number | null;
+  priceLines: OrderPriceLine[];
+  priceUnit: number | null;
+  priceQuantity: number;
+  priceManuallyEdited: boolean;
+  pricingMode: PricingMode;
+  otherWorkKind: OtherWorkKind | null;
+  allInXType: string | null;
+  pricePerJaw: number | null;
+  jawCount: number;
+};
+
+export type ClientPricingSnapshotInput = {
+  totalPrice?: number | null;
+  calculatedPrice?: number | null;
+  priceLines?: OrderPriceLine[] | null;
+  priceUnit?: number | null;
+  priceQuantity?: number | null;
+  priceManuallyEdited?: boolean | null;
+  pricingMode?: PricingMode | string | null;
+  allInXType?: string | null;
+  pricePerJaw?: number | null;
+  jawCount?: number | null;
+  otherWorkKind?: OtherWorkKind | string | null;
+};
+
+export type ExistingOrderPricingSnapshot = {
+  totalPrice?: number | null;
+  calculatedPrice?: number | null;
+  priceLines?: unknown;
+  priceUnit?: number | null;
+  priceQuantity?: number | null;
+  priceManuallyEdited?: boolean | null;
+  pricingMode?: string | null;
+  allInXType?: string | null;
+  pricePerJaw?: number | null;
+  jawCount?: number | null;
+  otherWorkKind?: string | null;
+};
+
+function hasNumericPrice(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/**
+ * Persist pricing snapshot without wiping client/draft values.
+ *
+ * Priority:
+ * 1) Explicit client snapshot (form) — including finalPrice = 0
+ * 2) Server recompute from DoctorPrice
+ * 3) Existing draft/order snapshot (finalize must not turn 270 → null)
+ *
+ * DoctorPrice is only a calculator input; the Order keeps its own snapshot.
+ */
+export function mergeOrderPricingSnapshot(input: {
+  client: ClientPricingSnapshotInput;
+  server: OrderPricingSnapshotFields;
+  existing?: ExistingOrderPricingSnapshot | null;
+}): OrderPricingSnapshotFields {
+  const clientKind = parseOtherWorkKind(input.client.otherWorkKind);
+  const server = input.server;
+  const existingLines = parsePriceLines(input.existing?.priceLines);
+  const clientLines = parsePriceLines(input.client.priceLines);
+
+  const clientHasFinal = hasNumericPrice(input.client.totalPrice);
+  const clientHasCalc = hasNumericPrice(input.client.calculatedPrice);
+  const clientHasLines = clientLines.length > 0;
+  const clientHasSnapshot =
+    clientHasFinal || clientHasCalc || clientHasLines || clientKind === "REWORK_FREE";
+
+  if (clientHasSnapshot) {
+    const pricingMode =
+      clientKind || input.client.pricingMode != null
+        ? parsePricingMode(clientKind ? "OTHER" : input.client.pricingMode)
+        : server.pricingMode;
+    const otherWorkKind =
+      pricingMode === "OTHER"
+        ? (clientKind ??
+          parseOtherWorkKind(input.existing?.otherWorkKind) ??
+          server.otherWorkKind)
+        : null;
+
+    let totalPrice: number | null = clientHasFinal
+      ? input.client.totalPrice!
+      : clientHasCalc
+        ? input.client.calculatedPrice!
+        : server.totalPrice;
+
+    if (otherWorkKind === "REWORK_FREE") {
+      totalPrice = 0;
+    }
+
+    return {
+      totalPrice,
+      calculatedPrice: clientHasCalc
+        ? input.client.calculatedPrice!
+        : otherWorkKind === "REWORK_FREE"
+          ? 0
+          : (server.calculatedPrice ??
+            (clientHasFinal ? input.client.totalPrice! : null)),
+      priceLines: clientHasLines ? clientLines : server.priceLines,
+      priceUnit: hasNumericPrice(input.client.priceUnit)
+        ? input.client.priceUnit
+        : (server.priceUnit ?? null),
+      priceQuantity: hasNumericPrice(input.client.priceQuantity)
+        ? input.client.priceQuantity
+        : server.priceQuantity,
+      priceManuallyEdited:
+        otherWorkKind === "REWORK_FREE"
+          ? false
+          : otherWorkKind === "REPAIR_OTHER"
+            ? true
+            : Boolean(
+                input.client.priceManuallyEdited ?? server.priceManuallyEdited ?? false,
+              ),
+      pricingMode,
+      otherWorkKind,
+      allInXType:
+        pricingMode === "ALL_IN_X"
+          ? (input.client.allInXType ?? server.allInXType)
+          : null,
+      pricePerJaw: hasNumericPrice(input.client.pricePerJaw)
+        ? input.client.pricePerJaw
+        : server.pricePerJaw,
+      jawCount: hasNumericPrice(input.client.jawCount)
+        ? input.client.jawCount
+        : server.jawCount,
+    };
+  }
+
+  if (
+    hasNumericPrice(server.totalPrice) ||
+    server.priceLines.length > 0 ||
+    server.otherWorkKind === "REWORK_FREE"
+  ) {
+    return {
+      ...server,
+      totalPrice: server.otherWorkKind === "REWORK_FREE" ? 0 : server.totalPrice,
+      calculatedPrice:
+        server.otherWorkKind === "REWORK_FREE" ? 0 : server.calculatedPrice,
+    };
+  }
+
+  const existingHasFinal = hasNumericPrice(input.existing?.totalPrice);
+  const existingHasCalc = hasNumericPrice(input.existing?.calculatedPrice);
+  if (existingHasFinal || existingHasCalc || existingLines.length > 0) {
+    const pricingMode = parsePricingMode(input.existing?.pricingMode ?? server.pricingMode);
+    const otherWorkKind =
+      parseOtherWorkKind(input.existing?.otherWorkKind) ??
+      (pricingMode === "OTHER" ? server.otherWorkKind : null);
+    const totalPrice =
+      otherWorkKind === "REWORK_FREE"
+        ? 0
+        : existingHasFinal
+          ? input.existing!.totalPrice!
+          : existingHasCalc
+            ? input.existing!.calculatedPrice!
+            : null;
+    return {
+      totalPrice,
+      calculatedPrice: existingHasCalc
+        ? input.existing!.calculatedPrice!
+        : otherWorkKind === "REWORK_FREE"
+          ? 0
+          : totalPrice,
+      priceLines: existingLines,
+      priceUnit: input.existing?.priceUnit ?? server.priceUnit,
+      priceQuantity: input.existing?.priceQuantity ?? server.priceQuantity,
+      priceManuallyEdited: Boolean(input.existing?.priceManuallyEdited ?? false),
+      pricingMode,
+      otherWorkKind: pricingMode === "OTHER" ? otherWorkKind : null,
+      allInXType:
+        pricingMode === "ALL_IN_X"
+          ? (input.existing?.allInXType ?? server.allInXType)
+          : null,
+      pricePerJaw: input.existing?.pricePerJaw ?? server.pricePerJaw,
+      jawCount: input.existing?.jawCount ?? server.jawCount,
+    };
+  }
+
+  return { ...server };
+}
+
 /**
  * Composition key for auto-recalc.
  * ALL_IN_X uses jawCount (not full tooth list) so adding teeth in same jaw

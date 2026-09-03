@@ -6,6 +6,7 @@ import {
   billingQuantityFromTeeth,
   computeOrderPricing,
   detectJaws,
+  mergeOrderPricingSnapshot,
   resolveFinalPrice,
 } from "./doctor-pricing";
 import type { OrderCatalogOption } from "@/lib/types";
@@ -133,5 +134,98 @@ const repair = computeOrderPricing({
 assert(repair.calculatedPrice === 150, "OTHER repair");
 
 assert(billingQuantityFromTeeth([11, 11, 12]) === 2, "unique teeth");
+
+{
+  const emptyServer = {
+    totalPrice: null as number | null,
+    calculatedPrice: null as number | null,
+    priceLines: [] as import("./doctor-pricing").OrderPriceLine[],
+    priceUnit: null as number | null,
+    priceQuantity: 2,
+    priceManuallyEdited: false,
+    pricingMode: "REGULAR" as const,
+    otherWorkKind: null,
+    allInXType: null,
+    pricePerJaw: null as number | null,
+    jawCount: 1,
+  };
+
+  const fromClient = mergeOrderPricingSnapshot({
+    client: {
+      totalPrice: 540,
+      calculatedPrice: 540,
+      priceLines: [
+        {
+          catalogOptionId: "x",
+          code: "ZIRCONIA",
+          nameSnapshot: "זרקוניה",
+          unitPrice: 270,
+          quantity: 2,
+          lineTotal: 540,
+        },
+      ],
+      priceUnit: 270,
+      priceQuantity: 2,
+      priceManuallyEdited: false,
+      pricingMode: "REGULAR",
+    },
+    server: emptyServer,
+  });
+  assert(fromClient.totalPrice === 540, "client snapshot wins");
+  assert(fromClient.calculatedPrice === 540, "client calc");
+  assert(fromClient.priceLines.length === 1, "client lines");
+
+  const wipedWithoutMerge = emptyServer.totalPrice;
+  assert(wipedWithoutMerge === null, "server alone null");
+
+  const fromDraft = mergeOrderPricingSnapshot({
+    client: {},
+    server: emptyServer,
+    existing: {
+      totalPrice: 270,
+      calculatedPrice: 270,
+      priceLines: [
+        {
+          catalogOptionId: "x",
+          code: "TEMPORARY_SCREWED",
+          nameSnapshot: "זמני מוברג",
+          unitPrice: 70,
+          quantity: 1,
+          lineTotal: 70,
+        },
+      ],
+      pricingMode: "REGULAR",
+    },
+  });
+  assert(fromDraft.totalPrice === 270, "finalize keeps draft price (no 270→null)");
+
+  const free = mergeOrderPricingSnapshot({
+    client: { otherWorkKind: "REWORK_FREE", totalPrice: 0 },
+    server: { ...emptyServer, otherWorkKind: "REWORK_FREE", totalPrice: 0, calculatedPrice: 0 },
+  });
+  assert(free.totalPrice === 0, "rework free is zero not null");
+
+  const aix = mergeOrderPricingSnapshot({
+    client: {
+      totalPrice: 8000,
+      calculatedPrice: 8000,
+      pricingMode: "ALL_IN_X",
+      allInXType: "ALL_IN_X_ZIRCONIA",
+      pricePerJaw: 4000,
+      jawCount: 2,
+    },
+    server: {
+      ...emptyServer,
+      pricingMode: "ALL_IN_X",
+      totalPrice: 8000,
+      calculatedPrice: 8000,
+      pricePerJaw: 4000,
+      jawCount: 2,
+      allInXType: "ALL_IN_X_ZIRCONIA",
+    },
+  });
+  assert(aix.totalPrice === 8000, "ALL_IN_X two jaws");
+  assert(aix.jawCount === 2, "jaw count snapshot");
+}
 
 console.log("doctor-pricing.selftest: ALL PASSED");

@@ -8,33 +8,53 @@ import { Input, Label, Select } from "@/components/ui/input";
 import { ExportActions } from "@/components/shared/export-actions";
 import { DateRangeFilter } from "@/components/shared/date-range-filter";
 import { useApp } from "@/providers/AppProvider";
-import { formatCurrency, formatDate, formatDateTime } from "@/lib/utils";
+import { formatCurrency, formatDate, formatDateTime, cn } from "@/lib/utils";
 import { filterByDateRange } from "@/lib/date-filter";
-import { PAYMENT_STATUS_LABELS, PAYMENT_METHOD_LABELS, USER_ROLE_LABELS } from "@/lib/constants/labels";
+import {
+  PAYMENT_STATUS_LABELS,
+  PAYMENT_METHOD_LABELS,
+  USER_ROLE_LABELS,
+  TRANSACTION_TYPE_LABELS,
+  LAB_INFO,
+} from "@/lib/constants/labels";
 import { calculateEmployeePay, getSalaryLabel } from "@/lib/salary";
 import { printHtml } from "@/lib/export";
 import { AttendanceAdminRecord } from "@/components/attendance/AttendanceAdminRecord";
-import { LAB_INFO } from "@/lib/constants/labels";
+import { WorkChargeLedgerCard } from "@/components/accounts/work-charge-ledger-card";
 import type { DateRange, Payment, PaymentMethod } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { canDeleteOrders } from "@/lib/user-roles";
 import { Printer, FileText, User } from "lucide-react";
 
 type LedgerView = "all" | "patient" | "delivery";
 
+function paymentSignedAmount(p: Payment): number {
+  if (p.type === "PAYMENT") return p.amount;
+  if (p.type === "CHARGE" || p.type === "ADJUSTMENT") return -p.amount;
+  return 0;
+}
+
 function PaymentRow({ p, onViewDelivery }: { p: Payment; onViewDelivery?: (note: string) => void }) {
+  const signed = paymentSignedAmount(p);
   return (
     <div className="p-3 rounded-xl border text-sm">
       <div className="flex justify-between">
-        <span className={cn("font-bold", p.type === "PAYMENT" ? "text-emerald-600" : "text-red-600")}>
-          {p.type === "PAYMENT" ? "+" : "-"}{formatCurrency(p.amount)}
+        <span className={cn("font-bold", signed >= 0 ? "text-emerald-600" : "text-red-600")}>
+          {signed >= 0 ? "+" : "-"}
+          {formatCurrency(Math.abs(p.amount))}
         </span>
         <span className="text-slate-400">{formatDate(p.createdAt)}</span>
       </div>
+      <p className="text-xs text-slate-500 mt-0.5">{TRANSACTION_TYPE_LABELS[p.type] ?? p.type}</p>
       {p.serialNumber && <p className="text-opal-gold-dark font-medium mt-1">עבודה: {p.serialNumber}</p>}
       {p.patientName && <p className="text-slate-600">מטופל: {p.patientName}</p>}
       {p.deliveryNote && (
-        <button type="button" onClick={() => onViewDelivery?.(p.deliveryNote!)} className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-1">
-          <FileText className="h-3 w-3" />תעודת משלוח: {p.deliveryNote}
+        <button
+          type="button"
+          onClick={() => onViewDelivery?.(p.deliveryNote!)}
+          className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-1"
+        >
+          <FileText className="h-3 w-3" />
+          תעודת משלוח: {p.deliveryNote}
         </button>
       )}
       <p className="text-slate-500">{p.description}</p>
@@ -49,7 +69,17 @@ function PaymentRow({ p, onViewDelivery }: { p: Payment; onViewDelivery?: (note:
 }
 
 export default function AccountsPage() {
-  const { doctors, users, payments, orders, shipments, addPayment, attendance, updateAttendance, currentUser } = useApp();
+  const {
+    doctors,
+    users,
+    payments,
+    orders,
+    shipments,
+    addPayment,
+    adjustWorkChargePrice,
+    attendance,
+    currentUser,
+  } = useApp();
   const [tab, setTab] = useState<"doctors" | "employees">("doctors");
   const [selectedDoctor, setSelectedDoctor] = useState(doctors[0]?.id ?? "");
   const [selectedEmployee, setSelectedEmployee] = useState("");
@@ -61,17 +91,39 @@ export default function AccountsPage() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("TRANSFER");
   const [referenceNumber, setReferenceNumber] = useState("");
 
+  const canEditCharges = currentUser ? canDeleteOrders(currentUser) : false;
+
   const employees = users.filter((u) => !["DOCTOR"].includes(u.role));
   const doctor = doctors.find((d) => d.id === selectedDoctor);
   const emp = employees.find((e) => e.id === selectedEmployee);
 
   const doctorPayments = filterByDateRange(
     payments.filter((p) => p.doctorId === selectedDoctor),
-    (p) => p.createdAt, dateRange
+    (p) => p.createdAt,
+    dateRange,
   );
 
   const doctorOrders = orders.filter((o) => o.doctorId === selectedDoctor);
   const doctorShipments = shipments.filter((s) => doctorOrders.some((o) => o.id === s.orderId));
+
+  const workChargeGroups = useMemo(() => {
+    const charges = doctorPayments.filter(
+      (p) => p.type === "CHARGE" && (p.description ?? "").startsWith("חיוב עבודה"),
+    );
+    return charges.map((charge) => ({
+      charge,
+      adjustments: doctorPayments
+        .filter((p) => p.type === "ADJUSTMENT" && p.orderId && p.orderId === charge.orderId)
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
+      order: charge.orderId ? doctorOrders.find((o) => o.id === charge.orderId) : undefined,
+    }));
+  }, [doctorPayments, doctorOrders]);
+
+  const standalonePayments = useMemo(() => {
+    const linkedAdj = new Set(workChargeGroups.flatMap((g) => g.adjustments.map((a) => a.id)));
+    const linkedCharges = new Set(workChargeGroups.map((g) => g.charge.id));
+    return doctorPayments.filter((p) => !linkedCharges.has(p.id) && !linkedAdj.has(p.id));
+  }, [doctorPayments, workChargeGroups]);
 
   const groupedByPatient = useMemo(() => {
     const map = new Map<string, Payment[]>();
@@ -101,23 +153,33 @@ export default function AccountsPage() {
     if (!selectedDoctor || !amount) return;
     const order = orders.find((o) => o.id === selectedOrder);
     const shipment = order?.shipment;
-    addPayment({
-      doctorId: selectedDoctor, employeeId: null,
-      orderId: order?.id ?? null, serialNumber: order?.serialNumber ?? null,
+    void addPayment({
+      doctorId: selectedDoctor,
+      employeeId: null,
+      orderId: order?.id ?? null,
+      serialNumber: order?.serialNumber ?? null,
       patientName: order?.patient.name ?? null,
-      amount: parseFloat(amount), type, status: type === "PAYMENT" ? "PAID" : "PENDING",
-      description: desc || (order ? `עבודה ${order.serialNumber}` : type === "PAYMENT" ? "תשלום" : "חיוב"),
+      amount: parseFloat(amount),
+      type,
+      status: type === "PAYMENT" ? "PAID" : "PENDING",
+      description:
+        desc ||
+        (order ? `עבודה ${order.serialNumber}` : type === "PAYMENT" ? "תשלום" : "חיוב"),
       paymentMethod: type === "PAYMENT" ? paymentMethod : null,
       referenceNumber: type === "PAYMENT" && referenceNumber ? referenceNumber : null,
       deliveryNote: shipment?.deliveryNote ?? null,
       paidAt: type === "PAYMENT" ? new Date() : null,
     });
-    setAmount(""); setDesc(""); setSelectedOrder(""); setReferenceNumber("");
+    setAmount("");
+    setDesc("");
+    setSelectedOrder("");
+    setReferenceNumber("");
   };
 
   const empAttendance = filterByDateRange(
     attendance.filter((a) => a.userId === selectedEmployee),
-    (a) => a.checkIn, dateRange
+    (a) => a.checkIn,
+    dateRange,
   );
 
   const totalHours = empAttendance.reduce((sum, a) => {
@@ -129,12 +191,24 @@ export default function AccountsPage() {
 
   return (
     <>
-      <Header title="כרטסות" description="רופאים, עובדים, תשלומים ושעות"
-        actions={<ExportActions title="כרטסות" whatsappText="סיכום כרטסות OPAL LAB" pdfHtml="<h2>כרטסות</h2>" />} />
+      <Header
+        title="כרטסות"
+        description="רופאים, עובדים, תשלומים ושעות"
+        actions={
+          <ExportActions title="כרטסות" whatsappText="סיכום כרטסות OPAL LAB" pdfHtml="<h2>כרטסות</h2>" />
+        }
+      />
 
       <div className="flex gap-2 mb-4 flex-wrap">
         {(["doctors", "employees"] as const).map((t) => (
-          <button key={t} onClick={() => setTab(t)} className={cn("px-5 py-2 rounded-xl text-sm font-medium", tab === t ? "bg-opal-gold text-white" : "bg-white border")}>
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={cn(
+              "px-5 py-2 rounded-xl text-sm font-medium",
+              tab === t ? "bg-opal-gold text-white" : "bg-white border",
+            )}
+          >
             {t === "doctors" ? "רופאים" : "עובדים"}
           </button>
         ))}
@@ -145,50 +219,96 @@ export default function AccountsPage() {
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="space-y-2">
             {doctors.map((d) => (
-              <button key={d.id} onClick={() => setSelectedDoctor(d.id)} className={cn("w-full text-right p-3 rounded-xl border", selectedDoctor === d.id ? "border-opal-gold bg-opal-gold/5" : "hover:bg-slate-50")}>
+              <button
+                key={d.id}
+                onClick={() => setSelectedDoctor(d.id)}
+                className={cn(
+                  "w-full text-right p-3 rounded-xl border",
+                  selectedDoctor === d.id ? "border-opal-gold bg-opal-gold/5" : "hover:bg-slate-50",
+                )}
+              >
                 <p className="font-medium text-sm">{d.name}</p>
-                <p className={cn("font-bold", d.balance < 0 ? "text-red-600" : "text-emerald-600")}>{formatCurrency(d.balance)}</p>
+                <p className={cn("font-bold", d.balance < 0 ? "text-red-600" : "text-emerald-600")}>
+                  {formatCurrency(d.balance)}
+                </p>
               </button>
             ))}
           </div>
           <div className="lg:col-span-2 space-y-4">
-            {doctor && (
+            {doctor && canEditCharges && (
               <Card>
-                <CardHeader><CardTitle>{doctor.name}</CardTitle></CardHeader>
+                <CardHeader>
+                  <CardTitle>{doctor.name}</CardTitle>
+                </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="grid sm:grid-cols-2 gap-3">
-                    <div><Label>סכום ₪</Label><Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
-                    <div><Label>עבור עבודה</Label>
+                    <div>
+                      <Label>סכום ₪</Label>
+                      <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>עבור עבודה</Label>
                       <Select value={selectedOrder} onChange={(e) => setSelectedOrder(e.target.value)}>
                         <option value="">כללי / ללא עבודה</option>
-                        {doctorOrders.map((o) => <option key={o.id} value={o.id}>{o.serialNumber} — {o.patient.name}</option>)}
-                      </Select>
-                    </div>
-                    <div><Label>שיטת תשלום</Label>
-                      <Select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}>
-                        {(Object.keys(PAYMENT_METHOD_LABELS) as PaymentMethod[]).map((m) => (
-                          <option key={m} value={m}>{PAYMENT_METHOD_LABELS[m]}</option>
+                        {doctorOrders.map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.serialNumber} — {o.patient.name}
+                          </option>
                         ))}
                       </Select>
                     </div>
-                    <div><Label>מספר אסמכתא</Label><Input value={referenceNumber} onChange={(e) => setReferenceNumber(e.target.value)} placeholder="צ'ק / העברה / אישור" /></div>
+                    <div>
+                      <Label>שיטת תשלום</Label>
+                      <Select
+                        value={paymentMethod}
+                        onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                      >
+                        {(Object.keys(PAYMENT_METHOD_LABELS) as PaymentMethod[]).map((m) => (
+                          <option key={m} value={m}>
+                            {PAYMENT_METHOD_LABELS[m]}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>מספר אסמכתא</Label>
+                      <Input
+                        value={referenceNumber}
+                        onChange={(e) => setReferenceNumber(e.target.value)}
+                        placeholder="צ'ק / העברה / אישור"
+                      />
+                    </div>
                   </div>
-                  <div><Label>תיאור</Label><Input value={desc} onChange={(e) => setDesc(e.target.value)} /></div>
+                  <div>
+                    <Label>תיאור</Label>
+                    <Input value={desc} onChange={(e) => setDesc(e.target.value)} />
+                  </div>
                   <div className="flex gap-2">
                     <Button onClick={() => recordPayment("PAYMENT")}>רישום תשלום</Button>
-                    <Button variant="outline" onClick={() => recordPayment("CHARGE")}>רישום חיוב</Button>
+                    <Button variant="outline" onClick={() => recordPayment("CHARGE")}>
+                      רישום חיוב
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
             )}
 
             <div className="flex gap-2">
-              {([
-                { key: "all" as const, label: "הכל" },
-                { key: "patient" as const, label: "לפי מטופל" },
-                { key: "delivery" as const, label: "תעודות משלוח" },
-              ]).map(({ key, label }) => (
-                <button key={key} onClick={() => setLedgerView(key)} className={cn("px-3 py-1.5 rounded-lg text-xs font-medium", ledgerView === key ? "bg-slate-900 text-white" : "bg-white border")}>
+              {(
+                [
+                  { key: "all" as const, label: "הכל" },
+                  { key: "patient" as const, label: "לפי מטופל" },
+                  { key: "delivery" as const, label: "תעודות משלוח" },
+                ] as const
+              ).map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setLedgerView(key)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-medium",
+                    ledgerView === key ? "bg-slate-900 text-white" : "bg-white border",
+                  )}
+                >
                   {label}
                 </button>
               ))}
@@ -196,10 +316,26 @@ export default function AccountsPage() {
 
             {ledgerView === "all" && (
               <Card>
-                <CardHeader><CardTitle>היסטוריית תנועות</CardTitle></CardHeader>
+                <CardHeader>
+                  <CardTitle>היסטוריית תנועות</CardTitle>
+                </CardHeader>
                 <CardContent className="space-y-2 max-h-[28rem] overflow-y-auto">
-                  {doctorPayments.map((p) => <PaymentRow key={p.id} p={p} onViewDelivery={viewDeliveryNote} />)}
-                  {doctorPayments.length === 0 && <p className="text-center text-slate-400 py-6">אין תנועות</p>}
+                  {workChargeGroups.map((g) => (
+                    <WorkChargeLedgerCard
+                      key={g.charge.id}
+                      charge={g.charge}
+                      adjustments={g.adjustments}
+                      order={g.order}
+                      canEdit={canEditCharges}
+                      onAdjust={adjustWorkChargePrice}
+                    />
+                  ))}
+                  {standalonePayments.map((p) => (
+                    <PaymentRow key={p.id} p={p} onViewDelivery={viewDeliveryNote} />
+                  ))}
+                  {doctorPayments.length === 0 && (
+                    <p className="text-center text-slate-400 py-6">אין תנועות</p>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -207,17 +343,29 @@ export default function AccountsPage() {
             {ledgerView === "patient" && (
               <div className="space-y-3">
                 {groupedByPatient.map(([patient, items]) => {
-                  const total = items.reduce((s, p) => s + (p.type === "PAYMENT" ? p.amount : -p.amount), 0);
+                  const total = items.reduce((s, p) => s + paymentSignedAmount(p), 0);
                   return (
                     <Card key={patient}>
                       <CardHeader className="py-3">
                         <CardTitle className="text-base flex items-center justify-between">
-                          <span className="flex items-center gap-2"><User className="h-4 w-4" />{patient}</span>
-                          <span className={cn("text-sm", total >= 0 ? "text-emerald-600" : "text-red-600")}>{formatCurrency(Math.abs(total))} {total >= 0 ? "זכות" : "חוב"}</span>
+                          <span className="flex items-center gap-2">
+                            <User className="h-4 w-4" />
+                            {patient}
+                          </span>
+                          <span
+                            className={cn(
+                              "text-sm",
+                              total >= 0 ? "text-emerald-600" : "text-red-600",
+                            )}
+                          >
+                            {formatCurrency(Math.abs(total))} {total >= 0 ? "זכות" : "חוב"}
+                          </span>
                         </CardTitle>
                       </CardHeader>
                       <CardContent className="space-y-2 pt-0">
-                        {items.map((p) => <PaymentRow key={p.id} p={p} onViewDelivery={viewDeliveryNote} />)}
+                        {items.map((p) => (
+                          <PaymentRow key={p.id} p={p} onViewDelivery={viewDeliveryNote} />
+                        ))}
                       </CardContent>
                     </Card>
                   );
@@ -227,25 +375,41 @@ export default function AccountsPage() {
 
             {ledgerView === "delivery" && doctor && (
               <Card>
-                <CardHeader><CardTitle>תעודות משלוח — {doctor.name}</CardTitle></CardHeader>
+                <CardHeader>
+                  <CardTitle>תעודות משלוח — {doctor.name}</CardTitle>
+                </CardHeader>
                 <CardContent className="space-y-2">
                   {doctorShipments.length === 0 ? (
                     <p className="text-center text-slate-400 py-6">אין תעודות משלוח לרופא זה</p>
-                  ) : doctorShipments.map((s) => {
-                    const order = orders.find((o) => o.id === s.orderId);
-                    return (
-                      <div key={s.id} className="p-3 rounded-xl border flex justify-between items-center">
-                        <div>
-                          <p className="font-bold text-opal-gold-dark">{s.deliveryNote}</p>
-                          <p className="text-sm">{order?.serialNumber} · {order?.patient.name}</p>
-                          <p className="text-xs text-slate-400">{formatDateTime(s.shippedAt ?? s.createdAt)} · {s.courierName}</p>
+                  ) : (
+                    doctorShipments.map((s) => {
+                      const order = orders.find((o) => o.id === s.orderId);
+                      return (
+                        <div
+                          key={s.id}
+                          className="p-3 rounded-xl border flex justify-between items-center"
+                        >
+                          <div>
+                            <p className="font-bold text-opal-gold-dark">{s.deliveryNote}</p>
+                            <p className="text-sm">
+                              {order?.serialNumber} · {order?.patient.name}
+                            </p>
+                            <p className="text-xs text-slate-400">
+                              {formatDateTime(s.shippedAt ?? s.createdAt)} · {s.courierName}
+                            </p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => viewDeliveryNote(s.deliveryNote)}
+                          >
+                            <Printer className="h-4 w-4" />
+                            צפייה
+                          </Button>
                         </div>
-                        <Button variant="outline" size="sm" onClick={() => viewDeliveryNote(s.deliveryNote)}>
-                          <Printer className="h-4 w-4" />צפייה
-                        </Button>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -255,9 +419,22 @@ export default function AccountsPage() {
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="space-y-2">
             {employees.map((e) => (
-              <button key={e.id} onClick={() => setSelectedEmployee(e.id)} className={cn("w-full text-right p-3 rounded-xl border flex items-center gap-2", selectedEmployee === e.id ? "border-opal-gold bg-opal-gold/5" : "")}>
-                <div className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: e.color ?? "#94a3b8" }} />
-                <div><p className="font-medium text-sm">{e.name}</p><p className="text-xs text-slate-500">{USER_ROLE_LABELS[e.role]}</p></div>
+              <button
+                key={e.id}
+                onClick={() => setSelectedEmployee(e.id)}
+                className={cn(
+                  "w-full text-right p-3 rounded-xl border flex items-center gap-2",
+                  selectedEmployee === e.id ? "border-opal-gold bg-opal-gold/5" : "",
+                )}
+              >
+                <div
+                  className="h-3 w-3 rounded-full shrink-0"
+                  style={{ backgroundColor: e.color ?? "#94a3b8" }}
+                />
+                <div>
+                  <p className="font-medium text-sm">{e.name}</p>
+                  <p className="text-xs text-slate-500">{USER_ROLE_LABELS[e.role]}</p>
+                </div>
               </button>
             ))}
           </div>
@@ -265,43 +442,33 @@ export default function AccountsPage() {
             <div className="lg:col-span-2 space-y-4">
               <Card>
                 <CardContent className="p-4 grid sm:grid-cols-3 gap-4">
-                  <div><p className="text-sm text-slate-500">שעות בטווח</p><p className="text-3xl font-bold">{totalHours.toFixed(1)}</p></div>
-                  <div><p className="text-sm text-slate-500">סוג שכר</p><p className="text-sm font-medium mt-1">{getSalaryLabel(emp)}</p></div>
-                  <div><p className="text-sm text-slate-500">חישוב לתקופה</p><p className="text-3xl font-bold text-opal-gold-dark">{estimatedPay != null ? formatCurrency(estimatedPay) : "—"}</p></div>
+                  <div>
+                    <p className="text-sm text-slate-500">שעות בטווח</p>
+                    <p className="text-3xl font-bold">{totalHours.toFixed(1)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-500">סוג שכר</p>
+                    <p className="text-sm font-medium mt-1">{getSalaryLabel(emp)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-500">חישוב לתקופה</p>
+                    <p className="text-3xl font-bold text-opal-gold-dark">
+                      {estimatedPay != null ? formatCurrency(estimatedPay) : "—"}
+                    </p>
+                  </div>
                 </CardContent>
               </Card>
               <Card>
-                <CardHeader><CardTitle>דיווח שעות — {emp.name}</CardTitle></CardHeader>
+                <CardHeader>
+                  <CardTitle>דיווח שעות — {emp.name}</CardTitle>
+                </CardHeader>
                 <CardContent className="space-y-2 max-h-96 overflow-y-auto">
                   {empAttendance.map((a) => (
-                    <div key={a.id} className="space-y-2">
-                      <div className="grid sm:grid-cols-2 gap-2 p-2 rounded-lg bg-slate-50">
-                        <div>
-                          <Label className="text-[10px]">עריכת כניסה</Label>
-                          <Input
-                            type="datetime-local"
-                            className="h-8 text-xs"
-                            defaultValue={a.checkIn.toISOString().slice(0, 16)}
-                            onChange={(e) => updateAttendance(a.id, { checkIn: new Date(e.target.value) })}
-                          />
-                        </div>
-                        <div>
-                          <Label className="text-[10px]">עריכת יציאה</Label>
-                          <Input
-                            type="datetime-local"
-                            className="h-8 text-xs"
-                            defaultValue={a.checkOut?.toISOString().slice(0, 16) ?? ""}
-                            onChange={(e) => updateAttendance(a.id, { checkOut: e.target.value ? new Date(e.target.value) : null })}
-                          />
-                        </div>
-                      </div>
-                      <AttendanceAdminRecord
-                        record={a}
-                        employeeName={emp.name}
-                      />
-                    </div>
+                    <AttendanceAdminRecord key={a.id} record={a} employeeName={emp.name} />
                   ))}
-                  {empAttendance.length === 0 && <p className="text-center text-slate-400 py-6">אין דיווחים בטווח</p>}
+                  {empAttendance.length === 0 && (
+                    <p className="text-center text-slate-400 py-6">אין דיווחים בטווח</p>
+                  )}
                 </CardContent>
               </Card>
             </div>

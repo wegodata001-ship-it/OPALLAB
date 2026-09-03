@@ -234,7 +234,7 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
       bridgeGroups,
       description: description || undefined,
       completionDate: completionDate ? new Date(completionDate) : undefined,
-      totalPrice: pricing.finalPrice ?? undefined,
+      totalPrice: typeof pricing.finalPrice === "number" ? pricing.finalPrice : undefined,
       priceLines: pricing.lines,
       priceUnit: pricing.unitPrice,
       priceQuantity: pricing.quantity,

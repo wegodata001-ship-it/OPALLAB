@@ -57,6 +57,7 @@ import {
   DEFAULT_BILLABLE_SEED,
   DEFAULT_ALL_IN_X_SEED,
   computeOrderPricing,
+  mergeOrderPricingSnapshot,
   parseOtherWorkKind,
   parsePricingMode,
   resolveFinalPrice,
@@ -88,15 +89,17 @@ import { parseSlotFromNotes } from "@/lib/orders/upload-slots";
 import { defaultLabSettings } from "@/lib/constants/lab-settings";
 import { filterSnapshotForUser, buildOrderWhereForUser } from "@/lib/access-control";
 import {
+  assertOrderPriceReadyForBilling,
   auditOrderWorkChargeCreated,
   auditOrderWorkChargePriceAdjust,
   ensureOrderWorkCharge,
+  findOrderWorkCharge,
   reconcileOrderWorkChargePrice,
   shouldBillOrderOnStatusTransition,
 } from "@/lib/orders/order-ledger";
 import { writeAuditLog } from "@/lib/audit-log";
 import { createAuthUser, deleteAuthUser, updateAuthUser } from "@/lib/supabase/auth-admin";
-import { normalizeUserRoles, primaryRole, isSystemAdminUser, isDoctorUser } from "@/lib/user-roles";
+import { normalizeUserRoles, primaryRole, isSystemAdminUser, isDoctorUser, canDeleteOrders } from "@/lib/user-roles";
 import { assertUserCanBeDeleted } from "@/lib/people/protected-users";
 import { uploadAudit } from "@/lib/orders/upload-audit";
 import { normalizeSplintTypeIds, primarySplintTypeId, syncWorkTypesWithSplint } from "@/lib/orders/splint-types";
@@ -512,13 +515,34 @@ export class AppDataService {
         priceManuallyEdited: input.priceManuallyEdited,
         manualFinalPrice: input.totalPrice ?? null,
       });
-      const priceLines =
-        snapshot.lines.length > 0
-          ? snapshot.lines
-          : snapshot.pricingMode !== "REGULAR"
-            ? []
-            : (input.priceLines ?? []);
-      const totalPrice = snapshot.totalPrice;
+      const persisted = mergeOrderPricingSnapshot({
+        client: {
+          totalPrice: input.totalPrice,
+          calculatedPrice: input.calculatedPrice,
+          priceLines: input.priceLines,
+          priceUnit: input.priceUnit,
+          priceQuantity: input.priceQuantity,
+          priceManuallyEdited: input.priceManuallyEdited,
+          pricingMode,
+          allInXType: input.allInXType ?? null,
+          pricePerJaw: input.pricePerJaw,
+          jawCount: input.jawCount,
+          otherWorkKind,
+        },
+        server: {
+          totalPrice: snapshot.totalPrice,
+          calculatedPrice: snapshot.calculatedPrice,
+          priceLines: snapshot.lines,
+          priceUnit: snapshot.priceUnit,
+          priceQuantity: snapshot.priceQuantity,
+          priceManuallyEdited: snapshot.priceManuallyEdited,
+          pricingMode: snapshot.pricingMode,
+          otherWorkKind: snapshot.otherWorkKind,
+          allInXType: snapshot.allInXType,
+          pricePerJaw: snapshot.pricePerJaw,
+          jawCount: snapshot.jawCount,
+        },
+      });
 
       const order = await tx.order.create({
         data: {
@@ -534,17 +558,17 @@ export class AppDataService {
           splintTypeIds: pricingMode === "REGULAR" ? splintTypeIds : [],
           splintTypeId: pricingMode === "REGULAR" ? splintTypeId : null,
           description: input.description ?? null,
-          totalPrice,
-          priceLines,
-          priceUnit: snapshot.priceUnit,
-          priceQuantity: snapshot.priceQuantity,
-          calculatedPrice: snapshot.calculatedPrice,
-          priceManuallyEdited: snapshot.priceManuallyEdited,
-          pricingMode: snapshot.pricingMode,
-          allInXType: snapshot.allInXType,
-          pricePerJaw: snapshot.pricePerJaw,
-          jawCount: snapshot.jawCount,
-          otherWorkKind: snapshot.otherWorkKind,
+          totalPrice: persisted.totalPrice,
+          priceLines: persisted.priceLines,
+          priceUnit: persisted.priceUnit,
+          priceQuantity: persisted.priceQuantity,
+          calculatedPrice: persisted.calculatedPrice,
+          priceManuallyEdited: persisted.priceManuallyEdited,
+          pricingMode: persisted.pricingMode,
+          allInXType: persisted.allInXType,
+          pricePerJaw: persisted.pricePerJaw,
+          jawCount: persisted.jawCount,
+          otherWorkKind: persisted.otherWorkKind,
           otherWorkNotes: input.otherWorkNotes?.trim() || null,
         },
       });
@@ -753,13 +777,77 @@ export class AppDataService {
         priceManuallyEdited: input.priceManuallyEdited,
         manualFinalPrice: input.totalPrice ?? null,
       });
-      const priceLines =
-        snapshot.lines.length > 0
-          ? snapshot.lines
-          : snapshot.pricingMode !== "REGULAR"
-            ? []
-            : (input.priceLines ?? []);
-      const totalPrice = snapshot.totalPrice;
+      const persisted = mergeOrderPricingSnapshot({
+        client: {
+          totalPrice: input.totalPrice,
+          calculatedPrice: input.calculatedPrice,
+          priceLines: input.priceLines,
+          priceUnit: input.priceUnit,
+          priceQuantity: input.priceQuantity,
+          priceManuallyEdited: input.priceManuallyEdited,
+          pricingMode,
+          allInXType: input.allInXType ?? null,
+          pricePerJaw: input.pricePerJaw,
+          jawCount: input.jawCount,
+          otherWorkKind,
+        },
+        server: {
+          totalPrice: snapshot.totalPrice,
+          calculatedPrice: snapshot.calculatedPrice,
+          priceLines: snapshot.lines,
+          priceUnit: snapshot.priceUnit,
+          priceQuantity: snapshot.priceQuantity,
+          priceManuallyEdited: snapshot.priceManuallyEdited,
+          pricingMode: snapshot.pricingMode,
+          otherWorkKind: snapshot.otherWorkKind,
+          allInXType: snapshot.allInXType,
+          pricePerJaw: snapshot.pricePerJaw,
+          jawCount: snapshot.jawCount,
+        },
+        existing: {
+          totalPrice: existing.totalPrice,
+          calculatedPrice:
+            "calculatedPrice" in existing
+              ? ((existing as { calculatedPrice?: number | null }).calculatedPrice ?? null)
+              : null,
+          priceLines:
+            "priceLines" in existing
+              ? (existing as { priceLines?: unknown }).priceLines
+              : [],
+          priceUnit:
+            "priceUnit" in existing
+              ? ((existing as { priceUnit?: number | null }).priceUnit ?? null)
+              : null,
+          priceQuantity:
+            "priceQuantity" in existing
+              ? ((existing as { priceQuantity?: number | null }).priceQuantity ?? null)
+              : null,
+          priceManuallyEdited:
+            "priceManuallyEdited" in existing
+              ? Boolean((existing as { priceManuallyEdited?: boolean }).priceManuallyEdited)
+              : false,
+          pricingMode:
+            "pricingMode" in existing
+              ? ((existing as { pricingMode?: string | null }).pricingMode ?? null)
+              : null,
+          allInXType:
+            "allInXType" in existing
+              ? ((existing as { allInXType?: string | null }).allInXType ?? null)
+              : null,
+          pricePerJaw:
+            "pricePerJaw" in existing
+              ? ((existing as { pricePerJaw?: number | null }).pricePerJaw ?? null)
+              : null,
+          jawCount:
+            "jawCount" in existing
+              ? ((existing as { jawCount?: number | null }).jawCount ?? null)
+              : null,
+          otherWorkKind:
+            "otherWorkKind" in existing
+              ? ((existing as { otherWorkKind?: string | null }).otherWorkKind ?? null)
+              : null,
+        },
+      });
 
       const order = await tx.order.update({
         where: { id: existing.id },
@@ -774,17 +862,17 @@ export class AppDataService {
           splintTypeIds: pricingMode === "REGULAR" ? splintTypeIds : [],
           splintTypeId: pricingMode === "REGULAR" ? splintTypeId : null,
           description: input.description ?? null,
-          totalPrice,
-          priceLines,
-          priceUnit: snapshot.priceUnit,
-          priceQuantity: snapshot.priceQuantity,
-          calculatedPrice: snapshot.calculatedPrice,
-          priceManuallyEdited: snapshot.priceManuallyEdited,
-          pricingMode: snapshot.pricingMode,
-          allInXType: snapshot.allInXType,
-          pricePerJaw: snapshot.pricePerJaw,
-          jawCount: snapshot.jawCount,
-          otherWorkKind: snapshot.otherWorkKind,
+          totalPrice: persisted.totalPrice,
+          priceLines: persisted.priceLines,
+          priceUnit: persisted.priceUnit,
+          priceQuantity: persisted.priceQuantity,
+          calculatedPrice: persisted.calculatedPrice,
+          priceManuallyEdited: persisted.priceManuallyEdited,
+          pricingMode: persisted.pricingMode,
+          allInXType: persisted.allInXType,
+          pricePerJaw: persisted.pricePerJaw,
+          jawCount: persisted.jawCount,
+          otherWorkKind: persisted.otherWorkKind,
           otherWorkNotes: input.otherWorkNotes?.trim() || null,
           status: finalStatus,
           entryDate: now,
@@ -1179,13 +1267,17 @@ export class AppDataService {
       previousAmount: number | null;
       newAmount: number | null;
       chargeId: string | null;
+      adjustmentId: string | null;
       serialNumber: string;
+      reason: string;
     } | null = null as {
       adjusted: boolean;
       previousAmount: number | null;
       newAmount: number | null;
       chargeId: string | null;
+      adjustmentId: string | null;
       serialNumber: string;
+      reason: string;
     } | null;
 
     await prisma.$transaction(async (tx) => {
@@ -1296,6 +1388,8 @@ export class AppDataService {
             "ledgerChargeId" in order
               ? ((order as { ledgerChargeId?: string | null }).ledgerChargeId ?? null)
               : null,
+          reason: "עדכון מחיר מההזמנה",
+          patientName: patientName ?? null,
         });
         if (reconciled.adjusted && reconciled.chargeId != null && reconciled.previousAmount != null && reconciled.newAmount != null) {
           priceAdjust = {
@@ -1303,7 +1397,9 @@ export class AppDataService {
             previousAmount: reconciled.previousAmount,
             newAmount: reconciled.newAmount,
             chargeId: reconciled.chargeId,
+            adjustmentId: reconciled.adjustmentId,
             serialNumber: order.serialNumber,
+            reason: "עדכון מחיר מההזמנה",
           };
         }
       }
@@ -1322,6 +1418,8 @@ export class AppDataService {
         chargeId: priceAdjust.chargeId,
         previousAmount: priceAdjust.previousAmount,
         newAmount: priceAdjust.newAmount,
+        reason: priceAdjust.reason,
+        adjustmentId: priceAdjust.adjustmentId,
       });
     }
 
@@ -1371,6 +1469,13 @@ export class AppDataService {
       });
 
       if (shouldBillOrderOnStatusTransition(existing.status, input.status)) {
+        assertOrderPriceReadyForBilling({
+          totalPrice: existing.totalPrice,
+          otherWorkKind:
+            "otherWorkKind" in existing
+              ? ((existing as { otherWorkKind?: string | null }).otherWorkKind ?? null)
+              : null,
+        });
         billedResult = await ensureOrderWorkCharge(tx, {
           orderId: existing.id,
           serialNumber: existing.serialNumber,
@@ -1450,6 +1555,13 @@ export class AppDataService {
       }
 
       if (nextStatus && shouldBillOrderOnStatusTransition(order.status, nextStatus)) {
+        assertOrderPriceReadyForBilling({
+          totalPrice: order.totalPrice,
+          otherWorkKind:
+            "otherWorkKind" in order
+              ? ((order as { otherWorkKind?: string | null }).otherWorkKind ?? null)
+              : null,
+        });
         const patient = await tx.patient.findUnique({
           where: { id: order.patientId },
           select: { name: true },
@@ -1546,6 +1658,13 @@ export class AppDataService {
       });
 
       if (shouldBillOrderOnStatusTransition(previousStatus, newStatus)) {
+        assertOrderPriceReadyForBilling({
+          totalPrice: order.totalPrice,
+          otherWorkKind:
+            "otherWorkKind" in order
+              ? ((order as { otherWorkKind?: string | null }).otherWorkKind ?? null)
+              : null,
+        });
         const patient = await tx.patient.findUnique({
           where: { id: order.patientId },
           select: { name: true },
@@ -1824,6 +1943,7 @@ export class AppDataService {
         serialNumber: true,
         doctorId: true,
         totalPrice: true,
+        otherWorkKind: true,
         ledgerChargeId: true,
         patient: { select: { name: true } },
         shipment: { select: { id: true } },
@@ -1880,6 +2000,10 @@ export class AppDataService {
         });
 
         if (shouldBillOrderOnStatusTransition(order.status, "SHIPPED")) {
+          assertOrderPriceReadyForBilling({
+            totalPrice: order.totalPrice,
+            otherWorkKind: order.otherWorkKind,
+          });
           billedResult = await ensureOrderWorkCharge(tx, {
             orderId: order.id,
             serialNumber: order.serialNumber,
@@ -2602,12 +2726,23 @@ export class AppDataService {
   }
 
   async addPayment(payment: Omit<Payment, "id" | "createdAt">): Promise<void> {
+    if (payment.type === "ADJUSTMENT") {
+      throw new AppError(
+        "FORBIDDEN",
+        "התאמת מחיר אפשרית רק דרך עריכת חיוב עבודה מאושרת",
+        403,
+      );
+    }
     const now = new Date();
     await prisma.$transaction(async (tx) => {
       await tx.payment.create({ data: { ...payment, createdAt: now } });
       if (payment.doctorId) {
         const delta =
-          payment.type === "PAYMENT" ? payment.amount : payment.type === "CHARGE" ? -payment.amount : 0;
+          payment.type === "PAYMENT"
+            ? payment.amount
+            : payment.type === "CHARGE"
+              ? -payment.amount
+              : 0;
         if (delta !== 0) {
           await tx.doctor.update({
             where: { id: payment.doctorId },
@@ -2620,6 +2755,148 @@ export class AppDataService {
         }
       }
     });
+  }
+
+  /**
+   * ADMIN/OWNER: edit work price from the doctor ledger.
+   * - No CHARGE yet → update Order snapshot only (balance unchanged).
+   * - CHARGE exists → Order + signed ADJUSTMENT + balance delta + audit (reason required).
+   */
+  async adminAdjustWorkChargePrice(
+    input: {
+      orderId: string;
+      newPrice: number;
+      reason: string;
+    },
+    actor: User,
+  ): Promise<{
+    orderId: string;
+    serialNumber: string;
+    previousPrice: number | null;
+    newPrice: number;
+    charged: boolean;
+    adjustmentId: string | null;
+    chargeId: string | null;
+  }> {
+    if (!canDeleteOrders(actor)) {
+      throw new AppError("FORBIDDEN", "רק מנהל מערכת יכול לערוך חיוב בכרטסת", 403);
+    }
+
+    const reason = input.reason.trim();
+    if (!reason) {
+      throw new AppError("VALIDATION_ERROR", "חובה לציין סיבת שינוי", 400);
+    }
+    if (!Number.isFinite(input.newPrice) || input.newPrice < 0) {
+      throw new AppError("VALIDATION_ERROR", "מחיר לא תקין", 400);
+    }
+
+    const order = await prisma.order.findUnique({
+      where: { id: input.orderId },
+      include: { patient: { select: { name: true } } },
+    });
+    if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+    if (order.status === "DELETED" || order.status === "DRAFT") {
+      throw new AppError("VALIDATION_ERROR", "לא ניתן לערוך מחיר להזמנה זו", 400);
+    }
+
+    const previousPrice = order.totalPrice;
+    let result: {
+      charged: boolean;
+      adjustmentId: string | null;
+      chargeId: string | null;
+      previousNet: number | null;
+    } = { charged: false, adjustmentId: null, chargeId: null, previousNet: previousPrice };
+
+    await prisma.$transaction(async (tx) => {
+      const charge = await findOrderWorkCharge(
+        tx,
+        order.id,
+        "ledgerChargeId" in order
+          ? ((order as { ledgerChargeId?: string | null }).ledgerChargeId ?? null)
+          : null,
+      );
+
+      await tx.order.update({
+        where: { id: order.id },
+        data: {
+          totalPrice: input.newPrice,
+          priceManuallyEdited: true,
+          ...(input.newPrice === 0 && order.otherWorkKind == null
+            ? {}
+            : {}),
+          updatedAt: new Date(),
+        },
+      });
+
+      if (!charge) {
+        result = {
+          charged: false,
+          adjustmentId: null,
+          chargeId: null,
+          previousNet: previousPrice,
+        };
+        return;
+      }
+
+      const reconciled = await reconcileOrderWorkChargePrice(tx, {
+        orderId: order.id,
+        serialNumber: order.serialNumber,
+        doctorId: order.doctorId,
+        newTotalPrice: input.newPrice,
+        ledgerChargeId: charge.id,
+        reason,
+        patientName: order.patient?.name ?? null,
+      });
+
+      result = {
+        charged: true,
+        adjustmentId: reconciled.adjustmentId,
+        chargeId: reconciled.chargeId,
+        previousNet: reconciled.previousAmount,
+      };
+    });
+
+    if (result.charged && result.chargeId && result.previousNet != null && result.adjustmentId) {
+      await auditOrderWorkChargePriceAdjust({
+        actorId: actor.id,
+        orderId: order.id,
+        serialNumber: order.serialNumber,
+        chargeId: result.chargeId,
+        previousAmount: result.previousNet,
+        newAmount: input.newPrice,
+        reason,
+        adjustmentId: result.adjustmentId,
+      });
+    } else if (!result.charged) {
+      await writeAuditLog({
+        userId: actor.id,
+        action: "ORDER_PRICE_EDIT_UNBILLED",
+        entityType: "Order",
+        entityId: order.id,
+        details: {
+          orderId: order.id,
+          orderNumber: order.serialNumber,
+          oldPrice: previousPrice,
+          newPrice: input.newPrice,
+          difference:
+            previousPrice != null ? input.newPrice - previousPrice : null,
+          reason,
+          changedBy: actor.id,
+          changedAt: new Date().toISOString(),
+          charged: false,
+        },
+      });
+    }
+
+    return {
+      orderId: order.id,
+      serialNumber: order.serialNumber,
+      previousPrice: result.previousNet,
+      newPrice: input.newPrice,
+      charged: result.charged,
+      adjustmentId: result.adjustmentId,
+      chargeId: result.chargeId,
+    };
   }
 
   async updateDoctorBalance(doctorId: string, amount: number, status?: PaymentStatus): Promise<void> {

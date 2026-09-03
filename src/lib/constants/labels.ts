@@ -102,6 +102,13 @@ export const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
   OVERDUE: "באיחור",
 };
 
+export const TRANSACTION_TYPE_LABELS: Record<string, string> = {
+  PAYMENT: "תשלום",
+  CHARGE: "חיוב",
+  SALARY: "שכר",
+  ADJUSTMENT: "התאמת מחיר",
+};
+
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   CASH: "מזומן",
   CHECK: "צ'ק",

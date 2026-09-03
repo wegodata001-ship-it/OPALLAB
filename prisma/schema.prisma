@@ -135,6 +135,8 @@ enum TransactionType {
   PAYMENT
   CHARGE
   SALARY
+  /// Signed delta against a work CHARGE (positive = more debt, negative = credit).
+  ADJUSTMENT
 }
 
 enum MovementType {

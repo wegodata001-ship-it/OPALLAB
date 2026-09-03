@@ -187,6 +187,13 @@ export async function assertCanManagePayments(user: User): Promise<void> {
   }
 }
 
+/** ADMIN / OWNER only — edit work charge / order price from doctor ledger. */
+export async function assertCanAdjustWorkCharge(user: User): Promise<void> {
+  if (!canDeleteOrders(user)) {
+    await forbid(user, "WORK_CHARGE_ADJUST", "רק מנהל מערכת יכול לערוך חיוב בכרטסת");
+  }
+}
+
 export async function assertCanManageShipments(user: User): Promise<void> {
   if (isSystemAdminUser(user)) return;
   if (userHasAnyRole(user, ["PACKAGING"])) return;
