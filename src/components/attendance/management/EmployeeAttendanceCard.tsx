@@ -25,6 +25,8 @@ import { USER_ROLE_LABELS } from "@/lib/constants/labels";
 import { formatDate, formatDateTime, formatTime, cn } from "@/lib/utils";
 import { formatHHmmJerusalem } from "@/lib/attendance/management/edit-time";
 import { canEditAttendanceTimes } from "@/lib/attendance/management/access";
+import { MonthlyAttendanceTable } from "@/components/attendance/management/MonthlyAttendanceTable";
+import { jerusalemYearMonth } from "@/lib/attendance/management/monthly-summary";
 import { useApp } from "@/providers/AppProvider";
 import {
   AlertTriangle,
@@ -354,6 +356,9 @@ export function EmployeeAttendanceCard({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busyDevice, setBusyDevice] = useState<string | null>(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [tableReloadSignal, setTableReloadSignal] = useState(0);
+
+  const defaultMonth = useMemo(() => jerusalemYearMonth(), []);
 
   const range = useMemo(() => rangeForPreset(preset), [preset]);
 
@@ -425,6 +430,7 @@ export function EmployeeAttendanceCard({
       });
       setStats(employeeStats);
     }
+    setTableReloadSignal((n) => n + 1);
     onAttendanceChanged?.();
   };
 
@@ -746,6 +752,19 @@ export function EmployeeAttendanceCard({
               </>
             )}
           </section>
+
+          <MonthlyAttendanceTable
+            employeeId={emp.id}
+            canEdit={canEdit}
+            reloadSignal={tableReloadSignal}
+            initialYear={defaultMonth.year}
+            initialMonth={defaultMonth.month}
+            onChanged={() => {
+              setTableReloadSignal((n) => n + 1);
+              void load();
+              onAttendanceChanged?.();
+            }}
+          />
         </div>
       </Drawer>
 

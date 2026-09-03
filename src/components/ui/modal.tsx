@@ -9,12 +9,14 @@ interface ModalProps {
   title: string;
   children: React.ReactNode;
   className?: string;
+  /** Stack above drawers (default z-50). */
+  overlayClassName?: string;
 }
 
-export function Modal({ open, onClose, title, children, className }: ModalProps) {
+export function Modal({ open, onClose, title, children, className, overlayClassName }: ModalProps) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className={cn("fixed inset-0 z-50 flex items-center justify-center p-4", overlayClassName)}>
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className={cn("relative bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col", className)}>
         <div className="flex items-center justify-between px-5 py-4 border-b">

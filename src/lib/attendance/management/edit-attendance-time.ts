@@ -107,6 +107,9 @@ export async function editAttendanceTime(input: {
     });
 
     const editedAt = new Date();
+    const attendanceDate = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Jerusalem",
+    }).format(existing.checkIn);
     await writeAuditLog({
       userId: input.actorId,
       action: ATTENDANCE_TIME_EDIT_ACTION,
@@ -114,12 +117,21 @@ export async function editAttendanceTime(input: {
       entityId: input.recordId,
       details: {
         field,
+        employeeId: existing.userId,
+        attendanceId: input.recordId,
+        date: attendanceDate,
+        oldCheckIn: existing.checkIn.toISOString(),
+        newCheckIn: resolved.checkIn.toISOString(),
+        oldCheckOut: existing.checkOut?.toISOString() ?? null,
+        newCheckOut: resolved.checkOut?.toISOString() ?? null,
         oldValue,
         newValue,
         oldDisplay: oldValue ? formatHHmmJerusalem(new Date(oldValue)) : null,
         newDisplay: formatHHmmJerusalem(new Date(newValue)),
+        editedBy: input.actorId,
         editedByUserId: input.actorId,
         editedAt: editedAt.toISOString(),
+        reason: "ATTENDANCE_MANUAL_EDIT",
         methodUnchanged: existing.method,
         gpsPreserved: true,
       },
