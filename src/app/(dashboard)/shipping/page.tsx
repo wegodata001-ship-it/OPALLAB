@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/layout/sidebar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label, Select } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
 import { DateRangeFilter } from "@/components/shared/date-range-filter";
 import { useApp } from "@/providers/AppProvider";
 import { StatusBadge } from "@/components/orders/status-badge";
@@ -35,6 +36,7 @@ import {
 } from "@/lib/shipping/delivery-note-html";
 import { apiDelete, apiPost, apiPut } from "@/lib/api/client";
 import { shippingLog, shippingTimed } from "@/lib/shipping/action-log";
+import { canDeleteOrders } from "@/lib/user-roles";
 
 type WhatsAppPhase = "idle" | "pdf" | "upload" | "open" | "done" | "error";
 
@@ -53,6 +55,17 @@ type PendingSignature = {
   dataUrl: string;
   signerName: string;
 };
+
+type ArchivedShipmentRow = Shipment & { order: OrderWithRelations };
+
+function isBulkSignEligible(s: Pick<Shipment, "lockedAt" | "recipientSignatureUrl" | "recipientSignedAt" | "recipientSignaturePath">): boolean {
+  return (
+    !s.lockedAt &&
+    !s.recipientSignatureUrl &&
+    !s.recipientSignedAt &&
+    !s.recipientSignaturePath
+  );
+}
 
 export default function ShippingPage() {
   const {
@@ -82,7 +95,15 @@ export default function ShippingPage() {
   const [waBusyId, setWaBusyId] = useState<string | null>(null);
   const [waPhase, setWaPhase] = useState<WhatsAppPhase>("idle");
   const [waMessage, setWaMessage] = useState<string | null>(null);
+  const [selectedBulkIds, setSelectedBulkIds] = useState<Set<string>>(new Set());
+  const [bulkPadMode, setBulkPadMode] = useState(false);
+  const [bulkPending, setBulkPending] = useState<PendingSignature | null>(null);
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const actionLock = useRef<Set<string>>(new Set());
+
+  const canBulkSign = Boolean(currentUser && canDeleteOrders(currentUser));
 
   const shareShipmentWhatsApp = useCallback(async (shipmentId: string) => {
     if (waBusyId) return;
@@ -184,10 +205,113 @@ export default function ShippingPage() {
   const archivedShipments = filterByDateRange(
     shipments
       .map((s) => ({ ...s, order: orders.find((o) => o.id === s.orderId) }))
-      .filter((s) => s.order),
+      .filter((s): s is ArchivedShipmentRow => Boolean(s.order)),
     (s) => s.shippedAt ?? s.createdAt,
     dateRange,
   );
+
+  const bulkEligibleIds = useMemo(
+    () => archivedShipments.filter(isBulkSignEligible).map((s) => s.id),
+    [archivedShipments],
+  );
+
+  useEffect(() => {
+    setSelectedBulkIds(new Set());
+    setBulkPending(null);
+    setBulkConfirmOpen(false);
+    setBulkPadMode(false);
+  }, [tab, dateRange.from, dateRange.to]);
+
+  useEffect(() => {
+    setSelectedBulkIds((prev) => {
+      if (prev.size === 0) return prev;
+      const allowed = new Set(bulkEligibleIds);
+      const next = new Set([...prev].filter((id) => allowed.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [bulkEligibleIds]);
+
+  const selectedBulkCount = selectedBulkIds.size;
+  const allEligibleSelected =
+    bulkEligibleIds.length > 0 && bulkEligibleIds.every((id) => selectedBulkIds.has(id));
+  const someEligibleSelected = selectedBulkCount > 0 && !allEligibleSelected;
+
+  const toggleBulkSelect = (shipmentId: string, eligible: boolean) => {
+    if (!canBulkSign || !eligible) return;
+    setSelectedBulkIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(shipmentId)) next.delete(shipmentId);
+      else next.add(shipmentId);
+      return next;
+    });
+  };
+
+  const toggleSelectAllEligible = () => {
+    if (!canBulkSign) return;
+    setSelectedBulkIds((prev) => {
+      if (bulkEligibleIds.length === 0) return new Set();
+      const allSelected = bulkEligibleIds.every((id) => prev.has(id));
+      return allSelected ? new Set() : new Set(bulkEligibleIds);
+    });
+  };
+
+  const clearBulkSelection = () => {
+    setSelectedBulkIds(new Set());
+    setBulkPending(null);
+    setBulkConfirmOpen(false);
+  };
+
+  const startBulkSign = () => {
+    if (!canBulkSign || selectedBulkCount === 0 || bulkBusy) return;
+    setBulkMessage(null);
+    setConfirmError(null);
+    setBulkPadMode(true);
+    setPadForShipmentId(null);
+    setPadOpen(true);
+  };
+
+  const applyBulkSignatures = async () => {
+    if (!bulkPending || selectedBulkCount === 0) return;
+    setBulkBusy(true);
+    setBulkMessage(null);
+    const timer = shippingTimed("bulkSignature");
+    try {
+      const data = await apiPost<{
+        succeeded: Array<{ id: string; deliveryNote: string }>;
+        failed: Array<{ id: string; deliveryNote: string | null; reason: string }>;
+      }>("/api/shipments/signatures/bulk", {
+        shipmentIds: [...selectedBulkIds],
+        dataUrl: bulkPending.dataUrl,
+        signerName: bulkPending.signerName || currentUser?.name,
+        deviceId: getDeviceId(),
+      });
+      await refreshQuiet();
+      const ok = data.succeeded.length;
+      const fail = data.failed.length;
+      if (fail === 0) {
+        setBulkMessage(`החתימה נוספה בהצלחה ל-${ok} משלוחים`);
+      } else {
+        const failedNotes = data.failed
+          .map((f) => f.deliveryNote || f.id)
+          .slice(0, 8)
+          .join(", ");
+        setBulkMessage(
+          `החתימה נוספה ל-${ok} מתוך ${ok + fail} משלוחים.${
+            failedNotes ? ` לא עודכנו: ${failedNotes}` : ""
+          }`,
+        );
+      }
+      clearBulkSelection();
+      setBulkConfirmOpen(false);
+      timer.end("ui:updated", { ok, fail });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "חתימה קבוצתית נכשלה";
+      setConfirmError(message);
+      timer.end("error", { message });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const generatePreview = async () => {
     if (!selectedId || !currentUser || generating || confirming) return;
@@ -321,17 +445,27 @@ export default function ShippingPage() {
   };
 
   const openPadForNew = () => {
+    setBulkPadMode(false);
     setPadForShipmentId(null);
     setPadOpen(true);
   };
 
   const openPadForShipment = (shipmentId: string) => {
     if (archiveBusy) return;
+    setBulkPadMode(false);
     setPadForShipmentId(shipmentId);
     setPadOpen(true);
   };
 
   const onPadSave = async (result: { dataUrl: string; signerName: string }) => {
+    if (bulkPadMode) {
+      setBulkPending(result);
+      setPadOpen(false);
+      setBulkPadMode(false);
+      setBulkConfirmOpen(true);
+      return;
+    }
+
     if (!padForShipmentId) {
       setPendingSignature(result);
       setPadOpen(false);
@@ -643,24 +777,99 @@ export default function ShippingPage() {
               {waMessage}
             </div>
           )}
+          {bulkMessage && (
+            <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+              {bulkMessage}
+            </div>
+          )}
+          {canBulkSign && archivedShipments.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-3">
+              <label className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-slate-300"
+                  checked={allEligibleSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someEligibleSelected;
+                  }}
+                  onChange={toggleSelectAllEligible}
+                  disabled={bulkEligibleIds.length === 0 || bulkBusy}
+                  aria-label="בחר את כל המשלוחים הזכאים"
+                />
+                בחר הכל
+                {bulkEligibleIds.length > 0 && (
+                  <span className="text-xs text-slate-400">({bulkEligibleIds.length})</span>
+                )}
+              </label>
+            </div>
+          )}
+          {canBulkSign && selectedBulkCount > 0 && (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-opal-gold/30 bg-opal-gold/5 px-3 py-2.5">
+              <p className="text-sm font-semibold text-slate-800">
+                <span className="sm:hidden">{selectedBulkCount} נבחרו</span>
+                <span className="hidden sm:inline">{selectedBulkCount} משלוחים נבחרו</span>
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  onClick={startBulkSign}
+                  disabled={bulkBusy || confirming}
+                >
+                  <PenLine className="h-4 w-4" />
+                  חתום על הנבחרים
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={clearBulkSelection}
+                  disabled={bulkBusy}
+                >
+                  בטל בחירה
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="space-y-3">
             {archivedShipments.map((s) => {
               const locked = Boolean(s.lockedAt);
               const hasSig = Boolean(s.recipientSignatureUrl);
+              const eligible = isBulkSignEligible(s);
+              const selected = selectedBulkIds.has(s.id);
               return (
                 <Card key={s.id}>
                   <CardContent className="p-4 flex flex-col gap-3">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div>
-                        <p className="font-bold text-opal-gold-dark">{s.deliveryNote}</p>
-                        <p className="text-sm">
-                          {s.order?.serialNumber} · {s.order?.patient.name} · {s.order?.doctor?.name ?? "—"}
-                        </p>
-                        <p className="text-xs text-slate-400">
-                          {s.courierName} {s.courierPhone} ·{" "}
-                          {formatDateTime(s.shippedAt ?? s.createdAt)}
-                          {locked ? " · נעול" : ""}
-                        </p>
+                      <div className="flex items-start gap-2 min-w-0">
+                        {canBulkSign && (
+                          <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 disabled:opacity-40"
+                            checked={selected}
+                            disabled={!eligible || bulkBusy}
+                            onChange={() => toggleBulkSelect(s.id, eligible)}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label={`בחר משלוח ${s.deliveryNote}`}
+                            title={
+                              eligible
+                                ? `בחר משלוח ${s.deliveryNote}`
+                                : hasSig
+                                  ? "כבר קיימת חתימה"
+                                  : "לא זמין לחתימה קבוצתית"
+                            }
+                          />
+                        )}
+                        <div className="min-w-0">
+                          <p className="font-bold text-opal-gold-dark">{s.deliveryNote}</p>
+                          <p className="text-sm">
+                            {s.order?.serialNumber} · {s.order?.patient.name} ·{" "}
+                            {s.order?.doctor?.name ?? "—"}
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            {s.courierName} {s.courierPhone} ·{" "}
+                            {formatDateTime(s.shippedAt ?? s.createdAt)}
+                            {locked ? " · נעול" : ""}
+                          </p>
+                        </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button
@@ -801,13 +1010,62 @@ export default function ShippingPage() {
 
       <SignaturePadModal
         open={padOpen}
+        title={bulkPadMode ? "חתימה קבוצתית" : "חתימת מקבל"}
         defaultSignerName={currentUser?.name ?? ""}
         onCancel={() => {
           setPadOpen(false);
           setPadForShipmentId(null);
+          setBulkPadMode(false);
         }}
         onSave={onPadSave}
       />
+
+      <Modal
+        open={bulkConfirmOpen}
+        onClose={() => {
+          if (bulkBusy) return;
+          setBulkConfirmOpen(false);
+          setBulkPending(null);
+        }}
+        title="החלת חתימה על משלוחים"
+        className="max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-700">
+            החתימה תחול על {selectedBulkCount} משלוחים שנבחרו.
+          </p>
+          <p className="text-xs text-slate-500 break-words">
+            {[...selectedBulkIds]
+              .map((id) => archivedShipments.find((s) => s.id === id)?.deliveryNote ?? id)
+              .slice(0, 12)
+              .join(" · ")}
+            {selectedBulkCount > 12 ? "…" : ""}
+          </p>
+          {bulkPending && (
+            <div className="rounded-lg border bg-white p-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={bulkPending.dataUrl} alt="חתימה" className="max-h-20 mx-auto" />
+            </div>
+          )}
+          <p className="text-sm text-slate-700">האם להמשיך?</p>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              disabled={bulkBusy}
+              onClick={() => {
+                setBulkConfirmOpen(false);
+                setBulkPending(null);
+              }}
+            >
+              ביטול
+            </Button>
+            <Button disabled={bulkBusy} onClick={() => void applyBulkSignatures()}>
+              {bulkBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <PenLine className="h-4 w-4" />}
+              אישור וחתימה
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {viewerUrl && (
         <div

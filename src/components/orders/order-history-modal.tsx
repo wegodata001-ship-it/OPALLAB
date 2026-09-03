@@ -56,7 +56,11 @@ const KIND_META: Record<
 function classify(h: OrderStatusHistory): { kind: HistoryKind; action: string; advanced: boolean } {
   const notes = (h.notes ?? "").trim();
   const lower = notes.toLowerCase();
-  const isOverride = lower.includes("override") || notes.includes("ע״י ניהול") || notes.includes("פתיחה מחדש");
+  const isOverride =
+    lower.includes("override") ||
+    notes.includes("ע״י ניהול") ||
+    notes.includes("פתיחה מחדש") ||
+    notes.includes("הושלמה על ידי מנהל");
 
   if (isOverride) {
     return {

@@ -67,6 +67,8 @@ import {
   canCompleteStage,
   canUndoStage,
   isStageCompletionAdmin,
+  canAdminForceCompleteProduction,
+  canForceCompleteOrderProduction,
   PRODUCTION_STAGES,
   STAGE_COMPLETION_FORBIDDEN_MESSAGE,
 } from "@/lib/workflow-permissions";
@@ -85,6 +87,13 @@ import {
 import { parseSlotFromNotes } from "@/lib/orders/upload-slots";
 import { defaultLabSettings } from "@/lib/constants/lab-settings";
 import { filterSnapshotForUser, buildOrderWhereForUser } from "@/lib/access-control";
+import {
+  auditOrderWorkChargeCreated,
+  auditOrderWorkChargePriceAdjust,
+  ensureOrderWorkCharge,
+  reconcileOrderWorkChargePrice,
+  shouldBillOrderOnStatusTransition,
+} from "@/lib/orders/order-ledger";
 import { writeAuditLog } from "@/lib/audit-log";
 import { createAuthUser, deleteAuthUser, updateAuthUser } from "@/lib/supabase/auth-admin";
 import { normalizeUserRoles, primaryRole, isSystemAdminUser, isDoctorUser } from "@/lib/user-roles";
@@ -549,25 +558,7 @@ export class AppDataService {
         },
       });
 
-      if (totalPrice != null && totalPrice > 0) {
-        await tx.payment.create({
-          data: {
-            doctorId: doctorId!,
-            orderId: order.id,
-            serialNumber: order.serialNumber,
-            patientName,
-            amount: totalPrice,
-            type: "CHARGE",
-            status: "PENDING",
-            description: `חיוב עבודה ${order.serialNumber}`,
-          },
-        });
-        await tx.doctor.update({
-          where: { id: doctorId! },
-          data: { balance: { decrement: totalPrice }, updatedAt: now },
-        });
-      }
-
+      // Work CHARGE is created only when production completes (PACKAGING+), not on create.
       return mapOrder(order);
     }).then(async (order) => {
       await this.syncOrderCompletionToCalendar(order, userId, {
@@ -829,25 +820,7 @@ export class AppDataService {
         });
       }
 
-      if (totalPrice != null && totalPrice > 0) {
-        await tx.payment.create({
-          data: {
-            doctorId: doctorId!,
-            orderId: order.id,
-            serialNumber: order.serialNumber,
-            patientName,
-            amount: totalPrice,
-            type: "CHARGE",
-            status: "PENDING",
-            description: `חיוב עבודה ${order.serialNumber}`,
-          },
-        });
-        await tx.doctor.update({
-          where: { id: doctorId! },
-          data: { balance: { decrement: totalPrice }, updatedAt: now },
-        });
-      }
-
+      // Work CHARGE is created only when production completes (PACKAGING+), not on finalize.
       return mapOrder(order);
     }).then(async (order) => {
       uploadAudit({
@@ -1201,6 +1174,20 @@ export class AppDataService {
 
   async updateOrder(input: UpdateOrderInput, userId: string): Promise<void> {
     const now = new Date();
+    let priceAdjust: {
+      adjusted: boolean;
+      previousAmount: number | null;
+      newAmount: number | null;
+      chargeId: string | null;
+      serialNumber: string;
+    } | null = null as {
+      adjusted: boolean;
+      previousAmount: number | null;
+      newAmount: number | null;
+      chargeId: string | null;
+      serialNumber: string;
+    } | null;
+
     await prisma.$transaction(async (tx) => {
       const order = await tx.order.findUnique({ where: { id: input.orderId } });
       if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
@@ -1298,7 +1285,45 @@ export class AppDataService {
           data: { patientName },
         });
       }
+
+      if (input.totalPrice !== undefined) {
+        const reconciled = await reconcileOrderWorkChargePrice(tx, {
+          orderId: order.id,
+          serialNumber: order.serialNumber,
+          doctorId: doctorId ?? order.doctorId,
+          newTotalPrice: input.totalPrice,
+          ledgerChargeId:
+            "ledgerChargeId" in order
+              ? ((order as { ledgerChargeId?: string | null }).ledgerChargeId ?? null)
+              : null,
+        });
+        if (reconciled.adjusted && reconciled.chargeId != null && reconciled.previousAmount != null && reconciled.newAmount != null) {
+          priceAdjust = {
+            adjusted: true,
+            previousAmount: reconciled.previousAmount,
+            newAmount: reconciled.newAmount,
+            chargeId: reconciled.chargeId,
+            serialNumber: order.serialNumber,
+          };
+        }
+      }
     });
+
+    if (
+      priceAdjust?.adjusted &&
+      priceAdjust.chargeId &&
+      priceAdjust.previousAmount != null &&
+      priceAdjust.newAmount != null
+    ) {
+      await auditOrderWorkChargePriceAdjust({
+        actorId: userId,
+        orderId: input.orderId,
+        serialNumber: priceAdjust.serialNumber,
+        chargeId: priceAdjust.chargeId,
+        previousAmount: priceAdjust.previousAmount,
+        newAmount: priceAdjust.newAmount,
+      });
+    }
 
     if (input.completionDate !== undefined) {
       const order = await prisma.order.findUnique({
@@ -1316,7 +1341,10 @@ export class AppDataService {
   }
 
   async updateOrderStatus(input: UpdateOrderStatusInput): Promise<void> {
-    const existing = await prisma.order.findUnique({ where: { id: input.orderId } });
+    const existing = await prisma.order.findUnique({
+      where: { id: input.orderId },
+      include: { patient: { select: { name: true } } },
+    });
     if (!existing) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
     if (existing.status === "DELETED") {
       throw new AppError("VALIDATION_ERROR", "לא ניתן לשנות סטטוס להזמנה שנמחקה", 400);
@@ -1326,20 +1354,50 @@ export class AppDataService {
     }
 
     const now = new Date();
-    await prisma.$transaction([
-      prisma.order.update({
+    let billedResult: { chargeId: string | null; created: boolean; amount: number | null } | null = null as { chargeId: string | null; created: boolean; amount: number | null } | null;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.order.update({
         where: { id: input.orderId },
         data: { status: input.status, updatedAt: now },
-      }),
-      prisma.orderStatusHistory.create({
+      });
+      await tx.orderStatusHistory.create({
         data: {
           orderId: input.orderId,
           status: input.status,
           changedBy: input.changedBy,
           notes: input.notes ?? null,
         },
-      }),
-    ]);
+      });
+
+      if (shouldBillOrderOnStatusTransition(existing.status, input.status)) {
+        billedResult = await ensureOrderWorkCharge(tx, {
+          orderId: existing.id,
+          serialNumber: existing.serialNumber,
+          doctorId: existing.doctorId,
+          totalPrice: existing.totalPrice,
+          patientName: existing.patient?.name,
+          ledgerChargeId:
+            "ledgerChargeId" in existing
+              ? ((existing as { ledgerChargeId?: string | null }).ledgerChargeId ?? null)
+              : null,
+          actorId: input.changedBy,
+          completedAt: now,
+        });
+      }
+    });
+
+    if (billedResult?.created && billedResult.chargeId && billedResult.amount != null) {
+      await auditOrderWorkChargeCreated({
+        actorId: input.changedBy,
+        orderId: existing.id,
+        serialNumber: existing.serialNumber,
+        doctorId: existing.doctorId,
+        finalPrice: billedResult.amount,
+        chargeId: billedResult.chargeId,
+        completedAt: now,
+      });
+    }
   }
 
   async completeStage(input: CompleteStageInput, currentUser: User): Promise<void> {
@@ -1369,6 +1427,8 @@ export class AppDataService {
       updatedStages[input.stage] = { completedBy: currentUser.id, completedAt: now.toISOString() };
     }
 
+    let billedResult: { chargeId: string | null; created: boolean; amount: number | null } | null = null as { chargeId: string | null; created: boolean; amount: number | null } | null;
+
     await prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id: input.orderId },
@@ -1388,7 +1448,157 @@ export class AppDataService {
           },
         });
       }
+
+      if (nextStatus && shouldBillOrderOnStatusTransition(order.status, nextStatus)) {
+        const patient = await tx.patient.findUnique({
+          where: { id: order.patientId },
+          select: { name: true },
+        });
+        billedResult = await ensureOrderWorkCharge(tx, {
+          orderId: order.id,
+          serialNumber: order.serialNumber,
+          doctorId: order.doctorId,
+          totalPrice: order.totalPrice,
+          patientName: patient?.name,
+          ledgerChargeId:
+            "ledgerChargeId" in order
+              ? ((order as { ledgerChargeId?: string | null }).ledgerChargeId ?? null)
+              : null,
+          actorId: currentUser.id,
+          completedAt: now,
+        });
+      }
     });
+
+    if (billedResult?.created && billedResult.chargeId && billedResult.amount != null) {
+      await auditOrderWorkChargeCreated({
+        actorId: currentUser.id,
+        orderId: order.id,
+        serialNumber: order.serialNumber,
+        doctorId: order.doctorId,
+        finalPrice: billedResult.amount,
+        chargeId: billedResult.chargeId,
+        completedAt: now,
+      });
+    }
+  }
+
+  /**
+   * Admin/Owner only: one-click finish of the production pipeline.
+   * Same transition as completing FINISH normally → PACKAGING.
+   * Preserves existing worker stage completions; fills missing stages as adminOverride.
+   */
+  async adminCompleteProduction(
+    orderId: string,
+    currentUser: User,
+  ): Promise<{ previousStatus: OrderStatus; newStatus: OrderStatus; serialNumber: string }> {
+    if (!canAdminForceCompleteProduction(currentUser)) {
+      throw new AppError("FORBIDDEN", "רק מנהל מערכת יכול לסמן סיום עבודה", 403);
+    }
+
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+
+    if (!canForceCompleteOrderProduction(order.status)) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "העבודה כבר הסתיימה או אינה פעילה בייצור",
+        409,
+      );
+    }
+
+    const previousStatus = order.status as OrderStatus;
+    const newStatus: OrderStatus = STAGE_NEXT.FINISH ?? "PACKAGING";
+    const now = new Date();
+    const completedStages = mapOrder(order).completedStages;
+    const updatedStages = { ...serializeCompletedStages(completedStages) };
+    const finishIdx = PRODUCTION_STAGES.findIndex((s) => s.status === "FINISH");
+
+    for (let i = 0; i <= finishIdx; i++) {
+      const s = PRODUCTION_STAGES[i].status;
+      if (!updatedStages[s]) {
+        updatedStages[s] = {
+          completedBy: currentUser.id,
+          completedAt: now.toISOString(),
+          adminOverride: true,
+        };
+      }
+    }
+
+    let billedResult: { chargeId: string | null; created: boolean; amount: number | null } | null = null as { chargeId: string | null; created: boolean; amount: number | null } | null;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          completedStages: updatedStages,
+          status: newStatus,
+          updatedAt: now,
+        },
+      });
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId,
+          status: newStatus,
+          changedBy: currentUser.id,
+          notes: "העבודה סומנה כהושלמה על ידי מנהל",
+        },
+      });
+
+      if (shouldBillOrderOnStatusTransition(previousStatus, newStatus)) {
+        const patient = await tx.patient.findUnique({
+          where: { id: order.patientId },
+          select: { name: true },
+        });
+        billedResult = await ensureOrderWorkCharge(tx, {
+          orderId: order.id,
+          serialNumber: order.serialNumber,
+          doctorId: order.doctorId,
+          totalPrice: order.totalPrice,
+          patientName: patient?.name,
+          ledgerChargeId:
+            "ledgerChargeId" in order
+              ? ((order as { ledgerChargeId?: string | null }).ledgerChargeId ?? null)
+              : null,
+          actorId: currentUser.id,
+          completedAt: now,
+        });
+      }
+    });
+
+    await writeAuditLog({
+      userId: currentUser.id,
+      action: "ORDER_ADMIN_COMPLETE_PRODUCTION",
+      entityType: "Order",
+      entityId: orderId,
+      details: {
+        orderId,
+        serialNumber: order.serialNumber,
+        performedBy: currentUser.id,
+        performedAt: now.toISOString(),
+        previousStatus,
+        previousProductionStatus: previousStatus,
+        newStatus,
+        newProductionStatus: newStatus,
+        adminOverride: true,
+        ledgerChargeId: billedResult?.chargeId ?? null,
+        ledgerChargeCreated: billedResult?.created ?? false,
+      },
+    });
+
+    if (billedResult?.created && billedResult.chargeId && billedResult.amount != null) {
+      await auditOrderWorkChargeCreated({
+        actorId: currentUser.id,
+        orderId: order.id,
+        serialNumber: order.serialNumber,
+        doctorId: order.doctorId,
+        finalPrice: billedResult.amount,
+        chargeId: billedResult.chargeId,
+        completedAt: now,
+      });
+    }
+
+    return { previousStatus, newStatus, serialNumber: order.serialNumber };
   }
 
   async undoStage(input: UndoStageInput, currentUser: User): Promise<void> {
@@ -1608,7 +1818,16 @@ export class AppDataService {
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
-      select: { id: true, status: true, serialNumber: true, shipment: { select: { id: true } } },
+      select: {
+        id: true,
+        status: true,
+        serialNumber: true,
+        doctorId: true,
+        totalPrice: true,
+        ledgerChargeId: true,
+        patient: { select: { name: true } },
+        shipment: { select: { id: true } },
+      },
     });
     if (!order) throw new AppError("NOT_FOUND", "ההזמנה לא נמצאה", 404);
     if (order.shipment) {
@@ -1628,6 +1847,7 @@ export class AppDataService {
 
     const now = new Date();
     let created;
+    let billedResult: { chargeId: string | null; created: boolean; amount: number | null } | null = null as { chargeId: string | null; created: boolean; amount: number | null } | null;
     try {
       created = await prisma.$transaction(async (tx) => {
         const shipment = await tx.shipment.create({
@@ -1659,6 +1879,19 @@ export class AppDataService {
           },
         });
 
+        if (shouldBillOrderOnStatusTransition(order.status, "SHIPPED")) {
+          billedResult = await ensureOrderWorkCharge(tx, {
+            orderId: order.id,
+            serialNumber: order.serialNumber,
+            doctorId: order.doctorId,
+            totalPrice: order.totalPrice,
+            patientName: order.patient?.name,
+            ledgerChargeId: order.ledgerChargeId,
+            actorId: userId,
+            completedAt: now,
+          });
+        }
+
         return shipment;
       });
     } catch (error) {
@@ -1684,6 +1917,18 @@ export class AppDataService {
     }
 
     console.info("[shipment] create:db-ok", { shipmentId: created.id, orderId, status: "SHIPPED" });
+
+    if (billedResult?.created && billedResult.chargeId && billedResult.amount != null) {
+      await auditOrderWorkChargeCreated({
+        actorId: userId,
+        orderId: order.id,
+        serialNumber: order.serialNumber,
+        doctorId: order.doctorId,
+        finalPrice: billedResult.amount,
+        chargeId: billedResult.chargeId,
+        completedAt: now,
+      });
+    }
 
     await writeAuditLog({
       userId,
@@ -1797,6 +2042,128 @@ export class AppDataService {
     });
 
     return await mapShipment(updated);
+  }
+
+  /**
+   * Admin/Owner bulk-add: apply one signature PNG to many unsigned shipments.
+   * Never overwrites an existing signature. Partial failures returned per id.
+   */
+  async bulkAddShipmentSignatures(
+    shipmentIds: string[],
+    userId: string,
+    signature: {
+      dataUrl: string;
+      signerName?: string | null;
+      deviceId?: string | null;
+      ip?: string | null;
+    },
+  ): Promise<{
+    succeeded: Array<{ id: string; deliveryNote: string }>;
+    failed: Array<{ id: string; deliveryNote: string | null; reason: string }>;
+  }> {
+    const uniqueIds = [...new Set(shipmentIds.map((id) => id.trim()).filter(Boolean))];
+    if (uniqueIds.length === 0) {
+      throw new AppError("VALIDATION_ERROR", "לא נבחרו משלוחים", 400);
+    }
+    if (!signature.dataUrl?.trim()) {
+      throw new AppError("VALIDATION_ERROR", "חסרה תמונת חתימה", 400);
+    }
+
+    const { storeShipmentSignaturePng } = await import("@/lib/shipping/signature-storage");
+    const { writeAuditLog } = await import("@/lib/audit-log");
+
+    const signer = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true },
+    });
+    const signedAt = new Date();
+    const signerName = signature.signerName?.trim() || signer?.name || null;
+
+    const succeeded: Array<{ id: string; deliveryNote: string }> = [];
+    const failed: Array<{ id: string; deliveryNote: string | null; reason: string }> = [];
+
+    for (const shipmentId of uniqueIds) {
+      try {
+        const existing = await prisma.shipment.findUnique({ where: { id: shipmentId } });
+        if (!existing) {
+          failed.push({ id: shipmentId, deliveryNote: null, reason: "משלוח לא נמצא" });
+          continue;
+        }
+        if (existing.lockedAt) {
+          failed.push({
+            id: shipmentId,
+            deliveryNote: existing.deliveryNote,
+            reason: "המשלוח נעול",
+          });
+          continue;
+        }
+        if (existing.recipientSignaturePath || existing.recipientSignedAt) {
+          failed.push({
+            id: shipmentId,
+            deliveryNote: existing.deliveryNote,
+            reason: "כבר קיימת חתימה",
+          });
+          continue;
+        }
+
+        const path = await storeShipmentSignaturePng(shipmentId, signature.dataUrl);
+        const updated = await prisma.shipment.update({
+          where: { id: shipmentId },
+          data: {
+            recipientSignaturePath: path,
+            recipientSignedAt: signedAt,
+            recipientSignerName: signerName,
+            recipientSignerUserId: userId,
+            recipientSignatureIp: signature.ip ?? null,
+            recipientSignatureDeviceId: signature.deviceId ?? null,
+          },
+        });
+
+        await writeAuditLog({
+          userId,
+          action: "SHIPMENT_SIGNATURE_ADD",
+          entityType: "Shipment",
+          entityId: shipmentId,
+          details: {
+            deliveryNote: updated.deliveryNote,
+            signerName: updated.recipientSignerName,
+            bulk: true,
+            ip: signature.ip,
+            deviceId: signature.deviceId,
+          },
+        });
+
+        succeeded.push({ id: shipmentId, deliveryNote: updated.deliveryNote });
+      } catch (err) {
+        failed.push({
+          id: shipmentId,
+          deliveryNote: null,
+          reason: err instanceof Error ? err.message : "שגיאה בשמירה",
+        });
+      }
+    }
+
+    await writeAuditLog({
+      userId,
+      action: "SHIPMENT_SIGNATURE_BULK",
+      entityType: "Shipment",
+      entityId: "bulk",
+      details: {
+        performedBy: userId,
+        performedAt: signedAt.toISOString(),
+        shipmentCount: uniqueIds.length,
+        succeededCount: succeeded.length,
+        failedCount: failed.length,
+        shipmentIds: uniqueIds,
+        succeededIds: succeeded.map((s) => s.id),
+        failed: failed.map((f) => ({ id: f.id, deliveryNote: f.deliveryNote, reason: f.reason })),
+        signerName,
+        ip: signature.ip,
+        deviceId: signature.deviceId,
+      },
+    });
+
+    return { succeeded, failed };
   }
 
   async deleteShipmentSignature(shipmentId: string, userId: string): Promise<Shipment> {

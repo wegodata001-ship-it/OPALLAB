@@ -127,18 +127,28 @@ export function parseCompletedStages(value: unknown): Order["completedStages"] {
           ? new Date(s.completedAt)
           : null;
     if (!completedAt || Number.isNaN(completedAt.getTime())) continue;
-    result[key as OrderStatus] = { completedBy: s.completedBy, completedAt };
+    result[key as OrderStatus] = {
+      completedBy: s.completedBy,
+      completedAt,
+      ...(s.adminOverride === true ? { adminOverride: true } : {}),
+    };
   }
   return result;
 }
 
-export function serializeCompletedStages(stages: Order["completedStages"]): Record<string, { completedBy: string; completedAt: string }> {
-  const result: Record<string, { completedBy: string; completedAt: string }> = {};
+export function serializeCompletedStages(
+  stages: Order["completedStages"],
+): Record<string, { completedBy: string; completedAt: string; adminOverride?: boolean }> {
+  const result: Record<
+    string,
+    { completedBy: string; completedAt: string; adminOverride?: boolean }
+  > = {};
   for (const [key, value] of Object.entries(stages)) {
     if (value) {
       result[key] = {
         completedBy: value.completedBy,
         completedAt: value.completedAt.toISOString(),
+        ...(value.adminOverride ? { adminOverride: true } : {}),
       };
     }
   }
@@ -158,6 +168,10 @@ export function mapOrder(order: PrismaOrder): Order {
     priceLines: parsePriceLines(
       "priceLines" in order ? (order as { priceLines?: unknown }).priceLines : [],
     ),
+    ledgerChargeId:
+      "ledgerChargeId" in order
+        ? ((order as { ledgerChargeId?: string | null }).ledgerChargeId ?? null)
+        : null,
     priceUnit:
       "priceUnit" in order ? ((order as { priceUnit?: number | null }).priceUnit ?? null) : null,
     priceQuantity:

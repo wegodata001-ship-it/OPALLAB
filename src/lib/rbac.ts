@@ -114,6 +114,17 @@ export async function assertCanDeleteOrder(user: User, action = "ORDER_DELETE"):
   }
 }
 
+/** Bulk shipment signature — ADMIN / OWNER only (stricter than single-sign). */
+export async function assertCanBulkSignShipments(user: User): Promise<void> {
+  if (!canDeleteOrders(user)) {
+    await forbid(
+      user,
+      "SHIPMENT_SIGNATURE_BULK",
+      "רק מנהל מערכת יכול לבצע חתימה קבוצתית",
+    );
+  }
+}
+
 /**
  * Free-form status changes — Owner / Admin / Secretary.
  * Packaging may only set PACKAGING / SHIPPED (shipping desk).
@@ -144,6 +155,18 @@ export async function assertCanCompleteProductionStage(
     stage,
     requiredRole: STAGE_REQUIRED_ROLE[stage] ?? null,
   });
+}
+
+/** ADMIN / OWNER only — one-click force-complete of production ("סיום עבודה"). */
+export async function assertCanAdminForceCompleteProduction(user: User): Promise<void> {
+  const { canAdminForceCompleteProduction } = await import("@/lib/workflow-permissions");
+  if (!canAdminForceCompleteProduction(user)) {
+    await forbid(
+      user,
+      "ORDER_ADMIN_COMPLETE_PRODUCTION",
+      "רק מנהל מערכת יכול לסמן סיום עבודה",
+    );
+  }
 }
 
 export async function assertCanManagePeople(user: User): Promise<void> {

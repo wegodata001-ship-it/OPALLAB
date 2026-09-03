@@ -36,6 +36,30 @@ export function isStageCompletionAdmin(user: Pick<User, "role" | "roles">): bool
   return userHasAnyRole(user, STAGE_COMPLETION_ADMIN_ROLES);
 }
 
+/**
+ * Admin-only force-complete of the entire production pipeline ("סיום עבודה").
+ * ADMIN / OWNER only — not SECRETARY, not production workers.
+ */
+export function canAdminForceCompleteProduction(
+  user: Pick<User, "role" | "roles">,
+): boolean {
+  return userHasAnyRole(user, ["ADMIN", "OWNER"]);
+}
+
+/** Statuses where production work is already past FINISH (or terminal). */
+export const PRODUCTION_FORCE_COMPLETE_BLOCKED: OrderStatus[] = [
+  "PACKAGING",
+  "SHIPPED",
+  "DELIVERED",
+  "CANCELLED",
+  "DELETED",
+  "DRAFT",
+];
+
+export function canForceCompleteOrderProduction(status: OrderStatus): boolean {
+  return !PRODUCTION_FORCE_COMPLETE_BLOCKED.includes(status);
+}
+
 /** Role-only check — whether the user may ever mark this stage complete (ignores order state). */
 export function hasStageCompletionRole(user: Pick<User, "role" | "roles">, stage: OrderStatus): boolean {
   if (isStageCompletionAdmin(user)) return true;

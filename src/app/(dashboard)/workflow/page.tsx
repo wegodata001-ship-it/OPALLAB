@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Header } from "@/components/layout/sidebar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Modal } from "@/components/ui/modal";
 import { ExportActions } from "@/components/shared/export-actions";
 import { DateRangeFilter } from "@/components/shared/date-range-filter";
 import { useApp } from "@/providers/AppProvider";
@@ -11,13 +12,15 @@ import { StatusBadge } from "@/components/orders/status-badge";
 import { ORDER_STATUS_LABELS } from "@/lib/constants/labels";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import { Check, Circle, Loader2, RotateCcw } from "lucide-react";
-import type { DateRange } from "@/lib/types";
+import type { DateRange, OrderWithRelations } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useCallback, useRef, useState } from "react";
 import { filterByDateRange } from "@/lib/date-filter";
 import {
   PRODUCTION_STAGES,
+  canAdminForceCompleteProduction,
   canCompleteStage,
+  canForceCompleteOrderProduction,
   canUndoStage,
   getProductionStageState,
   hasStageCompletionRole,
@@ -27,10 +30,13 @@ import { OrderHistoryButton } from "@/components/orders/order-history-modal";
 import { shippingLog } from "@/lib/shipping/action-log";
 
 export default function WorkflowPage() {
-  const { orders, currentUser, completeStage, undoStage, users } = useApp();
+  const { orders, currentUser, completeStage, undoStage, adminCompleteProduction, users } =
+    useApp();
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [confirmOrder, setConfirmOrder] = useState<OrderWithRelations | null>(null);
   const lockRef = useRef<Set<string>>(new Set());
 
   const runStageAction = useCallback(
@@ -42,6 +48,7 @@ export default function WorkflowPage() {
       lockRef.current.add(key);
       setBusyKey(key);
       setActionError(null);
+      setActionSuccess(null);
       shippingLog("click", key);
       try {
         await fn();
@@ -61,18 +68,30 @@ export default function WorkflowPage() {
   if (!currentUser) return null;
 
   const isAdmin = isStageCompletionAdmin(currentUser);
-  // Everyone sees the full pipeline; only actions are role-gated
+  const canForceComplete = canAdminForceCompleteProduction(currentUser);
   const visibleStages = PRODUCTION_STAGES;
 
   const activeOrders = filterByDateRange(
     orders.filter((o) => !["DELIVERED", "CANCELLED", "SHIPPED"].includes(o.status)),
     (o) => o.entryDate,
-    dateRange
+    dateRange,
   );
 
   const exportHtml = `<h2>מעקב ייצור</h2><table><tr><th>עבודה</th><th>מטופל</th><th>שלב</th></tr>
     ${activeOrders.map((o) => `<tr><td>${o.serialNumber}</td><td>${o.patient.name}</td><td>${ORDER_STATUS_LABELS[o.status]}</td></tr>`).join("")}
     </table>`;
+
+  const confirmForceComplete = async () => {
+    if (!confirmOrder) return;
+    const serial = confirmOrder.serialNumber;
+    const orderId = confirmOrder.id;
+    setConfirmOrder(null);
+    await runStageAction(`admin-complete:${orderId}`, async () => {
+      await adminCompleteProduction(orderId);
+      setActionSuccess("העבודה הסתיימה והועברה לשלב הבא");
+    });
+    void serial;
+  };
 
   return (
     <>
@@ -86,7 +105,9 @@ export default function WorkflowPage() {
         actions={
           <ExportActions
             title="מעקב ייצור"
-            whatsappText={activeOrders.map((o) => `${o.serialNumber}: ${ORDER_STATUS_LABELS[o.status]}`).join("\n")}
+            whatsappText={activeOrders
+              .map((o) => `${o.serialNumber}: ${ORDER_STATUS_LABELS[o.status]}`)
+              .join("\n")}
             pdfHtml={exportHtml}
           />
         }
@@ -97,6 +118,11 @@ export default function WorkflowPage() {
       {actionError && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {actionError}
+        </div>
+      )}
+      {actionSuccess && (
+        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          {actionSuccess}
         </div>
       )}
 
@@ -116,8 +142,28 @@ export default function WorkflowPage() {
                 </Link>
                 <p className="text-sm text-slate-300 mt-1">{order.patient.name}</p>
                 <p className="text-xs text-slate-400">{order.doctor?.name ?? "—"}</p>
-                <div className="mt-3"><StatusBadge status={order.status} /></div>
+                <div className="mt-3">
+                  <StatusBadge status={order.status} />
+                </div>
                 <p className="text-xs text-slate-500 mt-2">יעד: {formatDate(order.completionDate)}</p>
+                {canForceComplete && canForceCompleteOrderProduction(order.status) && (
+                  <Button
+                    size="sm"
+                    className="mt-3 h-8 w-full bg-emerald-600 text-xs hover:bg-emerald-500"
+                    disabled={Boolean(busyKey)}
+                    onClick={() => {
+                      setActionSuccess(null);
+                      setConfirmOrder(order);
+                    }}
+                  >
+                    {busyKey === `admin-complete:${order.id}` ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                    )}
+                    סיום עבודה
+                  </Button>
+                )}
               </div>
 
               <CardContent className="flex-1 p-4">
@@ -167,7 +213,9 @@ export default function WorkflowPage() {
                               <Check className="h-6 w-6 text-white" strokeWidth={3} />
                             </div>
                             <p className="text-[10px] text-emerald-700 font-medium">
-                              {completer?.name?.split(" ")[0] ?? "הושלם"}
+                              {completion?.adminOverride
+                                ? "מנהל"
+                                : (completer?.name?.split(" ")[0] ?? "הושלם")}
                             </p>
                             {completion?.completedAt ? (
                               <p className="text-[9px] text-slate-400">
@@ -267,6 +315,37 @@ export default function WorkflowPage() {
           </div>
         )}
       </div>
+
+      <Modal
+        open={Boolean(confirmOrder)}
+        onClose={() => setConfirmOrder(null)}
+        title="סיום עבודת ייצור"
+        className="max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-700">
+            האם לסמן את העבודה כהושלמה ולהעביר אותה לשלב הבא?
+          </p>
+          {confirmOrder && (
+            <p className="text-sm font-semibold text-slate-900">
+              הזמנה: {confirmOrder.serialNumber}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmOrder(null)}>
+              ביטול
+            </Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-500"
+              disabled={Boolean(busyKey)}
+              onClick={() => void confirmForceComplete()}
+            >
+              <Check className="h-4 w-4" strokeWidth={3} />
+              סיום עבודה
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </>
   );
 }

@@ -142,6 +142,8 @@ export interface LabSettings {
 export interface StageCompletion {
   completedBy: string;
   completedAt: Date;
+  /** True when this stage was filled by an admin force-complete (not a worker click). */
+  adminOverride?: boolean;
 }
 
 export interface User {
@@ -245,6 +247,8 @@ export interface Order {
   processingEmployeeId?: string | null;
   finishEmployeeId?: string | null;
   totalPrice?: number | null;
+  /** Linked work CHARGE payment id (set when production completes). */
+  ledgerChargeId?: string | null;
   /** Priced lines snapshot at order save (historical). */
   priceLines: OrderPriceLine[];
   /** Unit price used for calculated total (primary line when single SKU). */

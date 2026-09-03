@@ -100,6 +100,8 @@ interface AppContextValue {
   updateOrder: (input: UpdateOrderInput) => Promise<void>;
   updateOrderStatus: (input: UpdateOrderStatusInput) => Promise<void>;
   completeStage: (input: CompleteStageInput) => Promise<void>;
+  /** ADMIN/OWNER only — finish entire production → PACKAGING. */
+  adminCompleteProduction: (orderId: string) => Promise<void>;
   undoStage: (input: UndoStageInput) => Promise<void>;
   addOrderFile: (
     orderId: string,
@@ -343,6 +345,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       timer.end("api:end", { ok: true });
       await quietRefresh();
       shippingLog("ui:updated", "completeStage");
+    } catch (error) {
+      timer.end("error", { message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }, [currentUser, patchOrderStatus, quietRefresh]);
+
+  const adminCompleteProduction = useCallback(async (orderId: string) => {
+    if (!currentUser) return;
+    const timer = shippingTimed("adminCompleteProduction");
+    shippingLog("api:start", "adminCompleteProduction", { orderId });
+    try {
+      await apiPost("/api/orders/stages", {
+        action: "admin-complete-production",
+        orderId,
+      });
+      patchOrderStatus(orderId, "PACKAGING");
+      timer.end("api:end", { ok: true });
+      await quietRefresh();
+      shippingLog("ui:updated", "adminCompleteProduction");
     } catch (error) {
       timer.end("error", { message: error instanceof Error ? error.message : String(error) });
       throw error;
@@ -759,6 +780,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     updateOrder,
     updateOrderStatus,
     completeStage,
+    adminCompleteProduction,
     undoStage,
     addOrderFile,
     previewDeliveryNote,

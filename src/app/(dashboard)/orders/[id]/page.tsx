@@ -132,6 +132,19 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
             <span className="font-semibold text-opal-gold-dark">
               {order.totalPrice != null ? formatCurrency(order.totalPrice) : "—"}
             </span>
+            <span className="text-slate-500">כרטסת</span>
+            <span className="text-sm">
+              {order.ledgerChargeId ? (
+                <span className="text-emerald-700 font-medium">
+                  חויב בכרטסת
+                  {order.totalPrice != null ? `: ${formatCurrency(order.totalPrice)}` : ""}
+                </span>
+              ) : order.totalPrice != null && order.totalPrice > 0 ? (
+                <span className="text-amber-700">טרם חויב בכרטסת</span>
+              ) : (
+                <span className="text-slate-500">ללא חיוב</span>
+              )}
+            </span>
             {(order.priceQuantity != null ||
               order.calculatedPrice != null ||
               order.otherWorkKind ||

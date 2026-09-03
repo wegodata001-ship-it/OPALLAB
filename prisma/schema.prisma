@@ -287,6 +287,8 @@ model Order {
   processingEmployeeId String?
   finishEmployeeId     String?
   totalPrice           Float?
+  /// Linked work CHARGE payment id (at most one work charge per order).
+  ledgerChargeId       String?
   /// Snapshot of priced lines at save time — never rewritten when price book changes.
   priceLines           Json           @default("[]")
   /// Effective unit price used for the calculated total (primary line when single SKU).
