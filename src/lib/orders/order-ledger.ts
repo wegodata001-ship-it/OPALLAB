@@ -106,6 +106,9 @@ export async function ensureOrderWorkCharge(
     completedAt?: Date;
   },
 ): Promise<{ chargeId: string | null; created: boolean; amount: number | null }> {
+  // Serialize concurrent "סיום עבודה" / bill transitions for this order (race-safe).
+  await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${input.orderId} FOR UPDATE`;
+
   const existing = await findOrderWorkCharge(tx, input.orderId, input.ledgerChargeId);
   if (existing) {
     if (!input.ledgerChargeId || input.ledgerChargeId !== existing.id) {
@@ -126,31 +129,46 @@ export async function ensureOrderWorkCharge(
   }
 
   const now = input.completedAt ?? new Date();
-  const charge = await tx.payment.create({
-    data: {
-      doctorId: input.doctorId,
-      orderId: input.orderId,
-      serialNumber: input.serialNumber,
-      patientName: input.patientName ?? null,
-      amount,
-      type: "CHARGE",
-      status: "PENDING",
-      description: workChargeDescription(input.serialNumber),
-      createdAt: now,
-    },
-  });
+  const description = workChargeDescription(input.serialNumber);
 
-  await tx.doctor.update({
-    where: { id: input.doctorId },
-    data: { balance: { decrement: amount }, updatedAt: now },
-  });
+  try {
+    const charge = await tx.payment.create({
+      data: {
+        doctorId: input.doctorId,
+        orderId: input.orderId,
+        serialNumber: input.serialNumber,
+        patientName: input.patientName ?? null,
+        amount,
+        type: "CHARGE",
+        status: "PENDING",
+        description,
+        createdAt: now,
+      },
+    });
 
-  await tx.order.update({
-    where: { id: input.orderId },
-    data: { ledgerChargeId: charge.id },
-  });
+    await tx.doctor.update({
+      where: { id: input.doctorId },
+      data: { balance: { decrement: amount }, updatedAt: now },
+    });
 
-  return { chargeId: charge.id, created: true, amount };
+    await tx.order.update({
+      where: { id: input.orderId },
+      data: { ledgerChargeId: charge.id },
+    });
+
+    return { chargeId: charge.id, created: true, amount };
+  } catch (error) {
+    // Concurrent insert won — re-link existing work CHARGE (no second balance hit).
+    const raced = await findOrderWorkCharge(tx, input.orderId, null);
+    if (raced) {
+      await tx.order.update({
+        where: { id: input.orderId },
+        data: { ledgerChargeId: raced.id },
+      });
+      return { chargeId: raced.id, created: false, amount: raced.amount };
+    }
+    throw error;
+  }
 }
 
 /**

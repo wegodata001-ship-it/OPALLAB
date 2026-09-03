@@ -1640,6 +1640,19 @@ export class AppDataService {
     let billedResult: { chargeId: string | null; created: boolean; amount: number | null } | null = null as { chargeId: string | null; created: boolean; amount: number | null } | null;
 
     await prisma.$transaction(async (tx) => {
+      // Re-read + lock so concurrent "סיום עבודה" cannot double-bill.
+      await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
+      const fresh = await tx.order.findUnique({ where: { id: orderId } });
+      if (!fresh) throw new AppError("NOT_FOUND", "הזמנה לא נמצאה", 404);
+      if (!canForceCompleteOrderProduction(fresh.status)) {
+        throw new AppError(
+          "VALIDATION_ERROR",
+          "העבודה כבר הסתיימה או אינה פעילה בייצור",
+          409,
+        );
+      }
+      const freshPrevious = fresh.status as OrderStatus;
+
       await tx.order.update({
         where: { id: orderId },
         data: {
@@ -1657,27 +1670,27 @@ export class AppDataService {
         },
       });
 
-      if (shouldBillOrderOnStatusTransition(previousStatus, newStatus)) {
+      if (shouldBillOrderOnStatusTransition(freshPrevious, newStatus)) {
         assertOrderPriceReadyForBilling({
-          totalPrice: order.totalPrice,
+          totalPrice: fresh.totalPrice,
           otherWorkKind:
-            "otherWorkKind" in order
-              ? ((order as { otherWorkKind?: string | null }).otherWorkKind ?? null)
+            "otherWorkKind" in fresh
+              ? ((fresh as { otherWorkKind?: string | null }).otherWorkKind ?? null)
               : null,
         });
         const patient = await tx.patient.findUnique({
-          where: { id: order.patientId },
+          where: { id: fresh.patientId },
           select: { name: true },
         });
         billedResult = await ensureOrderWorkCharge(tx, {
-          orderId: order.id,
-          serialNumber: order.serialNumber,
-          doctorId: order.doctorId,
-          totalPrice: order.totalPrice,
+          orderId: fresh.id,
+          serialNumber: fresh.serialNumber,
+          doctorId: fresh.doctorId,
+          totalPrice: fresh.totalPrice,
           patientName: patient?.name,
           ledgerChargeId:
-            "ledgerChargeId" in order
-              ? ((order as { ledgerChargeId?: string | null }).ledgerChargeId ?? null)
+            "ledgerChargeId" in fresh
+              ? ((fresh as { ledgerChargeId?: string | null }).ledgerChargeId ?? null)
               : null,
           actorId: currentUser.id,
           completedAt: now,
