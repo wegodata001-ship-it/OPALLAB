@@ -31,6 +31,8 @@ export type AuditAction =
   | "ORDER_WORK_CHARGE_CREATE"
   | "ORDER_WORK_CHARGE_ADJUST"
   | "ATTENDANCE_TIME_EDIT"
+  | "ATTENDANCE_MANUAL_CREATE"
+  | "ATTENDANCE_MANUAL_EDIT"
   | "FORBIDDEN_ATTEMPT";
 
 export async function writeAuditLog(input: {

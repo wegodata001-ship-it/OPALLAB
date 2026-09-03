@@ -134,8 +134,71 @@ export async function patchAttendanceTime(input: {
     body: JSON.stringify(input),
   });
   const json = await res.json();
-  if (!json.success) throw new Error(json.error?.message ?? "שגיאה בעדכון שעה");
+  if (!json.success) throwApiError(json);
   return reviveRecord(json.data as AttendanceManagementRecord) as AttendanceManagementRecord;
+}
+
+/** Create manual attendance — manager/secretary only. */
+export async function postManualAttendance(input: {
+  userId: string;
+  checkInDate: string;
+  checkInTime: string;
+  checkOutDate?: string;
+  checkOutTime?: string;
+}): Promise<AttendanceManagementRecord> {
+  const res = await fetch("/api/attendance/management", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const json = await res.json();
+  if (!json.success) throwApiError(json);
+  return reviveRecord(json.data as AttendanceManagementRecord) as AttendanceManagementRecord;
+}
+
+/** Full date+time edit — manager/secretary only. */
+export async function patchAttendanceDateTimes(input: {
+  recordId: string;
+  checkInDate: string;
+  checkInTime: string;
+  checkOutDate?: string;
+  checkOutTime?: string;
+}): Promise<AttendanceManagementRecord> {
+  const res = await fetch("/api/attendance/management", {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const json = await res.json();
+  if (!json.success) throwApiError(json);
+  return reviveRecord(json.data as AttendanceManagementRecord) as AttendanceManagementRecord;
+}
+
+type ApiFailure = {
+  success: false;
+  error?: { code?: string; message?: string; details?: { existingRecordId?: string } };
+};
+
+export class AttendanceApiError extends Error {
+  code?: string;
+  details?: { existingRecordId?: string };
+
+  constructor(message: string, code?: string, details?: { existingRecordId?: string }) {
+    super(message);
+    this.name = "AttendanceApiError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
+function throwApiError(json: ApiFailure): never {
+  throw new AttendanceApiError(
+    json.error?.message ?? "שגיאה",
+    json.error?.code,
+    json.error?.details,
+  );
 }
 
 export function attendanceExportUrl(query: AttendanceManagementQuery, format: "csv" | "pdf"): string {
@@ -145,6 +208,23 @@ export function attendanceExportUrl(query: AttendanceManagementQuery, format: "c
   }
   const qs = toQueryString({ ...query, view: "records", format: "csv" });
   return `/api/attendance/management?${qs}`;
+}
+
+/** Monthly hours report for employee drawer — always fresh from DB. */
+export function monthlyHoursReportUrl(input: {
+  userId: string;
+  year: number;
+  month: number;
+  format: "pdf" | "xlsx";
+}): string {
+  const params = new URLSearchParams({
+    userId: input.userId,
+    year: String(input.year),
+    month: String(input.month),
+    format: input.format,
+    _t: String(Date.now()),
+  });
+  return `/api/attendance/monthly-report?${params}`;
 }
 
 export function formatLiveDuration(ms: number): string {

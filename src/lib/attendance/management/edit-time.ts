@@ -134,3 +134,60 @@ export function resolveEditedAttendanceTimes(input: {
 
   return { checkIn, checkOut };
 }
+
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** YYYY-MM-DD calendar key in Asia/Jerusalem. */
+export function jerusalemDateKey(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: ATTENDANCE_TZ }).format(date);
+}
+
+export function parseDateInput(raw: string): { year: number; month: number; day: number } | null {
+  const m = DATE_RE.exec(raw.trim());
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year, month, day };
+}
+
+/** Combine YYYY-MM-DD + HH:mm into a Jerusalem zoned instant. */
+export function combineJerusalemDateTime(dateStr: string, timeHHmm: string): Date | null {
+  const date = parseDateInput(dateStr);
+  const time = parseHHmm(timeHHmm);
+  if (!date || !time) return null;
+  return zonedJerusalemDate(date.year, date.month, date.day, time.hour, time.minute);
+}
+
+/** Resolve full check-in / check-out from separate date + time fields. */
+export function resolveFullAttendanceTimes(input: {
+  checkInDate: string;
+  checkInTime: string;
+  checkOutDate?: string | null;
+  checkOutTime?: string | null;
+}): { checkIn: Date; checkOut: Date | null } {
+  const checkIn = combineJerusalemDateTime(input.checkInDate, input.checkInTime);
+  if (!checkIn) throw new Error("INVALID_CHECKIN");
+
+  const outDate = input.checkOutDate?.trim() ?? "";
+  const outTime = input.checkOutTime?.trim() ?? "";
+  if (!outDate && !outTime) return { checkIn, checkOut: null };
+  if (!outDate || !outTime) throw new Error("INCOMPLETE_CHECKOUT");
+
+  const checkOut = combineJerusalemDateTime(outDate, outTime);
+  if (!checkOut) throw new Error("INVALID_CHECKOUT");
+  if (checkOut.getTime() <= checkIn.getTime()) {
+    throw new Error("CHECKOUT_BEFORE_CHECKIN");
+  }
+  return { checkIn, checkOut };
+}
+
+/** Inclusive Jerusalem day bounds for duplicate-day checks. */
+export function jerusalemDayBounds(dateKey: string): { from: Date; to: Date } {
+  const parts = parseDateInput(dateKey);
+  if (!parts) throw new Error("INVALID_DATE");
+  const from = zonedJerusalemDate(parts.year, parts.month, parts.day, 0, 0);
+  const nextMidnight = zonedJerusalemDate(parts.year, parts.month, parts.day + 1, 0, 0);
+  return { from, to: new Date(nextMidnight.getTime() - 1) };
+}

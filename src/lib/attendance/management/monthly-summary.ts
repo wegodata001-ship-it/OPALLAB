@@ -1,4 +1,14 @@
+import { jerusalemDateKey, zonedJerusalemDate } from "@/lib/attendance/management/edit-time";
+import {
+  formatDurationFromHours,
+  getAttendanceStatus,
+} from "@/lib/attendance/management/attendance-status";
 import type { AttendanceEmployeeStats, AttendanceManagementRecord } from "./types";
+
+export type MonthDayRow = {
+  dateKey: string;
+  record: AttendanceManagementRecord | null;
+};
 
 /** Jerusalem calendar year/month for a given instant. */
 export function jerusalemYearMonth(date = new Date()): { year: number; month: number } {
@@ -47,13 +57,51 @@ export function formatWeekdayJerusalem(date: Date): string {
   }).format(date);
 }
 
-/** Hours as H:MM (e.g. 5:54). */
+/** Hours as HH:mm (e.g. 06:54). */
 export function formatHoursMinutes(hours: number | null | undefined): string {
-  if (hours == null || !Number.isFinite(hours)) return "—";
-  const totalMin = Math.round(hours * 60);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  return `${h}:${String(m).padStart(2, "0")}`;
+  return formatDurationFromHours(hours);
+}
+
+export function daysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
+
+/** All YYYY-MM-DD keys for a calendar month, ascending. */
+export function generateMonthDayKeys(year: number, month: number): string[] {
+  const count = daysInMonth(year, month);
+  const keys: string[] = [];
+  for (let day = 1; day <= count; day++) {
+    keys.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+  }
+  return keys;
+}
+
+/** Noon Jerusalem on a calendar day — stable weekday formatting. */
+export function dateKeyToJerusalemDate(dateKey: string): Date {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return zonedJerusalemDate(y, m, d, 12, 0);
+}
+
+/** Map attendance records to every day in the month (UI rows only). */
+export function buildMonthRows(
+  records: AttendanceManagementRecord[],
+  year: number,
+  month: number,
+): MonthDayRow[] {
+  const dayKeys = generateMonthDayKeys(year, month);
+  const keySet = new Set(dayKeys);
+  const byDay = new Map<string, AttendanceManagementRecord>();
+
+  const sorted = [...records].sort((a, b) => a.checkIn.getTime() - b.checkIn.getTime());
+  for (const record of sorted) {
+    const key = jerusalemDateKey(record.checkIn);
+    if (keySet.has(key)) byDay.set(key, record);
+  }
+
+  return dayKeys.map((dateKey) => ({
+    dateKey,
+    record: byDay.get(dateKey) ?? null,
+  }));
 }
 
 export function rowOvertimeHours(record: AttendanceManagementRecord): number {
@@ -61,12 +109,17 @@ export function rowOvertimeHours(record: AttendanceManagementRecord): number {
   return Math.round(Math.max(0, record.durationHours - 9) * 100) / 100;
 }
 
+export function rowOvertimeDisplay(record: AttendanceManagementRecord): string {
+  if (!record.checkOut) return "—";
+  return formatHoursMinutes(rowOvertimeHours(record));
+}
+
 export function attendanceRowStatus(record: AttendanceManagementRecord): string {
-  if (!record.checkOut) return "חסרה יציאה";
-  if (record.isLate && record.isEarlyLeave) return "איחור · יציאה מוקדמת";
-  if (record.isLate) return "איחור";
-  if (record.isEarlyLeave) return "יציאה מוקדמת";
-  return "הושלם";
+  const label = getAttendanceStatus(record).label;
+  if (record.method === "MANUAL" && record.checkOut) {
+    return `${label} · ידני`;
+  }
+  return label;
 }
 
 /** Same aggregation as getEmployeeAttendanceStats — from enriched records. */

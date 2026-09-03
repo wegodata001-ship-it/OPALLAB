@@ -3,6 +3,12 @@ import { formatDate, formatTime } from "@/lib/utils";
 import { ANOMALY_LABELS } from "@/lib/attendance/management/status";
 import type { AttendanceManagementRecord } from "@/lib/attendance/management/types";
 import { computeAttendanceReportKpis } from "@/lib/attendance/pdf/metrics";
+import {
+  formatDurationFromHours,
+  formatMinutesHHmm,
+  getAttendanceStatus,
+  lateMinutesFromCheckIn,
+} from "@/lib/attendance/management/attendance-status";
 import { buildEmbeddedFontCss, loadLogoDataUrl } from "@/lib/attendance/pdf-v2/fonts";
 import { gpsLocationHtml } from "@/lib/attendance/pdf-v2/gps-label";
 import type { AttendanceReportMeta } from "@/lib/attendance/pdf-v2/types";
@@ -39,43 +45,25 @@ function jerusalemParts(date: Date): { hour: number; minute: number } {
 
 function lateLabel(r: AttendanceManagementRecord): string {
   if (!r.isLate) return "—";
-  const { hour, minute } = jerusalemParts(r.checkIn);
-  const mins = (hour - 9) * 60 + minute;
-  if (mins <= 0) return "—";
-  return `${mins} דק׳`;
+  const mins = lateMinutesFromCheckIn(r.checkIn);
+  if (mins == null || mins <= 0) return "—";
+  return formatMinutesHHmm(mins);
 }
 
 function overtimeHours(r: AttendanceManagementRecord): string {
-  if (r.durationHours == null) return "—";
-  const ot = Math.max(0, r.durationHours - STANDARD_DAILY_HOURS);
-  return ot > 0.01 ? ot.toFixed(2) : "—";
+  if (!r.isOvertime || r.durationHours == null) return "—";
+  const otMin = Math.max(0, Math.round(r.durationHours * 60) - 9 * 60);
+  return otMin > 0 ? formatMinutesHHmm(otMin) : "—";
 }
 
 function durationLabel(r: AttendanceManagementRecord): string {
-  if (r.durationHours != null) return r.durationHours.toFixed(2);
-  if (!r.checkOut) {
-    const h = (Date.now() - r.checkIn.getTime()) / 3_600_000;
-    return `${h.toFixed(2)}*`;
-  }
+  if (r.durationHours != null) return formatDurationFromHours(r.durationHours);
+  if (!r.checkOut) return "פתוח";
   return "—";
 }
 
 function statusLabel(r: AttendanceManagementRecord): string {
-  const parts: string[] = [];
-  if (r.complianceStatus === "ok") parts.push("תקין");
-  else if (r.complianceStatus === "missing") parts.push("חסר");
-  else parts.push("חריג");
-  if (r.isLate) parts.push("איחור");
-  if (r.isOvertime) parts.push("נוספות");
-  if (r.isEarlyLeave) parts.push("יציאה מוקדמת");
-  if (!r.checkOut) parts.push("פתוחה");
-  for (const a of r.anomalies) {
-    if (a !== "late") {
-      const lbl = ANOMALY_LABELS[a];
-      if (lbl && !parts.includes(lbl)) parts.push(lbl);
-    }
-  }
-  return parts.join(" · ");
+  return getAttendanceStatus(r).label;
 }
 
 function pickFontClass(text: string): string {

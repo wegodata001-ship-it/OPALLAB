@@ -4,80 +4,166 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import {
+  AttendanceApiError,
   fetchAttendanceRecords,
   fetchEmployeeAttendanceStats,
-  patchAttendanceTime,
+  monthlyHoursReportUrl,
+  patchAttendanceDateTimes,
+  postManualAttendance,
 } from "@/lib/attendance/management/client";
 import {
-  attendanceRowStatus,
+  buildMonthRows,
   computeStatsFromRecords,
+  dateKeyToJerusalemDate,
   formatHoursMinutes,
   formatMonthYearLabel,
   formatWeekdayJerusalem,
   jerusalemYearMonth,
   monthCalendarBounds,
-  rowOvertimeHours,
+  rowOvertimeDisplay,
   shiftMonth,
+  type MonthDayRow,
 } from "@/lib/attendance/management/monthly-summary";
 import type { AttendanceManagementRecord } from "@/lib/attendance/management/types";
-import { formatHHmmJerusalem } from "@/lib/attendance/management/edit-time";
+import { formatHHmmJerusalem, jerusalemDateKey } from "@/lib/attendance/management/edit-time";
 import { formatDate, formatTime, cn } from "@/lib/utils";
-import { ChevronLeft, ChevronRight, Loader2, Pencil } from "lucide-react";
+import { AttendanceStatusBadge } from "@/components/attendance/management/AttendanceStatusBadge";
+import { ChevronLeft, ChevronRight, FileSpreadsheet, FileText, Loader2, Pencil, Plus } from "lucide-react";
+import { AttendancePdfPreview } from "@/components/attendance/pdf/AttendancePdfPreview";
 
-function MonthlyRowEditDialog({
-  record,
+type DateTimeFormState = {
+  checkInDate: string;
+  checkInTime: string;
+  checkOutDate: string;
+  checkOutTime: string;
+};
+
+function emptyDateTimeForm(dateKey: string): DateTimeFormState {
+  return {
+    checkInDate: dateKey,
+    checkInTime: "",
+    checkOutDate: dateKey,
+    checkOutTime: "",
+  };
+}
+
+function recordToForm(record: AttendanceManagementRecord): DateTimeFormState {
+  return {
+    checkInDate: jerusalemDateKey(record.checkIn),
+    checkInTime: formatHHmmJerusalem(record.checkIn),
+    checkOutDate: record.checkOut ? jerusalemDateKey(record.checkOut) : jerusalemDateKey(record.checkIn),
+    checkOutTime: record.checkOut ? formatHHmmJerusalem(record.checkOut) : "",
+  };
+}
+
+function AttendanceDateTimeForm({
+  form,
+  onChange,
+}: {
+  form: DateTimeFormState;
+  onChange: (next: DateTimeFormState) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="block text-sm font-medium text-slate-700 mb-1">תאריך כניסה</label>
+        <input
+          type="date"
+          value={form.checkInDate}
+          onChange={(e) => onChange({ ...form, checkInDate: e.target.value })}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold"
+          dir="ltr"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-slate-700 mb-1">שעת כניסה</label>
+        <input
+          type="time"
+          value={form.checkInTime}
+          onChange={(e) => onChange({ ...form, checkInTime: e.target.value })}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold"
+          dir="ltr"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-slate-700 mb-1">תאריך יציאה</label>
+        <input
+          type="date"
+          value={form.checkOutDate}
+          onChange={(e) => onChange({ ...form, checkOutDate: e.target.value })}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold"
+          dir="ltr"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-slate-700 mb-1">שעת יציאה</label>
+        <input
+          type="time"
+          value={form.checkOutTime}
+          onChange={(e) => onChange({ ...form, checkOutTime: e.target.value })}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold"
+          dir="ltr"
+        />
+      </div>
+    </div>
+  );
+}
+
+function AddHoursDialog({
+  dateKey,
+  employeeId,
+  employeeName,
   open,
   onClose,
   onSaved,
+  onEditExisting,
 }: {
-  record: AttendanceManagementRecord;
+  dateKey: string;
+  employeeId: string;
+  employeeName: string;
   open: boolean;
   onClose: () => void;
   onSaved: () => Promise<void>;
+  onEditExisting: (recordId: string) => void;
 }) {
-  const originalIn = formatHHmmJerusalem(record.checkIn);
-  const originalOut = record.checkOut ? formatHHmmJerusalem(record.checkOut) : "";
-  const [checkIn, setCheckIn] = useState(originalIn);
-  const [checkOut, setCheckOut] = useState(originalOut);
+  const [form, setForm] = useState<DateTimeFormState>(() => emptyDateTimeForm(dateKey));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conflictRecordId, setConflictRecordId] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
-      setCheckIn(originalIn);
-      setCheckOut(originalOut);
+      setForm(emptyDateTimeForm(dateKey));
       setError(null);
+      setConflictRecordId(null);
     }
-  }, [open, originalIn, originalOut]);
+  }, [open, dateKey]);
 
   const save = async () => {
+    if (!form.checkInTime.trim()) {
+      setError("יש להזין שעת כניסה");
+      return;
+    }
     setSaving(true);
     setError(null);
+    setConflictRecordId(null);
     try {
-      if (checkIn.trim() !== originalIn) {
-        await patchAttendanceTime({
-          recordId: record.id,
-          field: "checkIn",
-          time: checkIn.trim(),
-        });
-      }
-      if (checkOut.trim()) {
-        if (!record.checkOut || checkOut.trim() !== originalOut) {
-          await patchAttendanceTime({
-            recordId: record.id,
-            field: "checkOut",
-            time: checkOut.trim(),
-          });
-        }
-      } else if (record.checkOut && !checkOut.trim()) {
-        setError("יש להזין שעת יציאה");
-        setSaving(false);
-        return;
-      }
+      await postManualAttendance({
+        userId: employeeId,
+        checkInDate: form.checkInDate,
+        checkInTime: form.checkInTime.trim(),
+        checkOutDate: form.checkOutTime.trim() ? form.checkOutDate : undefined,
+        checkOutTime: form.checkOutTime.trim() || undefined,
+      });
       await onSaved();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "שגיאה בשמירה");
+      if (e instanceof AttendanceApiError && e.details?.existingRecordId) {
+        setConflictRecordId(e.details.existingRecordId);
+        setError(e.message);
+      } else {
+        setError(e instanceof Error ? e.message : "שגיאה בשמירה");
+      }
     } finally {
       setSaving(false);
     }
@@ -87,43 +173,135 @@ function MonthlyRowEditDialog({
     <Modal
       open={open}
       onClose={onClose}
-      title={`עריכת שעות — ${formatDate(record.checkIn)}`}
+      title={`הוספת נוכחות — ${employeeName}`}
       className="max-w-md"
       overlayClassName="z-[60]"
     >
       <div className="space-y-4">
-        <p className="text-sm text-slate-600">
-          תאריך: <span className="font-semibold text-slate-900">{formatDate(record.checkIn)}</span>
-        </p>
-        <div className="space-y-3">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">שעת כניסה</label>
-            <input
-              type="time"
-              value={checkIn}
-              onChange={(e) => setCheckIn(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold"
-              dir="ltr"
-            />
+        <AttendanceDateTimeForm form={form} onChange={setForm} />
+        {error && (
+          <div className="space-y-2">
+            <p className="text-sm text-red-600">{error}</p>
+            {conflictRecordId && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  onClose();
+                  onEditExisting(conflictRecordId);
+                }}
+              >
+                ערוך את הרשומה הקיימת
+              </Button>
+            )}
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">שעת יציאה</label>
-            <input
-              type="time"
-              value={checkOut}
-              onChange={(e) => setCheckOut(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold"
-              dir="ltr"
-              placeholder="--:--"
-            />
-          </div>
-        </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        )}
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" onClick={onClose} disabled={saving}>
             ביטול
           </Button>
-          <Button onClick={() => void save()} disabled={saving || !checkIn.trim()}>
+          <Button onClick={() => void save()} disabled={saving || !form.checkInTime.trim()}>
+            {saving ? <Loader2 className="h-4 w-4 animate-spin ml-1" /> : null}
+            שמור
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function EditHoursDialog({
+  record,
+  employeeName,
+  open,
+  onClose,
+  onSaved,
+  onEditExisting,
+}: {
+  record: AttendanceManagementRecord;
+  employeeName: string;
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+  onEditExisting: (recordId: string) => void;
+}) {
+  const [form, setForm] = useState<DateTimeFormState>(() => recordToForm(record));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [conflictRecordId, setConflictRecordId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setForm(recordToForm(record));
+      setError(null);
+      setConflictRecordId(null);
+    }
+  }, [open, record]);
+
+  const save = async () => {
+    if (!form.checkInTime.trim()) {
+      setError("יש להזין שעת כניסה");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setConflictRecordId(null);
+    try {
+      await patchAttendanceDateTimes({
+        recordId: record.id,
+        checkInDate: form.checkInDate,
+        checkInTime: form.checkInTime.trim(),
+        checkOutDate: form.checkOutTime.trim() ? form.checkOutDate : undefined,
+        checkOutTime: form.checkOutTime.trim() || undefined,
+      });
+      await onSaved();
+      onClose();
+    } catch (e) {
+      if (e instanceof AttendanceApiError && e.details?.existingRecordId) {
+        setConflictRecordId(e.details.existingRecordId);
+        setError(e.message);
+      } else {
+        setError(e instanceof Error ? e.message : "שגיאה בשמירה");
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`עריכת נוכחות — ${employeeName}`}
+      className="max-w-md"
+      overlayClassName="z-[60]"
+    >
+      <div className="space-y-4">
+        <AttendanceDateTimeForm form={form} onChange={setForm} />
+        {error && (
+          <div className="space-y-2">
+            <p className="text-sm text-red-600">{error}</p>
+            {conflictRecordId && conflictRecordId !== record.id && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  onClose();
+                  onEditExisting(conflictRecordId);
+                }}
+              >
+                ערוך את הרשומה הקיימת
+              </Button>
+            )}
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            ביטול
+          </Button>
+          <Button onClick={() => void save()} disabled={saving || !form.checkInTime.trim()}>
             {saving ? <Loader2 className="h-4 w-4 animate-spin ml-1" /> : null}
             שמור
           </Button>
@@ -154,66 +332,90 @@ function SummaryStrip({ stats }: { stats: ReturnType<typeof computeStatsFromReco
 }
 
 function DesktopTable({
-  records,
+  rows,
   canEdit,
   onEdit,
+  onAdd,
 }: {
-  records: AttendanceManagementRecord[];
+  rows: MonthDayRow[];
   canEdit: boolean;
   onEdit: (record: AttendanceManagementRecord) => void;
+  onAdd: (dateKey: string) => void;
 }) {
   return (
-    <div className="hidden md:block overflow-x-auto rounded-xl border border-slate-200">
+    <div className="hidden md:block max-h-[min(28rem,50vh)] overflow-y-auto overflow-x-auto rounded-xl border border-slate-200">
       <table className="w-full text-sm text-right">
-        <thead>
-          <tr className="border-b bg-slate-50 text-xs text-slate-600">
-            <th className="px-3 py-2 font-semibold">תאריך</th>
-            <th className="px-3 py-2 font-semibold">יום</th>
-            <th className="px-3 py-2 font-semibold">כניסה</th>
-            <th className="px-3 py-2 font-semibold">יציאה</th>
-            <th className="px-3 py-2 font-semibold">שעות עבודה</th>
-            <th className="px-3 py-2 font-semibold">שעות נוספות</th>
-            <th className="px-3 py-2 font-semibold">סטטוס</th>
-            {canEdit && <th className="px-3 py-2 font-semibold">פעולות</th>}
+        <thead className="sticky top-0 z-10 bg-slate-50 shadow-[0_1px_0_0_rgb(226_232_240)]">
+          <tr className="border-b text-xs text-slate-600">
+            <th className="px-3 py-2 font-semibold bg-slate-50">תאריך</th>
+            <th className="px-3 py-2 font-semibold bg-slate-50">יום</th>
+            <th className="px-3 py-2 font-semibold bg-slate-50">כניסה</th>
+            <th className="px-3 py-2 font-semibold bg-slate-50">יציאה</th>
+            <th className="px-3 py-2 font-semibold bg-slate-50">שעות עבודה</th>
+            <th className="px-3 py-2 font-semibold bg-slate-50">שעות נוספות</th>
+            <th className="px-3 py-2 font-semibold bg-slate-50">סטטוס</th>
+            {canEdit && <th className="px-3 py-2 font-semibold bg-slate-50">פעולות</th>}
           </tr>
         </thead>
         <tbody>
-          {records.map((r) => (
-            <tr key={r.id} className="border-b last:border-0 hover:bg-slate-50/80">
-              <td className="px-3 py-2 whitespace-nowrap">{formatDate(r.checkIn)}</td>
-              <td className="px-3 py-2 whitespace-nowrap">{formatWeekdayJerusalem(r.checkIn)}</td>
-              <td className="px-3 py-2 font-mono" dir="ltr">
-                {formatTime(r.checkIn)}
-              </td>
-              <td className="px-3 py-2 font-mono" dir="ltr">
-                {r.checkOut ? formatTime(r.checkOut) : "—"}
-              </td>
-              <td className="px-3 py-2">{formatHoursMinutes(r.durationHours)}</td>
-              <td className="px-3 py-2">{rowOvertimeHours(r) || "0"}</td>
-              <td className="px-3 py-2">
-                <span
-                  className={cn(
-                    "text-xs font-medium",
-                    !r.checkOut ? "text-amber-700" : "text-slate-700",
-                  )}
-                >
-                  {attendanceRowStatus(r)}
-                </span>
-              </td>
-              {canEdit && (
-                <td className="px-3 py-2">
-                  <button
-                    type="button"
-                    onClick={() => onEdit(r)}
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                    עריכה
-                  </button>
+          {rows.map(({ dateKey, record }) => {
+            const dayDate = dateKeyToJerusalemDate(dateKey);
+            const hasRecord = Boolean(record);
+            return (
+              <tr
+                key={dateKey}
+                className={cn(
+                  "border-b last:border-0 hover:bg-slate-50/80",
+                  !hasRecord && "text-slate-500",
+                )}
+              >
+                <td className="px-3 py-2 whitespace-nowrap">{formatDate(dayDate)}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{formatWeekdayJerusalem(dayDate)}</td>
+                <td className="px-3 py-2 font-mono" dir="ltr">
+                  {record ? formatTime(record.checkIn) : "—"}
                 </td>
-              )}
-            </tr>
-          ))}
+                <td className="px-3 py-2 font-mono" dir="ltr">
+                  {record?.checkOut ? formatTime(record.checkOut) : "—"}
+                </td>
+                <td className="px-3 py-2">
+                  {record ? formatHoursMinutes(record.durationHours) : "—"}
+                </td>
+                <td className="px-3 py-2">
+                  {record ? rowOvertimeDisplay(record) : "—"}
+                </td>
+                <td className="px-3 py-2">
+                  {record ? (
+                    <AttendanceStatusBadge record={record} />
+                  ) : (
+                    <span className="text-xs font-medium text-slate-500">אין נוכחות</span>
+                  )}
+                </td>
+                {canEdit && (
+                  <td className="px-3 py-2">
+                    {record ? (
+                      <button
+                        type="button"
+                        onClick={() => onEdit(record!)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        עריכה
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onAdd(dateKey)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        הוסף שעות
+                      </button>
+                    )}
+                  </td>
+                )}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -221,67 +423,87 @@ function DesktopTable({
 }
 
 function MobileCards({
-  records,
+  rows,
   canEdit,
   onEdit,
+  onAdd,
 }: {
-  records: AttendanceManagementRecord[];
+  rows: MonthDayRow[];
   canEdit: boolean;
   onEdit: (record: AttendanceManagementRecord) => void;
+  onAdd: (dateKey: string) => void;
 }) {
   return (
-    <div className="md:hidden space-y-3">
-      {records.map((r) => (
-        <div key={r.id} className="rounded-xl border border-slate-200 p-3 space-y-2 bg-white">
-          <div className="flex items-center justify-between gap-2">
-            <p className="font-semibold text-slate-900">
-              {formatDate(r.checkIn)} · {formatWeekdayJerusalem(r.checkIn)}
-            </p>
-            <span
-              className={cn(
-                "text-xs font-medium",
-                !r.checkOut ? "text-amber-700" : "text-slate-600",
+    <div className="md:hidden max-h-[min(28rem,50vh)] overflow-y-auto space-y-3 pr-0.5">
+      {rows.map(({ dateKey, record }) => {
+        const dayDate = dateKeyToJerusalemDate(dateKey);
+        return (
+          <div
+            key={dateKey}
+            className={cn(
+              "rounded-xl border p-3 space-y-2 bg-white",
+              record ? "border-slate-200" : "border-slate-100 bg-slate-50/50",
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold text-slate-900">
+                {formatDate(dayDate)} · {formatWeekdayJerusalem(dayDate)}
+              </p>
+              {record ? (
+                <AttendanceStatusBadge record={record} />
+              ) : (
+                <span className="text-xs font-medium text-slate-500">אין נוכחות</span>
               )}
-            >
-              {attendanceRowStatus(r)}
-            </span>
+            </div>
+            {record ? (
+              <>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <p className="text-[11px] text-slate-500">כניסה</p>
+                    <p className="font-mono font-semibold" dir="ltr">
+                      {formatTime(record.checkIn)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-slate-500">יציאה</p>
+                    <p className="font-mono font-semibold" dir="ltr">
+                      {record.checkOut ? formatTime(record.checkOut) : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-slate-500">שעות</p>
+                    <p className="font-semibold">{formatHoursMinutes(record.durationHours)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-slate-500">נוספות</p>
+                    <p className="font-semibold">{rowOvertimeDisplay(record)}</p>
+                  </div>
+                </div>
+                {canEdit && (
+                  <Button size="sm" variant="outline" className="w-full" onClick={() => onEdit(record)}>
+                    <Pencil className="h-3.5 w-3.5 ml-1" />
+                    עריכה
+                  </Button>
+                )}
+              </>
+            ) : (
+              canEdit && (
+                <Button size="sm" variant="outline" className="w-full" onClick={() => onAdd(dateKey)}>
+                  <Plus className="h-3.5 w-3.5 ml-1" />
+                  הוסף שעות
+                </Button>
+              )
+            )}
           </div>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <p className="text-[11px] text-slate-500">כניסה</p>
-              <p className="font-mono font-semibold" dir="ltr">
-                {formatTime(r.checkIn)}
-              </p>
-            </div>
-            <div>
-              <p className="text-[11px] text-slate-500">יציאה</p>
-              <p className="font-mono font-semibold" dir="ltr">
-                {r.checkOut ? formatTime(r.checkOut) : "—"}
-              </p>
-            </div>
-            <div>
-              <p className="text-[11px] text-slate-500">שעות</p>
-              <p className="font-semibold">{formatHoursMinutes(r.durationHours)}</p>
-            </div>
-            <div>
-              <p className="text-[11px] text-slate-500">נוספות</p>
-              <p className="font-semibold">{rowOvertimeHours(r) || "0"}</p>
-            </div>
-          </div>
-          {canEdit && (
-            <Button size="sm" variant="outline" className="w-full" onClick={() => onEdit(r)}>
-              <Pencil className="h-3.5 w-3.5 ml-1" />
-              עריכה
-            </Button>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
 export function MonthlyAttendanceTable({
   employeeId,
+  employeeName,
   canEdit,
   reloadSignal = 0,
   onChanged,
@@ -289,6 +511,7 @@ export function MonthlyAttendanceTable({
   initialMonth,
 }: {
   employeeId: string;
+  employeeName: string;
   canEdit: boolean;
   reloadSignal?: number;
   onChanged?: () => void;
@@ -301,11 +524,16 @@ export function MonthlyAttendanceTable({
   const [records, setRecords] = useState<AttendanceManagementRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [editRecord, setEditRecord] = useState<AttendanceManagementRecord | null>(null);
+  const [addDateKey, setAddDateKey] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [pendingEditId, setPendingEditId] = useState<string | null>(null);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [excelBusy, setExcelBusy] = useState(false);
 
   const bounds = useMemo(() => monthCalendarBounds(year, month), [year, month]);
   const monthLabel = formatMonthYearLabel(year, month);
   const isCurrentMonth = year === now.year && month === now.month;
+  const monthRows = useMemo(() => buildMonthRows(records, year, month), [records, year, month]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -317,7 +545,7 @@ export function MonthlyAttendanceTable({
         page: 1,
         limit: 200,
         sortBy: "checkIn",
-        sortDir: "desc",
+        sortDir: "asc",
       });
       if (result.mode === "records") {
         setRecords(result.records);
@@ -334,6 +562,15 @@ export function MonthlyAttendanceTable({
   useEffect(() => {
     void load();
   }, [load, reloadSignal]);
+
+  useEffect(() => {
+    if (!pendingEditId || loading) return;
+    const found = records.find((r) => r.id === pendingEditId);
+    if (found) {
+      setEditRecord(found);
+      setPendingEditId(null);
+    }
+  }, [pendingEditId, records, loading]);
 
   const summary = useMemo(() => computeStatsFromRecords(records), [records]);
 
@@ -356,11 +593,58 @@ export function MonthlyAttendanceTable({
 
   const afterSave = async () => {
     await load();
-    // Reconcile with server stats (same calculation path)
     await fetchEmployeeAttendanceStats(employeeId, bounds);
     setSuccessMsg("השעות נשמרו בהצלחה");
     window.setTimeout(() => setSuccessMsg(null), 3500);
     onChanged?.();
+  };
+
+  const openEditExisting = (recordId: string) => {
+    const found = records.find((r) => r.id === recordId);
+    if (found) {
+      setEditRecord(found);
+    } else {
+      setPendingEditId(recordId);
+      void load();
+    }
+  };
+
+  const downloadExcel = async () => {
+    setExcelBusy(true);
+    try {
+      const url = monthlyHoursReportUrl({
+        userId: employeeId,
+        year,
+        month,
+        format: "xlsx",
+      });
+      const res = await fetch(url, { credentials: "include", cache: "no-store" });
+      if (!res.ok) {
+        let message = "יצירת קובץ Excel נכשלה";
+        try {
+          const json = (await res.json()) as { error?: { message?: string } };
+          if (json.error?.message) message = json.error.message;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(message);
+      }
+      const disposition = res.headers.get("content-disposition") ?? "";
+      const match = /filename="([^"]+)"/i.exec(disposition);
+      const filename = match?.[1] ?? `attendance-${year}-${String(month).padStart(2, "0")}.xlsx`;
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      setSuccessMsg(null);
+      window.alert(e instanceof Error ? e.message : "שגיאה בהורדת Excel");
+    } finally {
+      setExcelBusy(false);
+    }
   };
 
   return (
@@ -393,29 +677,106 @@ export function MonthlyAttendanceTable({
         </div>
       )}
 
-      <SummaryStrip stats={summary} />
-
       {loading ? (
         <div className="flex justify-center py-10">
           <Loader2 className="h-6 w-6 animate-spin text-opal-gold" />
         </div>
-      ) : records.length === 0 ? (
-        <p className="text-sm text-slate-500 text-center py-8">אין רשומות נוכחות בחודש זה</p>
       ) : (
         <>
-          <DesktopTable records={records} canEdit={canEdit} onEdit={setEditRecord} />
-          <MobileCards records={records} canEdit={canEdit} onEdit={setEditRecord} />
+          <DesktopTable
+            rows={monthRows}
+            canEdit={canEdit}
+            onEdit={setEditRecord}
+            onAdd={setAddDateKey}
+          />
+          <MobileCards
+            rows={monthRows}
+            canEdit={canEdit}
+            onEdit={setEditRecord}
+            onAdd={setAddDateKey}
+          />
         </>
       )}
 
+      {!loading && (
+        <>
+          <div className="space-y-2 pt-2">
+            <h4 className="text-sm font-semibold text-slate-800">סיכום חודשי</h4>
+            <SummaryStrip stats={summary} />
+          </div>
+
+          <div className="space-y-3 pt-2 border-t border-slate-100">
+            <h4 className="text-sm font-semibold text-slate-800">דוח שעות חודשי</h4>
+            <p className="text-xs text-slate-500">
+              {employeeName} · {monthLabel}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  setPdfPreviewUrl(
+                    monthlyHoursReportUrl({
+                      userId: employeeId,
+                      year,
+                      month,
+                      format: "pdf",
+                    }),
+                  )
+                }
+              >
+                <FileText className="h-4 w-4 ml-1" />
+                PDF דוח שעות
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={excelBusy}
+                onClick={() => void downloadExcel()}
+              >
+                {excelBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin ml-1" />
+                ) : (
+                  <FileSpreadsheet className="h-4 w-4 ml-1" />
+                )}
+                Excel דוח שעות
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {addDateKey && (
+        <AddHoursDialog
+          dateKey={addDateKey}
+          employeeId={employeeId}
+          employeeName={employeeName}
+          open={Boolean(addDateKey)}
+          onClose={() => setAddDateKey(null)}
+          onSaved={afterSave}
+          onEditExisting={openEditExisting}
+        />
+      )}
+
       {editRecord && (
-        <MonthlyRowEditDialog
+        <EditHoursDialog
           record={editRecord}
+          employeeName={employeeName}
           open={Boolean(editRecord)}
           onClose={() => setEditRecord(null)}
           onSaved={afterSave}
+          onEditExisting={openEditExisting}
         />
       )}
+
+      <AttendancePdfPreview
+        open={Boolean(pdfPreviewUrl)}
+        url={pdfPreviewUrl}
+        title={`דוח שעות חודשי — ${employeeName}`}
+        onClose={() => setPdfPreviewUrl(null)}
+      />
     </section>
   );
 }

@@ -18,10 +18,11 @@ import { getLabGateSettings } from "@/lib/attendance/gate/lab-location";
 import {
   detectAttendanceAnomalies,
   methodChannelLabel,
+  isLateCheckIn,
 } from "@/lib/attendance/management/status";
+import { EXPECTED_START_HOUR } from "@/lib/attendance/management/attendance-status";
 import { loadTimeEditMetaForRecords } from "@/lib/attendance/management/edit-attendance-time";
 
-const LATE_HOUR = 9;
 const GPS_MAX_ACCURACY = 100;
 const DEFAULT_LIMIT = 25;
 const MAX_EXPORT = 10_000;
@@ -47,17 +48,7 @@ function monthBounds(): { start: Date; end: Date } {
   };
 }
 
-export function isLateCheckIn(checkIn: Date): boolean {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Jerusalem",
-    hour: "numeric",
-    minute: "numeric",
-    hour12: false,
-  }).formatToParts(checkIn);
-  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
-  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-  return hour > LATE_HOUR || (hour === LATE_HOUR && minute > 0);
-}
+export { isLateCheckIn } from "@/lib/attendance/management/status";
 
 export function isGpsValid(
   lat?: number | null,
@@ -99,6 +90,7 @@ export function enrichAttendanceRecord(
   const lng = record.checkInLongitude ?? record.longitude;
   const isLate = isLateCheckIn(record.checkIn);
   const flags = detectAttendanceAnomalies({
+    checkIn: record.checkIn,
     checkOut: record.checkOut,
     checkInLatitude: lat,
     checkInLongitude: lng,
@@ -188,9 +180,9 @@ async function lateRecordIds(
       AND ar."checkIn" >= ${from}
       AND ar."checkIn" <= ${to}
       AND (
-        EXTRACT(HOUR FROM ar."checkIn" AT TIME ZONE 'Asia/Jerusalem') > ${LATE_HOUR}
+        EXTRACT(HOUR FROM ar."checkIn" AT TIME ZONE 'Asia/Jerusalem') > ${EXPECTED_START_HOUR}
         OR (
-          EXTRACT(HOUR FROM ar."checkIn" AT TIME ZONE 'Asia/Jerusalem') = ${LATE_HOUR}
+          EXTRACT(HOUR FROM ar."checkIn" AT TIME ZONE 'Asia/Jerusalem') = ${EXPECTED_START_HOUR}
           AND EXTRACT(MINUTE FROM ar."checkIn" AT TIME ZONE 'Asia/Jerusalem') > 0
         )
       )

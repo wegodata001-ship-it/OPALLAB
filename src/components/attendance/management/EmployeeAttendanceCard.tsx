@@ -755,6 +755,7 @@ export function EmployeeAttendanceCard({
 
           <MonthlyAttendanceTable
             employeeId={emp.id}
+            employeeName={emp.name}
             canEdit={canEdit}
             reloadSignal={tableReloadSignal}
             initialYear={defaultMonth.year}

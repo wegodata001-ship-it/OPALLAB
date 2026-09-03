@@ -2,11 +2,10 @@ import { formatDate, formatTime } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants/labels";
 import type { AttendanceManagementRecord } from "@/lib/attendance/management/types";
 import { ANOMALY_LABELS } from "@/lib/attendance/management/status";
+import { getAttendanceStatus, formatDurationFromHours } from "@/lib/attendance/management/attendance-status";
 
 function complianceLabel(r: AttendanceManagementRecord): string {
-  if (r.complianceStatus === "ok") return "תקין";
-  if (r.complianceStatus === "missing") return "חסר";
-  return "חריג";
+  return getAttendanceStatus(r).label;
 }
 
 function anomaliesLabel(r: AttendanceManagementRecord): string {
@@ -22,11 +21,8 @@ function escapeCsv(value: string | number | null | undefined): string {
 }
 
 function formatDuration(record: AttendanceManagementRecord): string {
-  if (record.durationHours != null) return record.durationHours.toFixed(2);
-  if (!record.checkOut) {
-    const h = (Date.now() - record.checkIn.getTime()) / 3_600_000;
-    return h.toFixed(2);
-  }
+  if (record.durationHours != null) return formatDurationFromHours(record.durationHours);
+  if (!record.checkOut) return "פתוח";
   return "—";
 }
 
@@ -47,7 +43,7 @@ export function buildAttendanceExport(
     "תאריך",
     "כניסה",
     "יציאה",
-    "משך (שעות)",
+    "משך (HH:mm)",
     "סטטוס",
     "חריגות",
     "ערוץ",

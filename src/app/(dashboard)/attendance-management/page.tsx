@@ -22,7 +22,8 @@ import type {
   AttendanceManagementQuery,
   AttendanceManagementRecord,
 } from "@/lib/attendance/management/types";
-import { ANOMALY_LABELS } from "@/lib/attendance/management/status";
+import { AttendanceStatusBadge } from "@/components/attendance/management/AttendanceStatusBadge";
+import { formatDurationFromHours } from "@/lib/attendance/management/attendance-status";
 import { AttendanceQrPanel } from "@/components/attendance/gate/AttendanceQrPanel";
 import { EmployeeAttendanceCard } from "@/components/attendance/management/EmployeeAttendanceCard";
 import { EmployeeAvatar } from "@/components/attendance/management/EmployeeAvatar";
@@ -70,28 +71,6 @@ function applyReportPreset(
   else if (preset === "month") start.setDate(1);
   else start.setMonth(0, 1);
   return { from: start.toISOString().slice(0, 10), to };
-}
-
-function statusBadge(record: AttendanceManagementRecord) {
-  if (record.complianceStatus === "ok") {
-    return (
-      <span className="inline-flex rounded-full bg-emerald-50 text-emerald-700 px-2 py-0.5 text-[11px] font-medium">
-        תקין
-      </span>
-    );
-  }
-  if (record.complianceStatus === "missing") {
-    return (
-      <span className="inline-flex rounded-full bg-amber-50 text-amber-800 px-2 py-0.5 text-[11px] font-medium">
-        חסר
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex rounded-full bg-red-50 text-red-700 px-2 py-0.5 text-[11px] font-medium">
-      חריג
-    </span>
-  );
 }
 
 function GpsLink({
@@ -548,8 +527,12 @@ export default function AttendanceManagementPage() {
                       <td className="px-3 py-2.5 whitespace-nowrap">
                         {r.checkOut ? formatTime(r.checkOut) : "—"}
                       </td>
-                      <td className="px-3 py-2.5 whitespace-nowrap">
-                        {r.durationHours != null ? `${r.durationHours.toFixed(1)}` : "פתוח"}
+                      <td className="px-3 py-2.5 whitespace-nowrap font-mono" dir="ltr">
+                        {r.durationHours != null
+                          ? formatDurationFromHours(r.durationHours)
+                          : r.checkOut
+                            ? "—"
+                            : "פתוח"}
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex flex-col gap-1">
@@ -568,15 +551,8 @@ export default function AttendanceManagementPage() {
                         </div>
                       </td>
                       <td className="px-3 py-2.5 text-xs text-slate-600">{r.channelLabel}</td>
-                      <td className="px-3 py-2.5">
-                        <div className="space-y-1">
-                          {statusBadge(r)}
-                          {r.anomalies.length > 0 && (
-                            <p className="text-[10px] text-slate-500 max-w-[140px]">
-                              {r.anomalies.map((a) => ANOMALY_LABELS[a]).join(" · ")}
-                            </p>
-                          )}
-                        </div>
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <AttendanceStatusBadge record={r} onClickStopPropagation />
                       </td>
                       <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <Button size="sm" variant="outline" onClick={() => openEmployee(r.employee.id)}>

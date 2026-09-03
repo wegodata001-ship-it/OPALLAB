@@ -24,7 +24,12 @@ async function getBrowser(): Promise<Browser> {
   return browserPromise;
 }
 
-export async function htmlToPdfBuffer(html: string): Promise<Buffer> {
+export async function htmlToPdfBuffer(
+  html: string,
+  opts?: { landscape?: boolean; footerLabel?: string },
+): Promise<Buffer> {
+  const landscape = opts?.landscape ?? true;
+  const footerLabel = opts?.footerLabel ?? "Attendance Report";
   const browser = await getBrowser();
   const page = await browser.newPage();
 
@@ -34,18 +39,18 @@ export async function htmlToPdfBuffer(html: string): Promise<Buffer> {
 
     const pdf = await page.pdf({
       format: "A4",
-      landscape: true,
+      landscape,
       printBackground: true,
       preferCSSPageSize: true,
-      margin: { top: "28mm", right: "10mm", bottom: "14mm", left: "10mm" },
+      margin: { top: "18mm", right: "10mm", bottom: "14mm", left: "10mm" },
       displayHeaderFooter: true,
       headerTemplate: "<span></span>",
       footerTemplate: `
         <div style="width:100%;font-size:8px;padding:0 10mm;direction:rtl;font-family:Arial,sans-serif;
           display:flex;justify-content:space-between;align-items:center;color:#64748b;">
-          <span style="direction:ltr;">OPAL LAB · Attendance Report</span>
+          <span style="direction:ltr;">OPAL LAB · ${footerLabel}</span>
           <span>עמוד <span class="pageNumber"></span> / <span class="totalPages"></span></span>
-          <span style="direction:ltr;">Attendance Report</span>
+          <span style="direction:ltr;">${footerLabel}</span>
         </div>`,
     });
 

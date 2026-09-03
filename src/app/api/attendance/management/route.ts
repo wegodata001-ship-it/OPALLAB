@@ -143,11 +143,33 @@ export async function PATCH(request: NextRequest) {
       recordId?: string;
       field?: "checkIn" | "checkOut";
       time?: string;
+      checkInDate?: string;
+      checkInTime?: string;
+      checkOutDate?: string;
+      checkOutTime?: string;
     };
 
     if (!body.recordId?.trim()) {
       return jsonError(new AppError("VALIDATION_ERROR", "חסר מזהה רשומה", 400));
     }
+
+    const {
+      updateAttendanceDateTimes,
+      editAttendanceTime,
+    } = await import("@/lib/attendance/management/edit-attendance-time");
+
+    if (body.checkInDate?.trim() && body.checkInTime?.trim()) {
+      const record = await updateAttendanceDateTimes({
+        recordId: body.recordId.trim(),
+        checkInDate: body.checkInDate.trim(),
+        checkInTime: body.checkInTime.trim(),
+        checkOutDate: body.checkOutDate?.trim() || null,
+        checkOutTime: body.checkOutTime?.trim() || null,
+        actorId: userId,
+      });
+      return jsonOk(record);
+    }
+
     if (body.field !== "checkIn" && body.field !== "checkOut") {
       return jsonError(new AppError("VALIDATION_ERROR", "שדה לא תקין", 400));
     }
@@ -155,13 +177,48 @@ export async function PATCH(request: NextRequest) {
       return jsonError(new AppError("VALIDATION_ERROR", "חסרה שעה", 400));
     }
 
-    const { editAttendanceTime } = await import(
-      "@/lib/attendance/management/edit-attendance-time"
-    );
     const record = await editAttendanceTime({
       recordId: body.recordId.trim(),
       field: body.field,
       timeHHmm: body.time.trim(),
+      actorId: userId,
+    });
+    return jsonOk(record);
+  } catch (error) {
+    return jsonError(error);
+  }
+}
+
+/** Create manual attendance — ADMIN / OWNER / SECRETARY only. */
+export async function POST(request: NextRequest) {
+  try {
+    const userId = await requireSessionUserId();
+    await requireAttendanceManager(userId);
+
+    const body = (await request.json()) as {
+      userId?: string;
+      checkInDate?: string;
+      checkInTime?: string;
+      checkOutDate?: string;
+      checkOutTime?: string;
+    };
+
+    if (!body.userId?.trim()) {
+      return jsonError(new AppError("VALIDATION_ERROR", "חסר מזהה עובד", 400));
+    }
+    if (!body.checkInDate?.trim() || !body.checkInTime?.trim()) {
+      return jsonError(new AppError("VALIDATION_ERROR", "חסרים תאריך או שעת כניסה", 400));
+    }
+
+    const { createManualAttendance } = await import(
+      "@/lib/attendance/management/edit-attendance-time"
+    );
+    const record = await createManualAttendance({
+      userId: body.userId.trim(),
+      checkInDate: body.checkInDate.trim(),
+      checkInTime: body.checkInTime.trim(),
+      checkOutDate: body.checkOutDate?.trim() || null,
+      checkOutTime: body.checkOutTime?.trim() || null,
       actorId: userId,
     });
     return jsonOk(record);

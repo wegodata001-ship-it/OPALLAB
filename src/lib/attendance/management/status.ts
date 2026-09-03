@@ -1,31 +1,19 @@
 import { distanceMeters } from "@/lib/attendance/gate/geofence";
+import {
+  complianceStatusFromLevel,
+  getAttendanceStatus,
+  isEarlyLeaveCheckOut,
+  isLateCheckIn,
+} from "@/lib/attendance/management/attendance-status";
 import type { AttendanceLabGeo } from "@/lib/attendance/management/types";
 import type {
   AttendanceAnomalyCode,
   AttendanceComplianceStatus,
 } from "@/lib/attendance/management/types";
 
-const STANDARD_DAY_HOURS = 9;
 const OVERTIME_HOURS = 9;
-const EARLY_LEAVE_HOUR = 16; // Asia/Jerusalem
 
-function jerusalemHourMinute(date: Date): { hour: number; minute: number } {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Jerusalem",
-    hour: "numeric",
-    minute: "numeric",
-    hour12: false,
-  }).formatToParts(date);
-  return {
-    hour: Number(parts.find((p) => p.type === "hour")?.value ?? 0),
-    minute: Number(parts.find((p) => p.type === "minute")?.value ?? 0),
-  };
-}
-
-export function isEarlyLeaveCheckOut(checkOut: Date): boolean {
-  const { hour } = jerusalemHourMinute(checkOut);
-  return hour < EARLY_LEAVE_HOUR;
-}
+export { isLateCheckIn, isEarlyLeaveCheckOut } from "@/lib/attendance/management/attendance-status";
 
 export function detectAttendanceAnomalies(input: {
   checkOut: Date | null | undefined;
@@ -37,6 +25,8 @@ export function detectAttendanceAnomalies(input: {
   isLate: boolean;
   durationHours: number | null;
   labGeo?: AttendanceLabGeo | null;
+  checkIn: Date;
+  outOfGeofenceSeed?: boolean;
 }): {
   anomalies: AttendanceAnomalyCode[];
   complianceStatus: AttendanceComplianceStatus;
@@ -74,19 +64,27 @@ export function detectAttendanceAnomalies(input: {
 
   const isOvertime =
     input.durationHours != null && input.durationHours >= OVERTIME_HOURS + 0.01;
-  if (isOvertime) anomalies.push("unusual_hours");
 
   const isEarlyLeave = Boolean(
-    input.checkOut && isEarlyLeaveCheckOut(input.checkOut) && (input.durationHours ?? 0) < STANDARD_DAY_HOURS,
+    input.checkOut && isEarlyLeaveCheckOut(input.checkOut),
   );
   if (isEarlyLeave) anomalies.push("early_leave");
 
-  let complianceStatus: AttendanceComplianceStatus = "ok";
-  if (anomalies.includes("missing_checkout") || anomalies.includes("missing_gps")) {
-    complianceStatus = "missing";
-  } else if (anomalies.length > 0) {
-    complianceStatus = "anomaly";
-  }
+  const status = getAttendanceStatus({
+    checkIn: input.checkIn,
+    checkOut: input.checkOut,
+    checkInLatitude: input.checkInLatitude,
+    checkInLongitude: input.checkInLongitude,
+    latitude: input.checkInLatitude,
+    longitude: input.checkInLongitude,
+    outOfGeofence,
+    anomalies,
+  });
+
+  const complianceStatus = complianceStatusFromLevel(
+    status.level,
+    anomalies.includes("missing_gps"),
+  );
 
   return { anomalies, complianceStatus, outOfGeofence, isEarlyLeave, isOvertime };
 }
@@ -96,7 +94,7 @@ export const ANOMALY_LABELS: Record<AttendanceAnomalyCode, string> = {
   missing_gps: "חסר GPS",
   out_of_geofence: "מחוץ לאזור",
   late: "איחור",
-  unusual_hours: "שעות חריגות",
+  unusual_hours: "שעות נוספות",
   early_leave: "יציאה מוקדמת",
 };
 
