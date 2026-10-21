@@ -269,6 +269,7 @@ export interface Order {
   /** Free-text notes / repair description for OTHER. */
   otherWorkNotes?: string | null;
   notes?: string | null;
+  doctorParts: OrderDoctorPart[];
   completedStages: Partial<Record<OrderStatus, StageCompletion>>;
   deletedAt?: Date | null;
   deletedBy?: string | null;
@@ -276,6 +277,16 @@ export interface Order {
   statusBeforeDelete?: OrderStatus | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface OrderDoctorPart {
+  partId: string;
+  name: string;
+  code: string;
+  unit: string;
+  quantity: number;
+  appliedQty: number;
+  stockQuantity: number;
 }
 
 export interface OrderFileModelMeta {
@@ -540,6 +551,7 @@ export interface CreateOrderInput {
   jawCount?: number | null;
   otherWorkKind?: OtherWorkKind | null;
   otherWorkNotes?: string | null;
+  doctorParts?: { partId: string; quantity: number }[];
 }
 
 export interface UpdateOrderInput {
@@ -572,6 +584,7 @@ export interface UpdateOrderInput {
   otherWorkKind?: OtherWorkKind | null;
   otherWorkNotes?: string | null;
   notes?: string | null;
+  doctorParts?: { partId: string; quantity: number }[];
 }
 
 export interface UpdateOrderStatusInput {

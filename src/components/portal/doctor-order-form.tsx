@@ -26,6 +26,8 @@ import {
 import { GENDER_LABELS } from "@/lib/constants/labels";
 import { syncWorkTypesWithSplint } from "@/lib/orders/splint-types";
 import { SplintTypeSelect } from "@/components/orders/splint-type-select";
+import { OrderDoctorPartsField, type SelectedDoctorPart } from "@/components/inventory/OrderDoctorPartsField";
+import { orderNeedsDoctorParts } from "@/lib/inventory/doctor-parts-rules";
 import { openTelegramOrderShare } from "@/lib/orders/telegram-order";
 import { cn } from "@/lib/utils";
 import type { Gender, MaterialType, Order, WorkType } from "@/lib/types";
@@ -47,6 +49,7 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
   const [shade, setShade] = useState("");
   const [materials, setMaterials] = useState<MaterialType[]>([]);
   const [workTypes, setWorkTypes] = useState<WorkType[]>([]);
+  const [doctorParts, setDoctorParts] = useState<SelectedDoctorPart[]>([]);
   const [splintTypeIds, setSplintTypeIds] = useState<string[]>([]);
   const [selectedTeeth, setSelectedTeeth] = useState<number[]>([]);
   const [bridgeGroups, setBridgeGroups] = useState<number[][]>([]);
@@ -201,6 +204,7 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
     setShade("");
     setMaterials([]);
     setWorkTypes([]);
+    setDoctorParts([]);
     setSelectedTeeth([]);
     setDescription("");
     setCompletionDate("");
@@ -246,6 +250,9 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
       jawCount: pricing.jawCount,
       otherWorkKind: pricingMode === "OTHER" ? otherWorkKind : null,
       otherWorkNotes: otherWorkNotes.trim() || null,
+      doctorParts: orderNeedsDoctorParts({ materials, workTypes, allInXType, pricingMode })
+        ? doctorParts.map(({ partId, quantity }) => ({ partId, quantity }))
+        : [],
     });
 
     if (!order?.id) {
@@ -380,6 +387,14 @@ export function DoctorOrderForm({ doctorId, onCreated }: DoctorOrderFormProps) {
             </>
           )}
 
+          <OrderDoctorPartsField
+            materials={materials}
+            workTypes={workTypes}
+            allInXType={allInXType}
+            pricingMode={pricingMode}
+            value={doctorParts}
+            onChange={setDoctorParts}
+          />
           <div>
             <Label>מבנה שיניים</Label>
             <DentalChart

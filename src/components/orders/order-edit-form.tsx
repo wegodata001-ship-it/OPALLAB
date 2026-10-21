@@ -11,6 +11,8 @@ import { TelegramOrderButton } from "@/components/orders/telegram-order-button";
 import { SplintTypeSelect } from "@/components/orders/splint-type-select";
 import { CatalogChipField } from "@/components/orders/catalog-chip-field";
 import { OrderPricePanel } from "@/components/orders/order-price-panel";
+import { OrderDoctorPartsField, type SelectedDoctorPart } from "@/components/inventory/OrderDoctorPartsField";
+import { orderNeedsDoctorParts } from "@/lib/inventory/doctor-parts-rules";
 import { GENDER_LABELS } from "@/lib/constants/labels";
 import { syncWorkTypesWithSplint } from "@/lib/orders/splint-types";
 import {
@@ -75,6 +77,15 @@ export function OrderEditForm({ order, onDone }: OrderEditFormProps) {
     parseOtherWorkKind(order.otherWorkKind),
   );
   const [otherWorkNotes, setOtherWorkNotes] = useState(order.otherWorkNotes ?? "");
+  const [doctorParts, setDoctorParts] = useState<SelectedDoctorPart[]>(
+    (order.doctorParts ?? []).map((part) => ({
+      partId: part.partId,
+      quantity: part.quantity,
+      appliedQty: part.appliedQty,
+      name: part.name,
+      code: part.code,
+    })),
+  );
 
   const matched = doctors.find((d) => d.name.trim() === doctorName.trim());
   const resolvedDoctorId = matched?.id ?? order.doctorId ?? "";
@@ -175,6 +186,9 @@ export function OrderEditForm({ order, onDone }: OrderEditFormProps) {
       description: description || null,
       completionDate: completionDate ? new Date(completionDate) : null,
       notes: notes || null,
+      doctorParts: orderNeedsDoctorParts({ materials, workTypes, allInXType, pricingMode })
+        ? doctorParts.map(({ partId, quantity }) => ({ partId, quantity }))
+        : [],
       pricingMode,
       allInXType: pricingMode === "ALL_IN_X" ? allInXType : null,
       otherWorkKind: pricingMode === "OTHER" ? otherWorkKind : null,
@@ -310,6 +324,14 @@ export function OrderEditForm({ order, onDone }: OrderEditFormProps) {
             />
           </>
         )}
+        <OrderDoctorPartsField
+          materials={materials}
+          workTypes={workTypes}
+          allInXType={allInXType}
+          pricingMode={pricingMode}
+          value={doctorParts}
+          onChange={setDoctorParts}
+        />
         <DentalChart
           selectedTeeth={selectedTeeth}
           onChange={setSelectedTeeth}

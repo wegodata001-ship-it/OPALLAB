@@ -206,8 +206,30 @@ export function mapOrder(order: PrismaOrder): Order {
       "otherWorkNotes" in order
         ? ((order as { otherWorkNotes?: string | null }).otherWorkNotes ?? null)
         : null,
+    doctorParts: mapOrderDoctorParts(order),
     completedStages: parseCompletedStages(order.completedStages),
   };
+}
+
+function mapOrderDoctorParts(order: PrismaOrder): import("@/lib/types").OrderDoctorPart[] {
+  const rows = (order as PrismaOrder & {
+    orderParts?: Array<{
+      partId: string;
+      quantity: number;
+      appliedQty: number;
+      part?: { name: string; code: string; unit: string; quantity: number };
+    }>;
+  }).orderParts;
+  if (!rows) return [];
+  return rows.map((row) => ({
+    partId: row.partId,
+    name: row.part?.name ?? "",
+    code: row.part?.code ?? "",
+    unit: row.part?.unit ?? "",
+    quantity: row.quantity,
+    appliedQty: row.appliedQty,
+    stockQuantity: row.part?.quantity ?? 0,
+  }));
 }
 
 export async function mapOrderFile(
@@ -285,6 +307,12 @@ type OrderWithIncludes = PrismaOrder & {
     createdAt: Date;
     updatedAt: Date;
   } | null;
+  orderParts?: Array<{
+    partId: string;
+    quantity: number;
+    appliedQty: number;
+    part?: { name: string; code: string; unit: string; quantity: number };
+  }>;
 };
 
 export function mapSplintType(row: {
@@ -389,4 +417,7 @@ export const ORDER_INCLUDE = {
   statusHistory: { orderBy: { createdAt: "desc" as const } },
   shipment: true,
   splintType: true,
+  orderParts: {
+    include: { part: { select: { name: true, code: true, unit: true, quantity: true } } },
+  },
 } as const;

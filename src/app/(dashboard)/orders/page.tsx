@@ -32,6 +32,8 @@ import type { Order } from "@/lib/types";
 import { syncWorkTypesWithSplint } from "@/lib/orders/splint-types";
 import { SplintTypeSelect } from "@/components/orders/splint-type-select";
 import { CatalogChipField } from "@/components/orders/catalog-chip-field";
+import { OrderDoctorPartsField, type SelectedDoctorPart } from "@/components/inventory/OrderDoctorPartsField";
+import { orderNeedsDoctorParts } from "@/lib/inventory/doctor-parts-rules";
 import {
   getOrderStageRelevance,
   isPrivilegedRole,
@@ -78,6 +80,7 @@ function OrdersContent() {
   const [splintTypeIds, setSplintTypeIds] = useState<string[]>([]);
   const [selectedTeeth, setSelectedTeeth] = useState<number[]>([]);
   const [bridgeGroups, setBridgeGroups] = useState<number[][]>([]);
+  const [doctorParts, setDoctorParts] = useState<SelectedDoctorPart[]>([]);
   const [description, setDescription] = useState("");
   const [completionDate, setCompletionDate] = useState("");
   const [totalPrice, setTotalPrice] = useState("");
@@ -320,6 +323,7 @@ function OrdersContent() {
     setSplintTypeIds([]);
     setSelectedTeeth([]);
     setBridgeGroups([]);
+    setDoctorParts([]);
     setDescription("");
     setCompletionDate("");
     setTotalPrice("");
@@ -376,6 +380,9 @@ function OrdersContent() {
         jawCount: pricing.jawCount,
         otherWorkKind: pricingMode === "OTHER" ? otherWorkKind : null,
         otherWorkNotes: otherWorkNotes.trim() || null,
+        doctorParts: orderNeedsDoctorParts({ materials, workTypes, allInXType, pricingMode })
+          ? doctorParts.map(({ partId, quantity }) => ({ partId, quantity }))
+          : [],
       });
 
     if (!order?.id) {
@@ -693,6 +700,14 @@ function OrdersContent() {
                   <SplintTypeSelect value={splintTypeIds} onChange={onSplintTypeChange} />
                 </>
               )}
+              <OrderDoctorPartsField
+                materials={materials}
+                workTypes={workTypes}
+                allInXType={allInXType}
+                pricingMode={pricingMode}
+                value={doctorParts}
+                onChange={setDoctorParts}
+              />
               <DentalChart
                 selectedTeeth={selectedTeeth}
                 onChange={setSelectedTeeth}

@@ -125,6 +125,14 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           <CardContent className="grid grid-cols-2 gap-2 text-sm">
             <span className="text-slate-500">רופא</span><span className="font-medium">{order.doctor?.name ?? "—"}</span>
             <span className="text-slate-500">מטופל</span><span>{order.patient.name}{order.patient.age ? ` (${order.patient.age})` : ""}{order.patient.gender ? ` ${GENDER_LABELS[order.patient.gender]}` : ""}</span>
+            {(order.doctorParts?.length ?? 0) > 0 && (
+              <>
+                <span className="text-slate-500">חלקים</span>
+                <span>
+                  {(order.doctorParts ?? []).map((part) => `${part.name} × ${part.quantity}`).join(" · ")}
+                </span>
+              </>
+            )}
             <span className="text-slate-500">צבע</span><span>{order.shade || "—"}</span>
             <span className="text-slate-500">כניסה</span><span>{formatDate(order.entryDate)}</span>
             <span className="text-slate-500">יעד</span><span>{formatDate(order.completionDate)}</span>

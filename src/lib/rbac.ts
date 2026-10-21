@@ -213,6 +213,20 @@ export async function assertCanManageOrderCatalog(user: User): Promise<void> {
   }
 }
 
+/** ADMIN / OWNER only — zirconia catalog structure (models, attributes, values). */
+export async function assertCanManageZirconiaCatalog(user: User): Promise<void> {
+  if (!canDeleteOrders(user)) {
+    await forbid(user, "ZIRCONIA_CATALOG", "עריכת מלאי זירקוניה זמינה למנהל בלבד");
+  }
+}
+
+/** ADMIN / OWNER only — titanium catalog structure (category, models, radii, sizes). */
+export async function assertCanManageTitaniumCatalog(user: User): Promise<void> {
+  if (!canDeleteOrders(user)) {
+    await forbid(user, "TITANIUM_CATALOG", "עריכת מלאי טיטניום זמינה למנהל בלבד");
+  }
+}
+
 /** System reset — Owner only (not Admin / Secretary). */
 export async function assertIsOwner(user: User, action = "OWNER_ONLY"): Promise<void> {
   if (!userHasRole(user, "OWNER")) {

@@ -149,6 +149,38 @@ enum MovementType {
   DELETE
 }
 
+enum BmmaStockAction {
+  IN
+  OUT
+  SET
+}
+
+enum SimpleStockKind {
+  CLINIC_MATERIALS
+  OTHER_MATERIALS
+}
+
+enum SimpleStockAction {
+  IN
+  OUT
+  SET
+}
+
+enum ImplantStockAction {
+  IN
+  OUT
+  SET
+}
+
+enum DoctorPartMovementType {
+  STOCK_IN
+  STOCK_OUT
+  ORDER_CONSUMPTION
+  ORDER_ADJUSTMENT
+  ORDER_RETURN
+  MANUAL_CORRECTION
+}
+
 model User {
   id         String      @id @default(cuid())
   username   String      @unique
@@ -180,6 +212,10 @@ model User {
   attendanceRecords  AttendanceRecord[]
   trustedDevices     TrustedDevice[]
   inventoryMovements InventoryMovement[]
+  bmmaMovements      BmmaMovement[]
+  simpleStockMovements SimpleStockMovement[]
+  implantMovements     ImplantStockMovement[]
+  doctorPartMovements  DoctorPartMovement[]
   employeePayments   Payment[]            @relation("EmployeePayments")
   auditLogs          AuditLog[]
 
@@ -334,6 +370,8 @@ model Order {
   statusHistory      OrderStatusHistory[]
   shipment           Shipment?
   inventoryUsages    InventoryUsage[]
+  orderParts         OrderPart[]
+  doctorPartMovements DoctorPartMovement[]
   payments           Payment[]
   calendarEvents     CalendarEvent[]
 
@@ -523,6 +561,360 @@ model InventoryUsage {
 
   order Order         @relation(fields: [orderId], references: [id])
   item  InventoryItem @relation(fields: [itemId], references: [id])
+}
+
+/// Zirconia catalog model. The display name is editable; the id stays stable.
+model ZirconiaModel {
+  id        String   @id @default(cuid())
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attributes ZirconiaAttribute[]
+
+  @@index([sortOrder])
+}
+
+/// Named attribute of a zirconia model (for example color or length).
+model ZirconiaAttribute {
+  id        String   @id @default(cuid())
+  modelId   String
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  model  ZirconiaModel            @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  values ZirconiaAttributeValue[]
+
+  @@index([modelId, sortOrder])
+}
+
+/// A single selectable value under a zirconia attribute.
+model ZirconiaAttributeValue {
+  id          String   @id @default(cuid())
+  attributeId String
+  label       String
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  attribute ZirconiaAttribute @relation(fields: [attributeId], references: [id], onDelete: Restrict)
+
+  @@index([attributeId, sortOrder])
+}
+
+/// Titanium inventory category shown on the main inventory hub.
+model TitaniumCategory {
+  id           String    @id @default(cuid())
+  name         String
+  details      String    @default("")
+  hubSortOrder Int       @default(6)
+  archivedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  models TitaniumModel[]
+}
+
+/// A titanium model such as G5. The name is editable; the id stays stable.
+model TitaniumModel {
+  id         String    @id @default(cuid())
+  categoryId String
+  name       String
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  category TitaniumCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  radii    TitaniumRadius[]
+
+  @@index([categoryId, sortOrder])
+}
+
+/// Radius defined by the manager under one titanium model.
+model TitaniumRadius {
+  id         String    @id @default(cuid())
+  modelId    String
+  name       String
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  model TitaniumModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  sizes TitaniumSize[]
+
+  @@index([modelId, sortOrder])
+}
+
+/// Size defined by the manager under one titanium radius.
+model TitaniumSize {
+  id         String    @id @default(cuid())
+  radiusId   String
+  label      String
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  radius TitaniumRadius @relation(fields: [radiusId], references: [id], onDelete: Restrict)
+
+  @@index([radiusId, sortOrder])
+}
+
+/// BMMA category. Display name is editable; no sample colors or heights are seeded.
+model BmmaCategory {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  models BmmaModel[]
+  colors BmmaColor[]
+}
+
+/// Optional BMMA model. Colors can also exist directly on the category.
+model BmmaModel {
+  id         String    @id @default(cuid())
+  categoryId String
+  name       String
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  category BmmaCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  colors   BmmaColor[]
+
+  @@index([categoryId, sortOrder])
+}
+
+model BmmaColor {
+  id         String    @id @default(cuid())
+  categoryId String
+  modelId    String?
+  name       String
+  colorCode  String    @default("")
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  category BmmaCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  model    BmmaModel?   @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  heights  BmmaHeight[]
+
+  @@index([categoryId, modelId, sortOrder])
+}
+
+/// One stock row for a color and height.
+model BmmaHeight {
+  id          String    @id @default(cuid())
+  colorId     String
+  label       String
+  quantity    Int       @default(0)
+  minQuantity Int       @default(0)
+  sortOrder   Int       @default(0)
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  color      BmmaColor      @relation(fields: [colorId], references: [id], onDelete: Restrict)
+  movements  BmmaMovement[]
+
+  @@index([colorId, sortOrder])
+}
+
+model BmmaMovement {
+  id           String          @id @default(cuid())
+  heightId     String
+  action       BmmaStockAction
+  quantity     Int
+  delta        Int
+  balanceAfter Int
+  reason       String
+  performedBy  String
+  createdAt    DateTime        @default(now())
+
+  height    BmmaHeight @relation(fields: [heightId], references: [id], onDelete: Restrict)
+  performer User       @relation(fields: [performedBy], references: [id], onDelete: Restrict)
+
+  @@index([heightId, createdAt])
+}
+
+/// Free-form product stock for clinic materials and miscellaneous materials.
+model SimpleStockItem {
+  id         String          @id @default(cuid())
+  kind       SimpleStockKind
+  name       String
+  quantity   Int             @default(0)
+  unit       String          @default("")
+  note       String          @default("")
+  archivedAt DateTime?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  movements SimpleStockMovement[]
+
+  @@index([kind, archivedAt, name])
+}
+
+model SimpleStockMovement {
+  id           String            @id @default(cuid())
+  itemId       String
+  action       SimpleStockAction
+  quantity     Int
+  delta        Int
+  balanceAfter Int
+  performedBy  String
+  createdAt    DateTime          @default(now())
+
+  item      SimpleStockItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  performer User            @relation(fields: [performedBy], references: [id], onDelete: Restrict)
+
+  @@index([itemId, createdAt])
+}
+
+/// Implant system / company. MLS is seeded once and remains renameable.
+model ImplantBrand {
+  id         String    @id @default(cuid())
+  name       String
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  models ImplantModel[]
+
+  @@index([sortOrder])
+}
+
+model ImplantModel {
+  id         String    @id @default(cuid())
+  brandId    String
+  name       String
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  brand ImplantBrand  @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  types ImplantType[]
+
+  @@index([brandId, sortOrder])
+}
+
+model ImplantType {
+  id         String    @id @default(cuid())
+  modelId    String
+  name       String
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  model   ImplantModel    @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  heights ImplantHeight[]
+
+  @@index([modelId, sortOrder])
+}
+
+/// One stock row for a company, model, type, and height.
+model ImplantHeight {
+  id          String    @id @default(cuid())
+  typeId      String
+  label       String
+  quantity    Int       @default(0)
+  minQuantity Int       @default(0)
+  sortOrder   Int       @default(0)
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  type      ImplantType           @relation(fields: [typeId], references: [id], onDelete: Restrict)
+  movements ImplantStockMovement[]
+
+  @@index([typeId, sortOrder])
+}
+
+model ImplantStockMovement {
+  id             String             @id @default(cuid())
+  heightId       String
+  action         ImplantStockAction
+  quantityBefore Int
+  quantity       Int
+  delta          Int
+  balanceAfter   Int
+  reason         String             @default("")
+  performedBy    String
+  createdAt      DateTime           @default(now())
+
+  height    ImplantHeight @relation(fields: [heightId], references: [id], onDelete: Restrict)
+  performer User          @relation(fields: [performedBy], references: [id], onDelete: Restrict)
+
+  @@index([heightId, createdAt])
+}
+
+/// Free-form doctor parts. Quantity may be negative.
+model DoctorPart {
+  id         String    @id @default(cuid())
+  name       String
+  code       String    @default("")
+  quantity   Int       @default(0)
+  unit       String    @default("")
+  notes      String    @default("")
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  orderParts OrderPart[]
+  movements  DoctorPartMovement[]
+
+  @@index([archivedAt, name])
+}
+
+/// Parts selected on one order. appliedQty is the amount currently deducted from stock.
+model OrderPart {
+  id         String   @id @default(cuid())
+  orderId    String
+  partId     String
+  quantity   Int
+  appliedQty Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  order Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  part  DoctorPart @relation(fields: [partId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, partId])
+  @@index([partId])
+}
+
+model DoctorPartMovement {
+  id             String                 @id @default(cuid())
+  partId         String
+  orderId        String?
+  orderSerial    String                 @default("")
+  operationId    String                 @unique
+  type           DoctorPartMovementType
+  quantityChange Int
+  quantityBefore Int
+  quantityAfter  Int
+  userId         String
+  reason         String                 @default("")
+  source         String
+  createdAt      DateTime               @default(now())
+
+  part  DoctorPart @relation(fields: [partId], references: [id], onDelete: Restrict)
+  order Order?     @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  user  User       @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([partId, createdAt])
+  @@index([orderId])
+  @@index([createdAt])
 }
 
 model Shipment {

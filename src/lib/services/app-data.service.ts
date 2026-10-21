@@ -1,6 +1,8 @@
 import { Prisma, $Enums } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/errors/app-error";
+import { orderNeedsDoctorParts } from "@/lib/inventory/doctor-parts-rules";
+import { reapplyOrderDoctorParts, releaseOrderDoctorParts, syncOrderDoctorParts } from "@/lib/inventory/doctor-parts";
 import {
   hashPassword,
   labSettingsToEntries,
@@ -582,6 +584,16 @@ export class AppDataService {
         },
       });
 
+      if (input.doctorParts !== undefined) {
+        await syncOrderDoctorParts(tx, {
+          orderId: order.id,
+          userId,
+          lines: orderNeedsDoctorParts({ materials, workTypes, allInXType: persisted.allInXType, pricingMode: persisted.pricingMode })
+            ? input.doctorParts
+            : [],
+        });
+      }
+
       // Work CHARGE is created only when production completes (PACKAGING+), not on create.
       return mapOrder(order);
     }).then(async (order) => {
@@ -908,6 +920,16 @@ export class AppDataService {
         });
       }
 
+      if (input.doctorParts !== undefined) {
+        await syncOrderDoctorParts(tx, {
+          orderId: order.id,
+          userId,
+          lines: orderNeedsDoctorParts({ materials, workTypes, allInXType: persisted.allInXType, pricingMode: persisted.pricingMode })
+            ? input.doctorParts
+            : [],
+        });
+      }
+
       // Work CHARGE is created only when production completes (PACKAGING+), not on finalize.
       return mapOrder(order);
     }).then(async (order) => {
@@ -1031,6 +1053,11 @@ export class AppDataService {
           notes: reason ? `מחיקה: ${reason}` : "מחיקת הזמנה",
         },
       });
+      await releaseOrderDoctorParts(tx, {
+        orderId: order.id,
+        userId: input.userId,
+        reason: "מחיקת הזמנה",
+      });
       return row;
     });
 
@@ -1092,6 +1119,13 @@ export class AppDataService {
           notes: "שחזור הזמנה ממחיקה",
         },
       });
+      if (restoreStatus !== "CANCELLED") {
+        await reapplyOrderDoctorParts(tx, {
+          orderId: order.id,
+          userId: input.userId,
+          reason: "שחזור הזמנה",
+        });
+      }
       return row;
     });
 
@@ -1173,6 +1207,11 @@ export class AppDataService {
     }
 
     await prisma.$transaction(async (tx) => {
+      await releaseOrderDoctorParts(tx, {
+        orderId,
+        userId: input.userId,
+        reason: "מחיקה סופית",
+      });
       await tx.inventoryUsage.deleteMany({ where: { orderId } });
       await tx.payment.deleteMany({ where: { orderId } });
       if (order.shipment) {
@@ -1378,6 +1417,31 @@ export class AppDataService {
         });
       }
 
+      if (input.doctorParts !== undefined) {
+        const nextMaterials = input.materials ?? order.materials;
+        const nextWorkTypes =
+          input.workTypes !== undefined || resolvedSplintIds !== undefined
+            ? syncWorkTypesWithSplint(
+                input.workTypes ?? order.workTypes,
+                resolvedSplintIds ?? normalizeSplintTypeIds(order.splintTypeIds, order.splintTypeId),
+              )
+            : order.workTypes;
+        const nextMode = input.pricingMode !== undefined ? input.pricingMode : order.pricingMode;
+        const nextAllInX = input.allInXType !== undefined ? input.allInXType : order.allInXType;
+        await syncOrderDoctorParts(tx, {
+          orderId: order.id,
+          userId,
+          lines: orderNeedsDoctorParts({
+            materials: nextMaterials,
+            workTypes: nextWorkTypes,
+            allInXType: nextAllInX,
+            pricingMode: nextMode,
+          })
+            ? input.doctorParts
+            : [],
+        });
+      }
+
       if (input.totalPrice !== undefined) {
         const reconciled = await reconcileOrderWorkChargePrice(tx, {
           orderId: order.id,
@@ -1467,6 +1531,21 @@ export class AppDataService {
           notes: input.notes ?? null,
         },
       });
+
+      if (input.status === "CANCELLED" && existing.status !== "CANCELLED") {
+        await releaseOrderDoctorParts(tx, {
+          orderId: input.orderId,
+          userId: input.changedBy,
+          reason: "ביטול הזמנה",
+        });
+      }
+      if (existing.status === "CANCELLED" && input.status !== "CANCELLED") {
+        await reapplyOrderDoctorParts(tx, {
+          orderId: input.orderId,
+          userId: input.changedBy,
+          reason: "חידוש הזמנה",
+        });
+      }
 
       if (shouldBillOrderOnStatusTransition(existing.status, input.status)) {
         assertOrderPriceReadyForBilling({
