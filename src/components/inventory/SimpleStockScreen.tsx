@@ -7,6 +7,8 @@ import { Header } from "@/components/layout/sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { InventoryModule, StockButtons } from "@/components/inventory/InventoryStockTools";
+import { MediaFace } from "@/components/inventory/InventoryMedia";
 
 type StockKind = "CLINIC_MATERIALS" | "OTHER_MATERIALS";
 
@@ -140,14 +142,18 @@ export function SimpleStockScreen({ kind, title }: { kind: StockKind; title: str
   }
 
   return (
+    <InventoryModule type={kind} title={title}>
     <>
       <Header
         title={title}
         description="הוספת מוצר, כמות ועדכון מיידי"
         actions={
-          <Link href="/inventory" className="text-sm font-medium text-slate-600 underline-offset-4 hover:text-opal-gold-dark hover:underline">
-            חזרה למלאי
-          </Link>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <StockButtons type={kind} />
+            <Link href="/inventory" className="text-sm font-medium text-slate-600 underline-offset-4 hover:text-opal-gold-dark hover:underline">
+              חזרה למלאי
+            </Link>
+          </div>
         }
       />
 
@@ -197,8 +203,13 @@ export function SimpleStockScreen({ kind, title }: { kind: StockKind; title: str
                 {visible.map((item) => (
                   <tr key={item.id} className="border-t border-slate-100">
                     <td className="px-4 py-3">
-                      <p className="font-medium text-slate-900">{item.name}</p>
-                      {item.note && <p className="text-xs text-slate-500">{item.note}</p>}
+                      <div className="flex items-center gap-2">
+                        <MediaFace kind="item" id={item.id} name={item.name} canEdit={canEdit} />
+                        <div>
+                          <p className="font-medium text-slate-900">{item.name}</p>
+                          {item.note && <p className="text-xs text-slate-500">{item.note}</p>}
+                        </div>
+                      </div>
                     </td>
                     <td className="px-4 py-3 font-bold text-slate-900">
                       {item.quantity}
@@ -222,9 +233,12 @@ export function SimpleStockScreen({ kind, title }: { kind: StockKind; title: str
             {visible.map((item) => (
               <li key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-bold text-slate-900">{item.name}</p>
-                    {item.note && <p className="text-xs text-slate-500">{item.note}</p>}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <MediaFace kind="item" id={item.id} name={item.name} canEdit={canEdit} />
+                    <div className="min-w-0">
+                      <p className="font-bold text-slate-900">{item.name}</p>
+                      {item.note && <p className="text-xs text-slate-500">{item.note}</p>}
+                    </div>
                   </div>
                   <p className="shrink-0 text-lg font-bold text-slate-900">
                     {item.quantity}
@@ -309,6 +323,7 @@ export function SimpleStockScreen({ kind, title }: { kind: StockKind; title: str
         </div>
       </Modal>
     </>
+    </InventoryModule>
   );
 }
 

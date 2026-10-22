@@ -7,6 +7,8 @@ import { Header } from "@/components/layout/sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { InventoryModule, StockButtons, useInventoryView } from "@/components/inventory/InventoryStockTools";
+import { MediaFace } from "@/components/inventory/InventoryMedia";
 import { cn } from "@/lib/utils";
 
 type Part = { id: string; name: string; code: string; quantity: number; unit: string; notes: string };
@@ -33,6 +35,7 @@ const TYPE_LABEL: Record<string, string> = {
   ORDER_ADJUSTMENT: "התאמת הזמנה",
   ORDER_RETURN: "החזרה מהזמנה",
   MANUAL_CORRECTION: "תיקון ספירה",
+  STOCK_COUNT: "ספירת מלאי",
 };
 
 function monthStart() {
@@ -53,6 +56,7 @@ async function requestParts(input: { method?: "GET" | "POST" | "PATCH" | "DELETE
 }
 
 export function DoctorPartsScreen() {
+  const [, setStockMode] = useInventoryView("DOCTOR_PARTS");
   const [parts, setParts] = useState<Part[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [canEdit, setCanEdit] = useState(false);
@@ -63,7 +67,7 @@ export function DoctorPartsScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<null | "add" | "history" | { type: "edit" | "count"; part: Part } | { type: "delete"; part: Part }>(null);
+  const [dialog, setDialog] = useState<null | "add" | "history" | { type: "edit"; part: Part } | { type: "delete"; part: Part }>(null);
   const [draft, setDraft] = useState({ name: "", code: "", quantity: "0", unit: "", notes: "", physical: "" });
   const [movements, setMovements] = useState<Movement[]>([]);
 
@@ -127,11 +131,17 @@ export function DoctorPartsScreen() {
   }
 
   return (
+    <InventoryModule type="DOCTOR_PARTS" title="חלקים רופאים">
     <>
       <Header
         title="חלקים רופאים"
         description="מלאי חופשי המחובר להזמנות"
-        actions={<Link href="/inventory" className="text-sm font-medium text-slate-600 hover:underline">חזרה למלאי</Link>}
+        actions={
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <StockButtons type="DOCTOR_PARTS" />
+            <Link href="/inventory" className="text-sm font-medium text-slate-600 hover:underline">חזרה למלאי</Link>
+          </div>
+        }
       />
       {loading ? (
         <div className="flex items-center gap-2 text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />טוען</div>
@@ -165,16 +175,7 @@ export function DoctorPartsScreen() {
               </Button>
             )}
             {canEdit && (
-              <Button
-                variant="outline"
-                disabled={parts.length === 0}
-                onClick={() => {
-                  const part = parts[0];
-                  if (!part) return;
-                  setDraft({ name: part.name, code: part.code, quantity: String(part.quantity), unit: part.unit, notes: "", physical: String(part.quantity) });
-                  setDialog({ type: "count", part });
-                }}
-              >
+              <Button variant="outline" disabled={parts.length === 0} onClick={() => setStockMode("count")}>
                 ספירת מלאי
               </Button>
             )}
@@ -197,7 +198,7 @@ export function DoctorPartsScreen() {
                   </thead>
                   <tbody>
                     {visible.map((part) => (
-                      <PartRow key={part.id} part={part} canEdit={canEdit} busy={busy} onDelta={(delta) => void run(() => requestParts({ method: "PATCH", body: { id: part.id, delta } }).then(() => undefined))} onQuantity={(quantity) => void run(() => requestParts({ method: "PATCH", body: { id: part.id, quantity } }).then(() => undefined))} onHistory={() => void openHistory(part.id)} onEdit={() => { setDraft({ name: part.name, code: part.code, quantity: String(part.quantity), unit: part.unit, notes: part.notes, physical: String(part.quantity) }); setDialog({ type: "edit", part }); }} onCount={() => { setDraft({ name: part.name, code: part.code, quantity: String(part.quantity), unit: part.unit, notes: part.notes, physical: String(part.quantity) }); setDialog({ type: "count", part }); }} onDelete={() => setDialog({ type: "delete", part })} />
+                      <PartRow key={part.id} part={part} canEdit={canEdit} busy={busy} onDelta={(delta) => void run(() => requestParts({ method: "PATCH", body: { id: part.id, delta } }).then(() => undefined))} onQuantity={(quantity) => void run(() => requestParts({ method: "PATCH", body: { id: part.id, quantity } }).then(() => undefined))} onHistory={() => void openHistory(part.id)} onEdit={() => { setDraft({ name: part.name, code: part.code, quantity: String(part.quantity), unit: part.unit, notes: part.notes, physical: String(part.quantity) }); setDialog({ type: "edit", part }); }} onCount={() => setStockMode("count")} onDelete={() => setDialog({ type: "delete", part })} />
                     ))}
                   </tbody>
                 </table>
@@ -205,7 +206,7 @@ export function DoctorPartsScreen() {
               <ul className="space-y-3 md:hidden">
                 {visible.map((part) => (
                   <li key={part.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <PartBody part={part} canEdit={canEdit} busy={busy} onDelta={(delta) => void run(() => requestParts({ method: "PATCH", body: { id: part.id, delta } }).then(() => undefined))} onQuantity={(quantity) => void run(() => requestParts({ method: "PATCH", body: { id: part.id, quantity } }).then(() => undefined))} onHistory={() => void openHistory(part.id)} onEdit={() => { setDraft({ name: part.name, code: part.code, quantity: String(part.quantity), unit: part.unit, notes: part.notes, physical: String(part.quantity) }); setDialog({ type: "edit", part }); }} onCount={() => setDialog({ type: "count", part })} onDelete={() => setDialog({ type: "delete", part })} />
+                    <PartBody part={part} canEdit={canEdit} busy={busy} onDelta={(delta) => void run(() => requestParts({ method: "PATCH", body: { id: part.id, delta } }).then(() => undefined))} onQuantity={(quantity) => void run(() => requestParts({ method: "PATCH", body: { id: part.id, quantity } }).then(() => undefined))} onHistory={() => void openHistory(part.id)} onEdit={() => { setDraft({ name: part.name, code: part.code, quantity: String(part.quantity), unit: part.unit, notes: part.notes, physical: String(part.quantity) }); setDialog({ type: "edit", part }); }} onCount={() => setStockMode("count")} onDelete={() => setDialog({ type: "delete", part })} />
                   </li>
                 ))}
               </ul>
@@ -232,42 +233,6 @@ export function DoctorPartsScreen() {
         </div>
       </Modal>
 
-      <Modal open={typeof dialog === "object" && dialog?.type === "count"} onClose={() => setDialog(null)} title="ספירת מלאי" className="max-w-md">
-        {typeof dialog === "object" && dialog?.type === "count" && (
-          <div className="space-y-3 text-sm">
-            <label className="block text-slate-600">
-              חלק
-              <select
-                aria-label="חלק לספירה"
-                className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-2"
-                value={dialog.part.id}
-                onChange={(event) => {
-                  const part = parts.find((item) => item.id === event.target.value);
-                  if (!part) return;
-                  setDraft({ name: part.name, code: part.code, quantity: String(part.quantity), unit: part.unit, notes: "", physical: String(part.quantity) });
-                  setDialog({ type: "count", part });
-                }}
-              >
-                {parts.map((part) => (
-                  <option key={part.id} value={part.id}>{part.name}</option>
-                ))}
-              </select>
-            </label>
-            <p>כמות מערכת: <b className={dialog.part.quantity < 0 ? "text-red-600" : ""}>{dialog.part.quantity}</b></p>
-            <Input inputMode="numeric" placeholder="כמות בספירה" value={draft.physical} onChange={(event) => setDraft({ ...draft, physical: event.target.value })} />
-            <p>הפרש: {Number.isInteger(Number(draft.physical)) ? Number(draft.physical) - dialog.part.quantity : "—"}</p>
-            <Input placeholder="הערה" value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} />
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setDialog(null)}>ביטול</Button>
-              <Button disabled={busy} onClick={() => void run(async () => {
-                await requestParts({ method: "POST", body: { kind: "count", id: dialog.part.id, physicalQuantity: Number(draft.physical), reason: draft.notes } });
-                setDialog(null);
-              })}>אישור ספירה</Button>
-            </div>
-          </div>
-        )}
-      </Modal>
-
       <Modal open={dialog === "history"} onClose={() => setDialog(null)} title="היסטוריית תנועות" className="max-w-lg">
         {movements.length === 0 ? <p className="text-sm text-slate-500">אין תנועות</p> : (
           <ul className="space-y-2">
@@ -275,7 +240,7 @@ export function DoctorPartsScreen() {
               <li key={row.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
                 <p className="font-medium">{row.partName} · {TYPE_LABEL[row.type] ?? row.type}</p>
                 <p>{row.quantityBefore} → {row.quantityAfter} ({row.quantityChange > 0 ? `+${row.quantityChange}` : row.quantityChange})</p>
-                <p className="text-xs text-slate-500">{row.userName} · {row.source === "ORDER" ? "הזמנה" : "שינוי ידני"}{row.orderSerial ? ` · ${row.orderSerial}` : ""} · {new Date(row.createdAt).toLocaleString("he-IL")}</p>
+                <p className="text-xs text-slate-500">{row.userName} · {row.source === "ORDER" ? "הזמנה" : row.source === "COUNT" ? "ספירה" : "שינוי ידני"}{row.orderSerial ? ` · ${row.orderSerial}` : ""} · {new Date(row.createdAt).toLocaleString("he-IL")}</p>
                 <p className="text-[11px] text-slate-400">{row.operationId}</p>
                 {row.reason && <p className="text-slate-600">{row.reason}</p>}
               </li>
@@ -299,6 +264,7 @@ export function DoctorPartsScreen() {
         </div>
       </Modal>
     </>
+    </InventoryModule>
   );
 }
 
@@ -306,8 +272,13 @@ function PartRow(props: PartActions & { part: Part }) {
   return (
     <tr className="border-t border-slate-100">
       <td className="px-4 py-3">
-        <p className="font-medium">{props.part.name}</p>
-        <p className="text-xs text-slate-500">{[props.part.code, props.part.unit, props.part.notes].filter(Boolean).join(" · ")}</p>
+        <div className="flex items-center gap-2">
+          <MediaFace kind="part" id={props.part.id} name={props.part.name} canEdit={props.canEdit} />
+          <div>
+            <p className="font-medium">{props.part.name}</p>
+            <p className="text-xs text-slate-500">{[props.part.code, props.part.unit, props.part.notes].filter(Boolean).join(" · ")}</p>
+          </div>
+        </div>
       </td>
       <td className="px-4 py-3"><Qty value={props.part.quantity} /></td>
       <td className="px-4 py-3">{props.canEdit && <QtyControl part={props.part} disabled={props.busy} onDelta={props.onDelta} onQuantity={props.onQuantity} />}</td>
@@ -321,9 +292,12 @@ function PartBody(props: PartActions & { part: Part }) {
   return (
     <>
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="font-bold">{props.part.name}</p>
-          <p className="text-xs text-slate-500">{[props.part.code, props.part.notes].filter(Boolean).join(" · ")}</p>
+        <div className="flex items-center gap-2">
+          <MediaFace kind="part" id={props.part.id} name={props.part.name} canEdit={props.canEdit} />
+          <div>
+            <p className="font-bold">{props.part.name}</p>
+            <p className="text-xs text-slate-500">{[props.part.code, props.part.notes].filter(Boolean).join(" · ")}</p>
+          </div>
         </div>
         <Qty value={props.part.quantity} />
       </div>

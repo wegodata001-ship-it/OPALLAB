@@ -8,6 +8,7 @@ import {
   Boxes,
   ChevronLeft,
   Drill,
+  FileText,
   FlaskConical,
   Gem,
   Hexagon,
@@ -45,6 +46,7 @@ function withInventoryCards(
   const cards: HubCard[] = STATIC_CARDS.map((card) => ({ ...card, key: card.href }));
   cards.splice(index, 0, titanium);
   cards.push({ key: "bmma", href: "/inventory/bmma", title: bmmaName, icon: Palette });
+  cards.push({ key: "reports", href: "/inventory/reports", title: "דוחות מלאי", icon: FileText });
   return cards;
 }
 

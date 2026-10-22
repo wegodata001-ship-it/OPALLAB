@@ -8,27 +8,47 @@ import {
 import {
   createZirconiaNode,
   deleteZirconiaNode,
-  listZirconiaCatalog,
   renameZirconiaNode,
   reorderZirconiaNodes,
   type ZirconiaCatalogKind,
 } from "@/lib/inventory/zirconia-catalog";
+import {
+  adjustZirconiaHeight,
+  createZirconiaColor,
+  createZirconiaHeight,
+  createZirconiaVariant,
+  deleteZirconiaColor,
+  deleteZirconiaHeight,
+  deleteZirconiaVariant,
+  listZirconiaMovements,
+  listZirconiaStock,
+  renameZirconiaColor,
+  renameZirconiaHeight,
+  renameZirconiaVariant,
+  reorderZirconiaVariants,
+} from "@/lib/inventory/zirconia-stock";
 import { canDeleteOrders } from "@/lib/user-roles";
 
-function parseKind(kind: string | null | undefined): ZirconiaCatalogKind {
+function parseCatalogKind(kind: string | null | undefined): ZirconiaCatalogKind {
   if (kind === "model" || kind === "attribute" || kind === "value") return kind;
   throw new AppError("VALIDATION_ERROR", "סוג לא תקין", 400);
 }
 
-async function catalogPayload(userCanEdit: boolean) {
-  return { canEdit: userCanEdit, models: await listZirconiaCatalog() };
+async function stockPayload(userCanEdit: boolean) {
+  return { canEdit: userCanEdit, models: await listZirconiaStock() };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const user = await requireSessionUser();
     await assertModuleAccess(user, "inventory", "ZIRCONIA_CATALOG_VIEW");
-    return jsonOk(await catalogPayload(canDeleteOrders(user)));
+    const url = new URL(request.url);
+    if (url.searchParams.get("history") === "1") {
+      const heightId = url.searchParams.get("heightId")?.trim();
+      if (!heightId) throw new AppError("VALIDATION_ERROR", "חסר מזהה גובה", 400);
+      return jsonOk({ movements: await listZirconiaMovements(heightId) });
+    }
+    return jsonOk(await stockPayload(canDeleteOrders(user)));
   } catch (error) {
     return jsonError(error);
   }
@@ -42,16 +62,52 @@ export async function POST(request: Request) {
     const body = await parseJsonBody<{
       kind?: string;
       name?: string;
+      label?: string;
       modelId?: string;
+      variantId?: string;
+      colorId?: string;
       attributeId?: string;
+      quantity?: number;
+      minQuantity?: number | null;
+      id?: string;
+      delta?: number;
+      reason?: string;
     }>(request);
-    await createZirconiaNode({
-      kind: parseKind(body.kind),
-      name: body.name,
-      modelId: body.modelId,
-      attributeId: body.attributeId,
-    });
-    return jsonOk(await catalogPayload(true));
+
+    if (body.kind === "variant") {
+      if (!body.modelId) throw new AppError("VALIDATION_ERROR", "חסר דגם", 400);
+      await createZirconiaVariant({ modelId: body.modelId, name: body.name ?? "" });
+    } else if (body.kind === "color") {
+      if (!body.variantId) throw new AppError("VALIDATION_ERROR", "חסר תת-דגם", 400);
+      await createZirconiaColor({ variantId: body.variantId, name: body.name ?? "" });
+    } else if (body.kind === "height") {
+      if (!body.colorId) throw new AppError("VALIDATION_ERROR", "חסר צבע", 400);
+      await createZirconiaHeight({
+        colorId: body.colorId,
+        label: body.label ?? "",
+        quantity: body.quantity ?? Number.NaN,
+        minQuantity: body.minQuantity,
+        userId: user.id,
+      });
+    } else if (body.kind === "adjust" || body.kind === "count") {
+      if (!body.id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
+      await adjustZirconiaHeight({
+        id: body.id,
+        delta: body.kind === "adjust" ? body.delta : undefined,
+        quantity: body.kind === "count" ? body.quantity : undefined,
+        count: body.kind === "count",
+        userId: user.id,
+        reason: body.reason,
+      });
+    } else {
+      await createZirconiaNode({
+        kind: parseCatalogKind(body.kind),
+        name: body.name,
+        modelId: body.modelId,
+        attributeId: body.attributeId,
+      });
+    }
+    return jsonOk(await stockPayload(true));
   } catch (error) {
     return jsonError(error);
   }
@@ -66,23 +122,53 @@ export async function PATCH(request: Request) {
       kind?: string;
       id?: string;
       name?: string;
+      label?: string;
       orderedIds?: string[];
       modelId?: string;
       attributeId?: string;
+      quantity?: number;
+      minQuantity?: number | null;
+      delta?: number;
+      reason?: string;
     }>(request);
-    const kind = parseKind(body.kind);
-    if (body.orderedIds) {
-      await reorderZirconiaNodes({
-        kind,
-        orderedIds: body.orderedIds,
-        modelId: body.modelId,
-        attributeId: body.attributeId,
-      });
-    } else {
+
+    if (body.kind === "variant") {
+      if (body.orderedIds) {
+        if (!body.modelId) throw new AppError("VALIDATION_ERROR", "חסר דגם", 400);
+        await reorderZirconiaVariants(body.modelId, body.orderedIds);
+      } else {
+        if (!body.id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
+        await renameZirconiaVariant(body.id, body.name ?? "");
+      }
+    } else if (body.kind === "color") {
       if (!body.id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
-      await renameZirconiaNode({ kind, id: body.id, name: body.name });
+      await renameZirconiaColor(body.id, body.name ?? "");
+    } else if (body.kind === "height") {
+      if (!body.id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
+      if (body.delta !== undefined || (body.quantity !== undefined && body.label === undefined && body.minQuantity === undefined)) {
+        await adjustZirconiaHeight({
+          id: body.id,
+          delta: body.delta,
+          quantity: body.delta === undefined ? body.quantity : undefined,
+          userId: user.id,
+          reason: body.reason,
+        });
+      } else {
+        await renameZirconiaHeight(body.id, body.label ?? "", body.minQuantity);
+        if (body.quantity !== undefined) {
+          await adjustZirconiaHeight({ id: body.id, quantity: body.quantity, userId: user.id, reason: body.reason });
+        }
+      }
+    } else {
+      const kind = parseCatalogKind(body.kind);
+      if (body.orderedIds) {
+        await reorderZirconiaNodes({ kind, orderedIds: body.orderedIds, modelId: body.modelId, attributeId: body.attributeId });
+      } else {
+        if (!body.id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
+        await renameZirconiaNode({ kind, id: body.id, name: body.name });
+      }
     }
-    return jsonOk(await catalogPayload(true));
+    return jsonOk(await stockPayload(true));
   } catch (error) {
     return jsonError(error);
   }
@@ -95,9 +181,16 @@ export async function DELETE(request: Request) {
     await assertCanManageZirconiaCatalog(user);
     const url = new URL(request.url);
     const id = url.searchParams.get("id")?.trim();
+    const kind = url.searchParams.get("kind");
     if (!id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
-    await deleteZirconiaNode(parseKind(url.searchParams.get("kind")), id);
-    return jsonOk(await catalogPayload(true));
+    let notice: string | null = null;
+    if (kind === "variant") await deleteZirconiaVariant(id);
+    else if (kind === "color") await deleteZirconiaColor(id);
+    else if (kind === "height") {
+      const result = await deleteZirconiaHeight(id);
+      notice = result.archived ? "הגובה הוסר מהרשימה. היסטוריית הכמויות נשמרה." : null;
+    } else await deleteZirconiaNode(parseCatalogKind(kind), id);
+    return jsonOk({ ...(await stockPayload(true)), notice });
   } catch (error) {
     return jsonError(error);
   }

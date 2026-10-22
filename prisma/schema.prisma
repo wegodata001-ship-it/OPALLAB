@@ -153,6 +153,7 @@ enum BmmaStockAction {
   IN
   OUT
   SET
+  COUNT
 }
 
 enum SimpleStockKind {
@@ -164,12 +165,14 @@ enum SimpleStockAction {
   IN
   OUT
   SET
+  COUNT
 }
 
 enum ImplantStockAction {
   IN
   OUT
   SET
+  COUNT
 }
 
 enum DoctorPartMovementType {
@@ -179,6 +182,45 @@ enum DoctorPartMovementType {
   ORDER_ADJUSTMENT
   ORDER_RETURN
   MANUAL_CORRECTION
+  STOCK_COUNT
+}
+
+enum InventoryModuleType {
+  ZIRCONIA
+  TITANIUM
+  BMMA
+  DRILLS
+  IMPLANTS
+  CLINIC_MATERIALS
+  OTHER_MATERIALS
+  DOCTOR_PARTS
+}
+
+enum InventoryCountStatus {
+  DRAFT
+  APPROVED
+  CANCELLED
+}
+
+enum DrillStockAction {
+  IN
+  OUT
+  SET
+  COUNT
+}
+
+enum TitaniumStockAction {
+  IN
+  OUT
+  SET
+  COUNT
+}
+
+enum ZirconiaStockAction {
+  IN
+  OUT
+  SET
+  COUNT
 }
 
 model User {
@@ -216,6 +258,15 @@ model User {
   simpleStockMovements SimpleStockMovement[]
   implantMovements     ImplantStockMovement[]
   doctorPartMovements  DoctorPartMovement[]
+  zirconiaStockMovements ZirconiaStockMovement[]
+  titaniumStockMovements TitaniumStockMovement[]
+  drillStockMovements    DrillStockMovement[]
+  inventoryCountsCreated InventoryCount[] @relation("InventoryCountCreatedBy")
+  inventoryCountsApproved InventoryCount[] @relation("InventoryCountApprovedBy")
+  inventoryImagesCreated InventoryImage[] @relation("InventoryImageCreatedBy")
+  inventoryImagesUpdated InventoryImage[] @relation("InventoryImageUpdatedBy")
+  inventoryScanCodesCreated InventoryScanCode[] @relation("InventoryScanCodeCreatedBy")
+  inventoryScanCodesUpdated InventoryScanCode[] @relation("InventoryScanCodeUpdatedBy")
   employeePayments   Payment[]            @relation("EmployeePayments")
   auditLogs          AuditLog[]
 
@@ -572,8 +623,29 @@ model ZirconiaModel {
   updatedAt DateTime @updatedAt
 
   attributes ZirconiaAttribute[]
+  variants   ZirconiaVariant[]
+  colors     ZirconiaColor[]
+  heights    ZirconiaHeight[]
+  products   ZirconiaProduct[]
 
   @@index([sortOrder])
+}
+
+/// Sub-model under a zirconia model, such as LU or ZOLG under AM.
+model ZirconiaVariant {
+  id                String    @id @default(cuid())
+  modelId           String
+  name              String
+  sortOrder         Int       @default(0)
+  archivedAt        DateTime?
+  sourceAttributeId String?   @unique
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  model  ZirconiaModel   @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  colors ZirconiaColor[]
+
+  @@index([modelId, sortOrder])
 }
 
 /// Named attribute of a zirconia model (for example color or length).
@@ -603,6 +675,91 @@ model ZirconiaAttributeValue {
   attribute ZirconiaAttribute @relation(fields: [attributeId], references: [id], onDelete: Restrict)
 
   @@index([attributeId, sortOrder])
+}
+
+/// Color available on one zirconia model. Names come from the lab, not from a sample list.
+model ZirconiaColor {
+  id         String    @id @default(cuid())
+  modelId    String
+  variantId  String?
+  name       String
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  model    ZirconiaModel     @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  variant  ZirconiaVariant?  @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  products ZirconiaProduct[]
+  heights  ZirconiaHeight[]
+
+  @@index([modelId, sortOrder])
+  @@index([variantId, sortOrder])
+}
+
+/// Height available on one zirconia model.
+model ZirconiaHeight {
+  id          String    @id @default(cuid())
+  modelId     String
+  colorId     String?
+  label       String
+  quantity    Int?
+  minQuantity Int?
+  sortOrder   Int       @default(0)
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  model     ZirconiaModel           @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  color     ZirconiaColor?          @relation(fields: [colorId], references: [id], onDelete: Restrict)
+  products  ZirconiaProduct[]
+  movements ZirconiaStockMovement[]
+
+  @@index([modelId, sortOrder])
+  @@index([colorId, sortOrder])
+}
+
+/// One stock item: a color and height on a model. Quantity is the real balance.
+model ZirconiaProduct {
+  id         String    @id @default(cuid())
+  modelId    String
+  colorId    String
+  heightId   String
+  name       String    @default("")
+  quantity   Int       @default(0)
+  notes      String    @default("")
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  model     ZirconiaModel           @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  color     ZirconiaColor           @relation(fields: [colorId], references: [id], onDelete: Restrict)
+  height    ZirconiaHeight          @relation(fields: [heightId], references: [id], onDelete: Restrict)
+  movements ZirconiaStockMovement[]
+
+  @@unique([colorId, heightId])
+  @@index([modelId, archivedAt])
+}
+
+model ZirconiaStockMovement {
+  id             String              @id @default(cuid())
+  productId      String?
+  heightId       String?
+  action         ZirconiaStockAction
+  quantityChange Int
+  quantityBefore Int
+  quantityAfter  Int
+  reason         String              @default("")
+  countId        String?
+  performedBy    String
+  createdAt      DateTime            @default(now())
+
+  product   ZirconiaProduct? @relation(fields: [productId], references: [id], onDelete: Restrict)
+  height    ZirconiaHeight?  @relation(fields: [heightId], references: [id], onDelete: Restrict)
+  performer User             @relation(fields: [performedBy], references: [id], onDelete: Restrict)
+
+  @@index([productId, createdAt])
+  @@index([heightId, createdAt])
 }
 
 /// Titanium inventory category shown on the main inventory hub.
@@ -655,12 +812,14 @@ model TitaniumSize {
   id         String    @id @default(cuid())
   radiusId   String
   label      String
+  quantity   Int?
   sortOrder  Int       @default(0)
   archivedAt DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
   radius TitaniumRadius @relation(fields: [radiusId], references: [id], onDelete: Restrict)
+  movements TitaniumStockMovement[]
 
   @@index([radiusId, sortOrder])
 }
@@ -736,6 +895,7 @@ model BmmaMovement {
   delta        Int
   balanceAfter Int
   reason       String
+  countId      String?
   performedBy  String
   createdAt    DateTime        @default(now())
 
@@ -769,6 +929,7 @@ model SimpleStockMovement {
   quantity     Int
   delta        Int
   balanceAfter Int
+  countId      String?
   performedBy  String
   createdAt    DateTime          @default(now())
 
@@ -849,6 +1010,7 @@ model ImplantStockMovement {
   delta          Int
   balanceAfter   Int
   reason         String             @default("")
+  countId        String?
   performedBy    String
   createdAt      DateTime           @default(now())
 
@@ -906,6 +1068,7 @@ model DoctorPartMovement {
   userId         String
   reason         String                 @default("")
   source         String
+  countId        String?
   createdAt      DateTime               @default(now())
 
   part  DoctorPart @relation(fields: [partId], references: [id], onDelete: Restrict)
@@ -915,6 +1078,175 @@ model DoctorPartMovement {
   @@index([partId, createdAt])
   @@index([orderId])
   @@index([createdAt])
+}
+
+/// One inventory counting session. Approval is the only step that changes stock.
+model InventoryCount {
+  id              String               @id @default(cuid())
+  inventoryType   InventoryModuleType
+  serial          Int
+  status          InventoryCountStatus @default(DRAFT)
+  notes           String               @default("")
+  counterName     String               @default("")
+  location        String               @default("")
+  countedItems    Int                  @default(0)
+  changedItems    Int                  @default(0)
+  unchangedItems  Int                  @default(0)
+  differenceTotal Int                  @default(0)
+  createdById     String
+  approvedById    String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  approvedAt      DateTime?
+  cancelledAt     DateTime?
+
+  createdBy  User                 @relation("InventoryCountCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy User?                @relation("InventoryCountApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  lines      InventoryCountLine[]
+
+  @@unique([inventoryType, serial])
+  @@index([inventoryType, status, createdAt])
+}
+
+model InventoryCountLine {
+  id                     String  @id @default(cuid())
+  countId                String
+  itemId                 String
+  name                   String
+  modelName              String  @default("")
+  kindName               String  @default("")
+  colorName              String  @default("")
+  sizeName               String  @default("")
+  barcode                String  @default("")
+  quantityAtStart        Int?
+  countedQuantity        Int?
+  quantityBeforeApproval Int?
+  difference             Int?
+  quantityAfter          Int?
+  notes                  String  @default("")
+
+  count InventoryCount @relation(fields: [countId], references: [id], onDelete: Restrict)
+
+  @@unique([countId, itemId])
+  @@index([countId])
+}
+
+model TitaniumStockMovement {
+  id             String              @id @default(cuid())
+  sizeId         String
+  action         TitaniumStockAction
+  quantityBefore Int
+  quantityChange Int
+  quantityAfter  Int
+  reason         String              @default("")
+  countId        String?
+  performedBy    String
+  createdAt      DateTime            @default(now())
+
+  size      TitaniumSize @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+  performer User         @relation(fields: [performedBy], references: [id], onDelete: Restrict)
+
+  @@index([sizeId, createdAt])
+}
+
+model DrillMachine {
+  id         String    @id @default(cuid())
+  name       String
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  types DrillType[]
+
+  @@index([sortOrder])
+}
+
+model DrillType {
+  id         String    @id @default(cuid())
+  machineId  String
+  name       String
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  machine DrillMachine @relation(fields: [machineId], references: [id], onDelete: Restrict)
+  bits    DrillBit[]
+
+  @@index([machineId, sortOrder])
+}
+
+model DrillBit {
+  id         String    @id @default(cuid())
+  typeId     String
+  label      String
+  quantity   Int?
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  type      DrillType            @relation(fields: [typeId], references: [id], onDelete: Restrict)
+  movements DrillStockMovement[]
+
+  @@index([typeId, sortOrder])
+}
+
+model DrillStockMovement {
+  id             String          @id @default(cuid())
+  bitId          String
+  action         DrillStockAction
+  quantityBefore Int
+  quantityChange Int
+  quantityAfter  Int
+  reason         String          @default("")
+  countId        String?
+  performedBy    String
+  createdAt      DateTime        @default(now())
+
+  bit       DrillBit @relation(fields: [bitId], references: [id], onDelete: Restrict)
+  performer User     @relation(fields: [performedBy], references: [id], onDelete: Restrict)
+
+  @@index([bitId, createdAt])
+}
+
+model InventoryImage {
+  id          String   @id @default(cuid())
+  module      String
+  entityKind  String
+  entityId    String
+  storagePath String
+  isPrimary   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdById String
+  updatedById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User @relation("InventoryImageCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User @relation("InventoryImageUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@index([module, entityId])
+  @@index([entityId, isPrimary])
+}
+
+model InventoryScanCode {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  module      String
+  entityKind  String
+  entityId    String
+  createdById String
+  updatedById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User @relation("InventoryScanCodeCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User @relation("InventoryScanCodeUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@unique([module, entityKind, entityId])
+  @@index([module, entityId])
 }
 
 model Shipment {

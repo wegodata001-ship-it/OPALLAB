@@ -347,9 +347,11 @@ export async function adjustImplantStock(input: {
       if (height.quantity < input.quantity) throw new AppError("VALIDATION_ERROR", "אין מספיק מלאי להפחתה", 400);
       delta = -input.quantity;
       next = height.quantity - input.quantity;
-    } else {
+    } else if (input.action === "SET") {
       next = input.quantity;
       delta = input.quantity - height.quantity;
+    } else {
+      throw new AppError("VALIDATION_ERROR", "פעולת מלאי לא תקינה", 400);
     }
     if (next < 0) throw new AppError("VALIDATION_ERROR", "יתרה שלילית אינה מותרת", 400);
     const updated = await tx.implantHeight.updateMany({

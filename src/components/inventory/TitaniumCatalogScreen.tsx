@@ -13,6 +13,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { Header } from "@/components/layout/sidebar";
+import { InventoryModule, StockButtons } from "@/components/inventory/InventoryStockTools";
+import { MediaFace } from "@/components/inventory/InventoryMedia";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { TITANIUM_HUB_LAST_INDEX } from "@/lib/inventory/titanium-constants";
@@ -230,8 +232,9 @@ export function TitaniumCatalogScreen() {
   };
 
   return (
+    <InventoryModule type="TITANIUM" title="מלאי טיטניום">
     <>
-      <Header title={category?.name ?? "מלאי טיטניום"} description="דגמים, רדיוסים וגדלים" />
+      <Header title={category?.name ?? "מלאי טיטניום"} description="דגמים, רדיוסים וגדלים" actions={<StockButtons type="TITANIUM" />} />
 
       {error && <p className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
       {notice && <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{notice}</p>}
@@ -247,7 +250,9 @@ export function TitaniumCatalogScreen() {
         <div className="space-y-6">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
+              <div className="flex items-center gap-3">
+                <MediaFace kind="category" id={category.id} name={category.name} canEdit={canEdit && !category.archivedAt} />
+                <div>
                 <p className="text-xs font-medium text-slate-500">קטגוריה</p>
                 <EditableName
                   value={category.name}
@@ -256,6 +261,7 @@ export function TitaniumCatalogScreen() {
                   className="text-xl font-bold text-slate-900"
                   inputClassName="text-xl font-bold"
                 />
+                </div>
               </div>
               {canEdit && (
                 <div className="flex flex-wrap gap-2">
@@ -308,7 +314,7 @@ export function TitaniumCatalogScreen() {
                 {visibleModels.map((model, index) => (
                   <div key={model.id} className={cn("rounded-2xl border bg-white p-5 shadow-sm", model.id === selected?.id ? "border-opal-gold ring-2 ring-opal-gold/30" : "border-slate-200")}>
                     <div className="flex w-full cursor-pointer items-center gap-3 text-right" onClick={() => { setSelectedId(model.id); setOpenRadiusId(null); }}>
-                      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-sm font-bold text-opal-gold">{index + 1}</span>
+                      <MediaFace kind="model" id={model.id} name={model.name} canEdit={canEdit && !category.archivedAt} />
                       <EditableName
                         value={model.name}
                         canEdit={canEdit}
@@ -425,6 +431,7 @@ export function TitaniumCatalogScreen() {
         </div>
       </Modal>
     </>
+    </InventoryModule>
   );
 }
 
@@ -468,6 +475,7 @@ function RadiusAccordion({
     <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-2 text-right">
+          <MediaFace kind="radius" id={radius.id} name={radius.name} canEdit={canEdit} />
           <button type="button" className="rounded-md p-1" onClick={onToggle} aria-expanded={open} aria-label={open ? "סגירת רדיוס" : "פתיחת רדיוס"}>
             <ChevronDown className={cn("h-4 w-4 shrink-0 text-opal-gold transition", open && "rotate-180")} />
           </button>
@@ -487,7 +495,7 @@ function RadiusAccordion({
           {sizes.length === 0 && <p className="text-sm text-slate-500">אין גדלים</p>}
           {sizes.map((size, sizeIndex) => (
             <div key={size.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-100 px-3 py-2">
-              <EditableName value={size.label} canEdit={canEdit} onSave={(label) => onRenameSize(size, label)} className="text-sm font-medium text-slate-800" />
+              <span className="flex items-center gap-2"><MediaFace kind="size" id={size.id} name={size.label} canEdit={canEdit} /><EditableName value={size.label} canEdit={canEdit} onSave={(label) => onRenameSize(size, label)} className="text-sm font-medium text-slate-800" /></span>
               {canEdit && (
                 <div className="flex gap-1">
                   <Button type="button" size="icon" variant="ghost" disabled={busy || sizeIndex === 0} aria-label="הזז למעלה" onClick={() => onMoveSize(size, -1)}><ChevronUp className="h-4 w-4" /></Button>

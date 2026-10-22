@@ -451,9 +451,11 @@ export async function adjustBmmaStock(input: {
       }
       delta = -input.quantity;
       next = height.quantity - input.quantity;
-    } else {
+    } else if (input.action === "SET") {
       delta = input.quantity - height.quantity;
       next = input.quantity;
+    } else {
+      throw new AppError("VALIDATION_ERROR", "פעולת מלאי לא תקינה", 400);
     }
     if (next < 0) throw new AppError("VALIDATION_ERROR", "יתרה שלילית אינה מותרת", 400);
     await tx.bmmaHeight.update({ where: { id: height.id }, data: { quantity: next } });

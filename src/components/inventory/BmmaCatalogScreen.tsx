@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import Link from "next/link";
 import { Archive, ChevronDown, ChevronUp, Loader2, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { Header } from "@/components/layout/sidebar";
+import { InventoryModule, StockButtons } from "@/components/inventory/InventoryStockTools";
+import { MediaFace } from "@/components/inventory/InventoryMedia";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
@@ -107,7 +109,7 @@ function stockTone(height: HeightNode): string {
   return "bg-emerald-50 text-emerald-800";
 }
 
-const ACTION_LABEL = { IN: "הוספה", OUT: "הפחתה", SET: "תיקון" } as const;
+const ACTION_LABEL = { IN: "הוספה", OUT: "הפחתה", SET: "תיקון", COUNT: "ספירת מלאי" } as const;
 
 export function BmmaCatalogScreen() {
   const [category, setCategory] = useState<{ id: string; name: string } | null>(null);
@@ -317,14 +319,18 @@ export function BmmaCatalogScreen() {
   }, [models, directColors]);
 
   return (
+    <InventoryModule type="BMMA" title={category?.name ?? "BMMA"}>
     <>
       <Header
         title={category?.name ?? "BMMA"}
         description="דגמים, צבעים, גבהים וכמויות"
         actions={
-          <Link href="/inventory" className="text-sm font-medium text-slate-600 underline-offset-4 hover:text-opal-gold-dark hover:underline">
-            חזרה למלאי
-          </Link>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <StockButtons type="BMMA" />
+            <Link href="/inventory" className="text-sm font-medium text-slate-600 underline-offset-4 hover:text-opal-gold-dark hover:underline">
+              חזרה למלאי
+            </Link>
+          </div>
         }
       />
 
@@ -343,6 +349,7 @@ export function BmmaCatalogScreen() {
               <div>
                 <p className="text-sm text-opal-gold">קטגוריה</p>
                 <div className="mt-1 flex items-center gap-2">
+                  {category && <MediaFace kind="category" id={category.id} name={category.name} canEdit={canEdit} />}
                   <h2 className="text-2xl font-bold">{category?.name ?? "BMMA"}</h2>
                   {canEdit && category && (
                     <button
@@ -389,6 +396,7 @@ export function BmmaCatalogScreen() {
                 <ScopeButton active={scopeId === DIRECT} label="ללא דגם" onClick={() => setScopeId(DIRECT)} />
                 {activeModels.map((model) => (
                   <div key={model.id} className="flex items-center gap-1">
+                    <MediaFace kind="model" id={model.id} name={model.name} canEdit={canEdit} />
                     <ScopeButton active={scopeId === model.id} label={model.name} onClick={() => setScopeId(model.id)} />
                     {canEdit && (
                       <>
@@ -441,6 +449,7 @@ export function BmmaCatalogScreen() {
                           color.id === colorId ? "border-opal-gold bg-amber-50" : "border-slate-200",
                         )}
                       >
+                        <MediaFace kind="color" id={color.id} name={color.name} canEdit={canEdit} />
                         <button type="button" className="min-w-0 flex-1 text-right" onClick={() => setColorId(color.id)}>
                           <span className="flex items-center gap-2 font-medium text-slate-900">
                             <Swatch code={color.colorCode} />
@@ -499,9 +508,12 @@ export function BmmaCatalogScreen() {
                   {activeHeights.map((height) => (
                     <li key={height.id} className="rounded-xl border border-slate-200 px-3 py-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <p className="font-medium text-slate-900">{height.label}</p>
-                          <p className="text-xs text-slate-500">סף מינימום {height.minQuantity}</p>
+                        <div className="flex items-center gap-2">
+                          <MediaFace kind="height" id={height.id} name={height.label} canEdit={canEdit} />
+                          <div>
+                            <p className="font-medium text-slate-900">{height.label}</p>
+                            <p className="text-xs text-slate-500">סף מינימום {height.minQuantity}</p>
+                          </div>
                         </div>
                         <span className={cn("rounded-full px-3 py-1 text-sm font-bold", stockTone(height))}>{height.quantity}</span>
                       </div>
@@ -686,6 +698,7 @@ export function BmmaCatalogScreen() {
         </div>
       </Modal>
     </>
+    </InventoryModule>
   );
 }
 

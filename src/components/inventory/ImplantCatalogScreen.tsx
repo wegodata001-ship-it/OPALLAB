@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import Link from "next/link";
 import { ChevronDown, ChevronUp, Loader2, Minus, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { Header } from "@/components/layout/sidebar";
+import { InventoryModule, StockButtons } from "@/components/inventory/InventoryStockTools";
+import { MediaFace } from "@/components/inventory/InventoryMedia";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
@@ -316,14 +318,18 @@ export function ImplantCatalogScreen() {
   const showFlat = stockFilter !== "all";
 
   return (
+    <InventoryModule type="IMPLANTS" title="מלאי שתלים">
     <>
       <Header
         title="מלאי שתלים"
         description="חברה, דגם, סוג וגובה"
         actions={
-          <Link href="/inventory" className="text-sm font-medium text-slate-600 underline-offset-4 hover:text-opal-gold-dark hover:underline">
-            חזרה למלאי
-          </Link>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <StockButtons type="IMPLANTS" />
+            <Link href="/inventory" className="text-sm font-medium text-slate-600 underline-offset-4 hover:text-opal-gold-dark hover:underline">
+              חזרה למלאי
+            </Link>
+          </div>
         }
       />
 
@@ -434,6 +440,7 @@ export function ImplantCatalogScreen() {
               addLabel="הוסף חברה"
               canEdit={canEdit}
               busy={busy}
+              kind="brand"
               empty="אין חברות"
               onAdd={() => openAdd("brand")}
               items={activeBrands.map((item) => ({
@@ -452,6 +459,7 @@ export function ImplantCatalogScreen() {
               addLabel="הוסף דגם"
               canEdit={canEdit}
               busy={busy}
+              kind="model"
               empty="אין דגמים"
               onAdd={() => openAdd("model")}
               items={active(brand.models).map((item) => ({
@@ -470,6 +478,7 @@ export function ImplantCatalogScreen() {
               addLabel="הוסף סוג"
               canEdit={canEdit}
               busy={busy}
+              kind="type"
               empty="אין סוגים"
               onAdd={() => openAdd("type")}
               items={active(model.types).map((item) => ({
@@ -591,6 +600,7 @@ export function ImplantCatalogScreen() {
         </div>
       </Modal>
     </>
+    </InventoryModule>
   );
 }
 
@@ -625,8 +635,10 @@ function LevelGrid({
   onEdit,
   onDelete,
   onReorder,
+  kind,
 }: {
   title: string;
+  kind: "brand" | "model" | "type";
   addLabel: string;
   canEdit: boolean;
   busy: boolean;
@@ -655,6 +667,7 @@ function LevelGrid({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {items.map((item) => (
             <div key={item.id} className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <MediaFace kind={kind} id={item.id} name={item.title} canEdit={canEdit} />
               <button type="button" onClick={() => onOpen(item.id)} className="min-w-0 flex-1 text-right">
                 <span className="block text-lg font-bold text-slate-900">{item.title}</span>
                 <span className="text-xs text-slate-500">{item.meta}</span>
@@ -712,12 +725,17 @@ function HeightTable({
             {rows.map((row) => (
               <tr key={row.id} className="border-t border-slate-100">
                 <td className="px-4 py-3">
-                  {onOpen ? (
-                    <button type="button" className="text-right font-medium text-slate-900" onClick={() => onOpen(row)}>{row.label}</button>
-                  ) : (
-                    <p className="font-medium text-slate-900">{row.label}</p>
-                  )}
-                  <p className="text-xs text-slate-500">{row.note ?? `מינימום ${row.minQuantity}`}</p>
+                  <div className="flex items-center gap-2">
+                    <MediaFace kind="height" id={row.id} name={row.label} canEdit={canEdit} />
+                    <div>
+                      {onOpen ? (
+                        <button type="button" className="text-right font-medium text-slate-900" onClick={() => onOpen(row)}>{row.label}</button>
+                      ) : (
+                        <p className="font-medium text-slate-900">{row.label}</p>
+                      )}
+                      <p className="text-xs text-slate-500">{row.note ?? `מינימום ${row.minQuantity}`}</p>
+                    </div>
+                  </div>
                 </td>
                 <td className="px-4 py-3"><QtyBadge row={row} /></td>
                 <td className="px-4 py-3">{canEdit && <QuantityControl item={row} disabled={busy} onChange={onQuantity} />}</td>
@@ -731,9 +749,12 @@ function HeightTable({
         {rows.map((row) => (
           <li key={row.id} className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-bold text-slate-900">{row.label}</p>
-                <p className="text-xs text-slate-500">{row.note ?? `מינימום ${row.minQuantity}`}</p>
+              <div className="flex items-center gap-2">
+                <MediaFace kind="height" id={row.id} name={row.label} canEdit={canEdit} />
+                <div>
+                  <p className="font-bold text-slate-900">{row.label}</p>
+                  <p className="text-xs text-slate-500">{row.note ?? `מינימום ${row.minQuantity}`}</p>
+                </div>
               </div>
               <QtyBadge row={row} />
             </div>

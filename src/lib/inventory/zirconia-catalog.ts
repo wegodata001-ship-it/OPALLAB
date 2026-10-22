@@ -227,6 +227,15 @@ export async function deleteZirconiaNode(kind: ZirconiaCatalogKind, id: string):
     include: { attributes: { include: { _count: { select: { values: true } } } } },
   });
   if (!model) throw new AppError("NOT_FOUND", "הדגם לא נמצא", 404);
+  const [colors, heights, products, variants] = await Promise.all([
+    prisma.zirconiaColor.count({ where: { modelId: id } }),
+    prisma.zirconiaHeight.count({ where: { modelId: id } }),
+    prisma.zirconiaProduct.count({ where: { modelId: id } }),
+    prisma.zirconiaVariant.count({ where: { modelId: id } }),
+  ]);
+  if (colors > 0 || heights > 0 || products > 0 || variants > 0) {
+    throw new AppError("CONFLICT", "לא ניתן למחוק דגם כל עוד קיימים תתי-דגמים, צבעים, גבהים או מוצרים.", 409);
+  }
   const linkedValues = model.attributes.reduce((sum, attribute) => sum + attribute._count.values, 0);
   if (linkedValues > 0) {
     throw new AppError(
