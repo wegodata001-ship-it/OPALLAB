@@ -10,6 +10,7 @@ export type CountableItem = {
   sizeName: string;
   barcode: string;
   quantity: number | null;
+  updatedAt?: string;
 };
 
 function byLabel(left: CountableItem, right: CountableItem) {
@@ -87,13 +88,14 @@ async function listCountableItemsRaw(type: InventoryModuleType): Promise<Countab
     return rows
       .map((row) => ({
         id: row.id,
-        name: row.label,
+        name: row.type.name,
         modelName: row.type.machine.name,
         kindName: row.type.name,
         colorName: "",
-        sizeName: row.label,
+        sizeName: row.label === row.type.name ? "" : row.label,
         barcode: "",
         quantity: row.quantity,
+        updatedAt: row.updatedAt.toISOString(),
       }))
       .sort(byLabel);
   }

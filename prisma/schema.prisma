@@ -1150,12 +1150,13 @@ model TitaniumStockMovement {
 }
 
 model DrillMachine {
-  id         String    @id @default(cuid())
-  name       String
-  sortOrder  Int       @default(0)
-  archivedAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id          String    @id @default(cuid())
+  name        String
+  description String    @default("")
+  sortOrder   Int       @default(0)
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   types DrillType[]
 
@@ -1166,6 +1167,7 @@ model DrillType {
   id         String    @id @default(cuid())
   machineId  String
   name       String
+  note       String    @default("")
   sortOrder  Int       @default(0)
   archivedAt DateTime?
   createdAt  DateTime  @default(now())

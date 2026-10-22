@@ -31,6 +31,7 @@ type Item = {
   sizeName: string;
   barcode: string;
   quantity: number | null;
+  updatedAt?: string;
 };
 
 type CountRow = {
@@ -118,7 +119,7 @@ async function requestCounts(type: InventoryModuleType, input?: { method?: "GET"
     headers: input?.body ? { "Content-Type": "application/json" } : undefined,
     body: input?.body ? JSON.stringify(input.body) : undefined,
   });
-  const json = (await res.json()) as { success: boolean; data?: { canEdit?: boolean; items?: Item[]; counts?: CountRow[]; count?: CountDetail; movements?: Movement[] }; error?: { message?: string } };
+  const json = (await res.json()) as { success: boolean; data?: { canEdit?: boolean; canCount?: boolean; items?: Item[]; counts?: CountRow[]; count?: CountDetail; movements?: Movement[] }; error?: { message?: string } };
   if (!json.success || !json.data) throw new Error(json.error?.message ?? "השמירה נכשלה");
   return json.data;
 }
@@ -207,11 +208,13 @@ export function InventoryStockPanel({ type, title, mode, onMode }: { type: Inven
   const [items, setItems] = useState<Item[]>([]);
   const [counts, setCounts] = useState<CountRow[]>([]);
   const [canEdit, setCanEdit] = useState(false);
+  const [canCount, setCanCount] = useState(false);
   const [count, setCount] = useState<CountDetail | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [meta, setMeta] = useState({ counterName: "", location: "", notes: "" });
   const [query, setQuery] = useState("");
   const [modelFilter, setModelFilter] = useState("");
+  const [kindFilter, setKindFilter] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -227,6 +230,7 @@ export function InventoryStockPanel({ type, title, mode, onMode }: { type: Inven
     setItems(data.items ?? []);
     setCounts(data.counts ?? []);
     setCanEdit(Boolean(data.canEdit));
+    setCanCount(Boolean(data.canCount ?? data.canEdit));
   }, [type]);
 
   useEffect(() => {
@@ -238,6 +242,7 @@ export function InventoryStockPanel({ type, title, mode, onMode }: { type: Inven
         setItems(data.items ?? []);
         setCounts(data.counts ?? []);
         setCanEdit(Boolean(data.canEdit));
+        setCanCount(Boolean(data.canCount ?? data.canEdit));
         const draft = (data.counts ?? []).find((row) => row.status === "DRAFT");
         if (mode === "count" && draft) {
           const opened = await requestCounts(type, { query: `?type=${type}&countId=${draft.id}` });
@@ -260,10 +265,11 @@ export function InventoryStockPanel({ type, title, mode, onMode }: { type: Inven
 
   const term = query.trim().toLocaleLowerCase("he");
   const modelNames = useMemo(() => [...new Set(items.map((item) => item.modelName).filter(Boolean))], [items]);
+  const kindNames = useMemo(() => type === "DRILLS" ? [...new Set(items.map((item) => item.kindName).filter(Boolean))] : [], [items, type]);
   const codeOf = useCallback((id: string, fallback = "") => media.byId.get(id)?.barcode || fallback, [media.byId]);
   const matches = (value: string) => (!term || value.toLocaleLowerCase("he").includes(term)) && (!modelFilter || value.includes(modelFilter));
-  const visibleItems = useMemo(() => items.filter((item) => matches(`${item.name} ${item.modelName} ${item.kindName} ${item.colorName} ${item.sizeName} ${item.barcode} ${codeOf(item.id)}`) && (!modelFilter || item.modelName === modelFilter)), [items, term, modelFilter, codeOf]);
-  const visibleLines = useMemo(() => (count?.lines ?? []).filter((line) => matches(`${line.name} ${line.modelName} ${line.kindName} ${line.colorName} ${line.sizeName} ${line.barcode} ${codeOf(line.itemId)}`) && (!modelFilter || line.modelName === modelFilter)), [count, term, modelFilter, codeOf]);
+  const visibleItems = useMemo(() => items.filter((item) => matches(`${item.name} ${item.modelName} ${item.kindName} ${item.colorName} ${item.sizeName} ${item.barcode} ${codeOf(item.id)}`) && (!modelFilter || item.modelName === modelFilter) && (!kindFilter || item.kindName === kindFilter)), [items, term, modelFilter, kindFilter, codeOf]);
+  const visibleLines = useMemo(() => (count?.lines ?? []).filter((line) => matches(`${line.name} ${line.modelName} ${line.kindName} ${line.colorName} ${line.sizeName} ${line.barcode} ${codeOf(line.itemId)}`) && (!modelFilter || line.modelName === modelFilter) && (!kindFilter || line.kindName === kindFilter)), [count, term, modelFilter, kindFilter, codeOf]);
 
   useEffect(() => {
     const hit = takeScan(type);
@@ -341,7 +347,8 @@ export function InventoryStockPanel({ type, title, mode, onMode }: { type: Inven
     <>
       <Header title={title} description="טבלה, ספירה והדפסה" actions={<StockButtons type={type} />} />
       {error && <p className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-      {!canEdit && !loading && <p className="mb-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">צפייה בלבד. ספירה ועדכון כמות זמינים למנהל.</p>}
+      {!canEdit && !canCount && !loading && <p className="mb-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">צפייה בלבד. ספירה ועדכון כמות זמינים למנהל.</p>}
+      {!canEdit && canCount && !loading && <p className="mb-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">אפשר לצפות, לסרוק ולבצע ספירה. עדכון כמות ואישור ספירה זמינים למנהל.</p>}
       <div className="mb-3 space-y-2">
         <BarcodeScanBox onFound={onScan} />
         {count?.status === "DRAFT" && <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={scanAdds} onChange={(event) => setScanAdds(event.target.checked)} />לאחר סריקה, הוסף 1 לכמות שנספרה</label>}
@@ -353,7 +360,13 @@ export function InventoryStockPanel({ type, title, mode, onMode }: { type: Inven
             {modelNames.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
         )}
-        {mode === "table" && canEdit && <Button disabled={busy} onClick={() => onMode("count")}>ספירת מלאי חדשה</Button>}
+        {kindNames.length > 0 && (
+          <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)} aria-label="סינון לפי סוג" className="h-10 rounded-lg border border-slate-200 bg-white px-2 text-sm">
+            <option value="">כל הסוגים</option>
+            {kindNames.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        )}
+        {mode === "table" && canCount && <Button disabled={busy} onClick={() => onMode("count")}>ספירת מלאי חדשה</Button>}
       </div>
       </div>
       {loading ? <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-opal-gold" /></div> : mode === "history" ? (
@@ -388,10 +401,10 @@ export function InventoryStockPanel({ type, title, mode, onMode }: { type: Inven
           <p className="text-sm text-slate-600">שדה ריק לא משנה את המלאי. 0 שומר אפס. נספרו {summary.counted} · עם הפרש {summary.changed} · בלי שינוי {summary.unchanged} · סך הפרשים {summary.total}</p>
           {stale && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">המלאי השתנה מאז פתיחת הספירה. רעננו את כמויות הפתיחה לפני האישור.</p>}
           <LineTable lines={visibleLines} drafts={drafts} canEdit={canEdit} onDraft={(itemId, value) => setDrafts({ ...drafts, [itemId]: value })} />
-          {canEdit && (
+          {(canCount || canEdit) && (
             <div className="flex flex-wrap gap-2">
               <Button disabled={busy} variant="outline" onClick={() => void run(async () => { const data = await requestCounts(type, { method: "POST", body: { action: "save", countId: count.id, ...meta, lines: linePayload() } }); if (data.count) openCount(data.count); })}>שמור טיוטה</Button>
-              <Button disabled={busy} onClick={() => setConfirmApprove(true)}>אשר ספירה</Button>
+              {canEdit && <Button disabled={busy} onClick={() => setConfirmApprove(true)}>אשר ספירה</Button>}
               <Button disabled={busy} variant="outline" onClick={() => void run(async () => { const data = await requestCounts(type, { method: "POST", body: { action: "refresh", countId: count.id } }); if (data.count) openCount(data.count); })}>רענון כמויות</Button>
               <Button disabled={busy} variant="danger" onClick={() => void run(async () => { await requestCounts(type, { method: "POST", body: { action: "cancel", countId: count.id } }); setCount(null); await load(); })}>בטל ספירה</Button>
               <Button disabled={busy} variant="outline" onClick={() => void downloadInventoryReport({ kind: "count-full", countId: count.id, scope: "all" })}>PDF ספירה</Button>
@@ -404,7 +417,7 @@ export function InventoryStockPanel({ type, title, mode, onMode }: { type: Inven
       ) : mode === "count" ? (
         <div className="space-y-3">
           <p className="text-sm text-slate-600">ספירה קובעת את הכמות שנמצאה בפועל. היא לא מוסיפה ולא מפחיתה מהיתרה.</p>
-          {canEdit && <Button disabled={busy || visibleItems.length === 0} onClick={() => void run(async () => {
+          {canCount && <Button disabled={busy || visibleItems.length === 0} onClick={() => void run(async () => {
             const itemIds = selected.length > 0 ? selected : undefined;
             const data = await requestCounts(type, { method: "POST", body: { action: "create", type, itemIds } });
             if (data.count) openCount(data.count);
@@ -454,7 +467,7 @@ function ItemTable({ items, canEdit, allowNegative, selected, onToggle, onAdjust
     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
       <table className="w-full min-w-[760px] text-sm">
         <thead className="bg-slate-900 text-white">
-          <tr>{["בחירה", "תמונה", "מוצר", "ברקוד", "כמות", "פעולות"].map((label) => <th key={label} className="px-2 py-2 text-right font-medium">{label}</th>)}</tr>
+          <tr>{["בחירה", "תמונה", "מוצר", "ברקוד", "כמות", ...(items.some((item) => item.updatedAt) ? ["עודכן"] : []), "פעולות"].map((label) => <th key={label} className="px-2 py-2 text-right font-medium">{label}</th>)}</tr>
         </thead>
         <tbody>
           {items.map((item) => (
@@ -464,6 +477,7 @@ function ItemTable({ items, canEdit, allowNegative, selected, onToggle, onAdjust
               <td className="px-2 py-2 font-medium">{item.name}<span className="mt-0.5 block text-xs font-normal text-slate-500">{[item.modelName, item.kindName, item.colorName, item.sizeName].filter(Boolean).join(" · ")}</span></td>
               <td className="px-2 py-2">{item.barcode || media.byId.get(item.id)?.barcode || "—"}</td>
               <td className="px-2 py-2 font-bold">{qtyLabel(item.quantity)}</td>
+              {item.updatedAt && <td className="px-2 py-2 text-xs text-slate-500">{new Date(item.updatedAt).toLocaleString("he-IL")}</td>}
               <td className="px-2 py-2">
                 <div className="flex gap-1">
                   {canEdit && <button type="button" aria-label="הוספה" className="flex h-7 w-7 items-center justify-center rounded-md border" onClick={() => onAdjust(item.id, 1)}><Plus className="h-3.5 w-3.5" /></button>}

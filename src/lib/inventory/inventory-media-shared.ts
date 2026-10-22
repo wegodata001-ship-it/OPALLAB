@@ -15,7 +15,7 @@ export const MEDIA_KINDS: Record<MediaModule, readonly string[]> = {
   ZIRCONIA: ["model", "variant", "color", "height"],
   TITANIUM: ["category", "model", "radius", "size"],
   BMMA: ["category", "model", "color", "height"],
-  DRILLS: ["machine", "type", "bit"],
+  DRILLS: ["catalog", "machine", "type", "bit"],
   IMPLANTS: ["brand", "model", "type", "height"],
   CLINIC_MATERIALS: ["item"],
   OTHER_MATERIALS: ["item"],
@@ -44,3 +44,7 @@ export function isMediaKind(module: MediaModule, kind: string) {
 export function isMediaLeaf(module: MediaModule, kind: string) {
   return MEDIA_LEAF[module] === kind;
 }
+
+export const DRILL_CATALOG_ID = "drills-catalog";
+export const DRILL_MODELS = ["AI", "SI", "250 PRO", "350 PRO"] as const;
+export const DRILL_TYPES = ["E-MAX", "TI", "Z", "PMTT"] as const;

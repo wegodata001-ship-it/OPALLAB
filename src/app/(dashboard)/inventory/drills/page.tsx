@@ -1,5 +1,5 @@
-import { InventoryCategoryScreen } from "@/components/inventory/InventoryCategoryScreen";
+import { DrillsScreen } from "@/components/inventory/DrillsScreen";
 
 export default function DrillsInventoryPage() {
-  return <InventoryCategoryScreen title="מלאי מקדחים" />;
+  return <DrillsScreen />;
 }

@@ -21,7 +21,8 @@ async function viewer(typeRaw: string | null) {
   await assertModuleAccess(user, "inventory", "INVENTORY_COUNT_VIEW");
   const type = parseInventoryModuleType(typeRaw);
   const canEdit = canAccessModule(user, "inventory") && canEditInventoryCount(user, type);
-  return { user, type, canEdit };
+  const canCount = canAccessModule(user, "inventory") && (type === "DRILLS" || canEditInventoryCount(user, type));
+  return { user, type, canEdit, canCount };
 }
 
 async function editor(typeRaw: string | null) {
@@ -33,15 +34,15 @@ async function editor(typeRaw: string | null) {
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
-    const { type, canEdit } = await viewer(url.searchParams.get("type"));
+    const { type, canEdit, canCount } = await viewer(url.searchParams.get("type"));
     if (url.searchParams.get("history") === "1") {
       const itemId = url.searchParams.get("itemId")?.trim();
       if (!itemId) throw new AppError("VALIDATION_ERROR", "חסר פריט", 400);
-      return jsonOk({ canEdit, movements: await listItemMovements(type, itemId) });
+      return jsonOk({ canEdit, canCount, movements: await listItemMovements(type, itemId) });
     }
     const countId = url.searchParams.get("countId")?.trim();
-    if (countId) return jsonOk({ canEdit, count: await getInventoryCount(countId) });
-    return jsonOk({ canEdit, ...(await listInventoryCounts(type)) });
+    if (countId) return jsonOk({ canEdit, canCount, count: await getInventoryCount(countId) });
+    return jsonOk({ canEdit, canCount, ...(await listInventoryCounts(type)) });
   } catch (error) {
     return jsonError(error);
   }
@@ -68,7 +69,9 @@ export async function POST(request: Request) {
       return jsonOk({ canEdit: true, ...(await listInventoryCounts(type)) });
     }
     if (body.action === "create") {
-      const { user, type } = await editor(body.type ?? null);
+      const viewed = await viewer(body.type ?? null);
+      if (!viewed.canCount) throw new AppError("FORBIDDEN", "ספירת מלאי זמינה למשתמש עם הרשאת מלאי", 403);
+      const { user, type } = viewed;
       const count = await createInventoryCount({
         type,
         itemIds: body.itemIds,
@@ -84,7 +87,10 @@ export async function POST(request: Request) {
       const user = await requireSessionUser();
       await assertModuleAccess(user, "inventory", "INVENTORY_COUNT");
       const current = await getInventoryCount(body.countId);
-      if (!canEditInventoryCount(user, current.inventoryType)) throw new AppError("FORBIDDEN", "עריכת ספירת מלאי זמינה למנהל בלבד", 403);
+      const manager = canEditInventoryCount(user, current.inventoryType);
+      const counter = manager || (current.inventoryType === "DRILLS" && canAccessModule(user, "inventory"));
+      if (body.action === "approve" && !manager) throw new AppError("FORBIDDEN", "אישור ספירה זמין למנהל בלבד", 403);
+      if (!counter) throw new AppError("FORBIDDEN", "עריכת ספירת מלאי זמינה למנהל בלבד", 403);
       if (body.action === "save") {
         const count = await saveInventoryCount({
           countId: body.countId,

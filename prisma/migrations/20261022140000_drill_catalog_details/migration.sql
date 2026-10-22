@@ -1,0 +1,2 @@
+ALTER TABLE "DrillMachine" ADD COLUMN "description" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "DrillType" ADD COLUMN "note" TEXT NOT NULL DEFAULT '';

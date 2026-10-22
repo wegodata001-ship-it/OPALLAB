@@ -57,6 +57,7 @@ async function findEntity(module: MediaModule, kind: string, id: string) {
   if (module === "BMMA" && kind === "model") return prisma.bmmaModel.findUnique({ where: { id }, select: { id: true } });
   if (module === "BMMA" && kind === "color") return prisma.bmmaColor.findUnique({ where: { id }, select: { id: true } });
   if (module === "BMMA" && kind === "height") return prisma.bmmaHeight.findUnique({ where: { id }, select: { id: true } });
+  if (module === "DRILLS" && kind === "catalog" && id === "drills-catalog") return { id };
   if (module === "DRILLS" && kind === "machine") return prisma.drillMachine.findUnique({ where: { id }, select: { id: true } });
   if (module === "DRILLS" && kind === "type") return prisma.drillType.findUnique({ where: { id }, select: { id: true } });
   if (module === "DRILLS" && kind === "bit") return prisma.drillBit.findUnique({ where: { id }, select: { id: true } });

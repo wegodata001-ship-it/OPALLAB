@@ -29,6 +29,7 @@ function requestFromUrl(url: URL, producedBy: string): ReportRequest {
     scope: url.searchParams.get("scope") === "filtered" ? "filtered" : "all",
     categories: url.searchParams.get("categories")?.split(",").filter(Boolean) ?? [],
     models: url.searchParams.get("models")?.split(",").filter(Boolean) ?? [],
+    materials: url.searchParams.get("materials")?.split(",").filter(Boolean) ?? [],
     from,
     to,
     countId: url.searchParams.get("countId") || undefined,

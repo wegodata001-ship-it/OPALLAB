@@ -23,6 +23,7 @@ export type ReportRequest = {
   scope: "all" | "filtered";
   categories: string[];
   models: string[];
+  materials: string[];
   from?: Date;
   to?: Date;
   countId?: string;
@@ -55,11 +56,19 @@ function inRange(value: string, from?: Date, to?: Date) {
   return true;
 }
 
+function matchesReportCategory(category: string, request: ReportRequest) {
+  if (request.scope === "all" || request.categories.length === 0) return true;
+  if (request.categories.includes(category)) return true;
+  const label = MODULE_LABELS[category as ReportModule];
+  return request.categories.some((item) => MODULE_LABELS[item as ReportModule] === category || item === label);
+}
+
 function applyProductFilters(rows: ReportProduct[], request: ReportRequest) {
   if (request.scope === "all") return rows;
   return rows.filter((row) => {
     if (request.categories.length > 0 && !request.categories.includes(row.module) && !request.categories.includes(row.category)) return false;
     if (request.models.length > 0 && !request.models.includes(row.model)) return false;
+    if (request.materials.length > 0 && !request.materials.includes(row.material)) return false;
     if (request.zeroOnly && row.quantity !== 0) return false;
     return true;
   });
@@ -297,7 +306,7 @@ export async function renderInventoryReport(request: ReportRequest) {
   else if (request.kind === "uncounted") body = countSections(visibleCounts, byId, images, request, "uncounted");
   else if (request.kind === "count-status") body = statusReport(visibleCounts);
   else if (request.kind === "count-history") body = historyTable(visibleCounts);
-  else if (request.kind === "movements") body = movementTable((await listReportMovements(request.from, request.to)).filter((row) => request.scope === "all" || request.categories.length === 0 || request.categories.includes(row.category)));
+  else if (request.kind === "movements") body = movementTable((await listReportMovements(request.from, request.to)).filter((row) => matchesReportCategory(row.category, request)));
   else if (request.kind === "low-zero") body = lowStock(visibleProducts, images, request);
   else if (request.kind === "with-media") body = productTable(visibleProducts.filter((row) => row.imagePath && row.barcode.trim()), images, request);
   else body = productTable(visibleProducts.filter((row) => !row.imagePath || !row.barcode.trim()), images, request);
