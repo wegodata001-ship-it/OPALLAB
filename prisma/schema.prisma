@@ -202,6 +202,39 @@ enum InventoryCountStatus {
   CANCELLED
 }
 
+enum InventoryCountTaskStatus {
+  PLANNED
+  DUE
+  IN_PROGRESS
+  PENDING_APPROVAL
+  COMPLETED
+  OVERDUE
+}
+
+enum InventoryAlertKind {
+  COUNT_UPCOMING
+  COUNT_DUE
+  COUNT_OVERDUE
+  COUNT_INCOMPLETE
+  COUNT_ESCALATION
+  LOW_STOCK
+  ZERO_STOCK
+  VARIANCE
+  NEVER_COUNTED
+}
+
+enum InventoryAlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum InventoryAlertAudience {
+  MANAGER
+  SECRETARY
+  BOTH
+}
+
 enum DrillStockAction {
   IN
   OUT
@@ -261,8 +294,18 @@ model User {
   zirconiaStockMovements ZirconiaStockMovement[]
   titaniumStockMovements TitaniumStockMovement[]
   drillStockMovements    DrillStockMovement[]
+  drillBitsUpdated       DrillBit[]           @relation("DrillBitUpdatedBy")
   inventoryCountsCreated InventoryCount[] @relation("InventoryCountCreatedBy")
   inventoryCountsApproved InventoryCount[] @relation("InventoryCountApprovedBy")
+  inventoryPoliciesUpdated InventoryCountPolicy[] @relation("InventoryCountPolicyUpdatedBy")
+  inventoryTasksAssigned InventoryCountTask[] @relation("InventoryCountTaskAssignedTo")
+  inventoryTasksStarted InventoryCountTask[] @relation("InventoryCountTaskStartedBy")
+  inventoryTasksSubmitted InventoryCountTask[] @relation("InventoryCountTaskSubmittedBy")
+  inventorySkipApprovals InventoryCountLine[] @relation("InventoryCountSkipApprovedBy")
+  inventoryThresholdsUpdated InventoryStockThreshold[] @relation("InventoryStockThresholdUpdatedBy")
+  inventoryReplenishments InventoryReplenishmentTask[] @relation("InventoryReplenishmentCreatedBy")
+  productionMaterialUses ProductionMaterialUse[] @relation("ProductionMaterialRecordedBy")
+  productionMaterialRevisions ProductionMaterialUseRevision[] @relation("ProductionMaterialRevisionBy")
   inventoryImagesCreated InventoryImage[] @relation("InventoryImageCreatedBy")
   inventoryImagesUpdated InventoryImage[] @relation("InventoryImageUpdatedBy")
   inventoryScanCodesCreated InventoryScanCode[] @relation("InventoryScanCodeCreatedBy")
@@ -425,6 +468,7 @@ model Order {
   doctorPartMovements DoctorPartMovement[]
   payments           Payment[]
   calendarEvents     CalendarEvent[]
+  materialUses       ProductionMaterialUse[]
 
   @@index([status])
   @@index([doctorId])
@@ -714,6 +758,7 @@ model ZirconiaHeight {
   color     ZirconiaColor?          @relation(fields: [colorId], references: [id], onDelete: Restrict)
   products  ZirconiaProduct[]
   movements ZirconiaStockMovement[]
+  materialUses ProductionMaterialUse[]
 
   @@index([modelId, sortOrder])
   @@index([colorId, sortOrder])
@@ -1100,9 +1145,10 @@ model InventoryCount {
   approvedAt      DateTime?
   cancelledAt     DateTime?
 
-  createdBy  User                 @relation("InventoryCountCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  approvedBy User?                @relation("InventoryCountApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
-  lines      InventoryCountLine[]
+  createdBy    User                 @relation("InventoryCountCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy   User?                @relation("InventoryCountApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  lines        InventoryCountLine[]
+  reminderTask InventoryCountTask?
 
   @@unique([inventoryType, serial])
   @@index([inventoryType, status, createdAt])
@@ -1123,12 +1169,17 @@ model InventoryCountLine {
   quantityBeforeApproval Int?
   difference             Int?
   quantityAfter          Int?
-  notes                  String  @default("")
+  notes                  String    @default("")
+  skipReason             String    @default("")
+  skipApprovedAt         DateTime?
+  skipApprovedById       String?
 
-  count InventoryCount @relation(fields: [countId], references: [id], onDelete: Restrict)
+  count          InventoryCount @relation(fields: [countId], references: [id], onDelete: Restrict)
+  skipApprovedBy User?          @relation("InventoryCountSkipApprovedBy", fields: [skipApprovedById], references: [id], onDelete: Restrict)
 
   @@unique([countId, itemId])
   @@index([countId])
+  @@index([skipApprovedById])
 }
 
 model TitaniumStockMovement {
@@ -1180,19 +1231,22 @@ model DrillType {
 }
 
 model DrillBit {
-  id         String    @id @default(cuid())
-  typeId     String
-  label      String
-  quantity   Int?
-  sortOrder  Int       @default(0)
-  archivedAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id          String    @id @default(cuid())
+  typeId      String
+  label       String
+  quantity    Int?
+  sortOrder   Int       @default(0)
+  archivedAt  DateTime?
+  updatedById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   type      DrillType            @relation(fields: [typeId], references: [id], onDelete: Restrict)
+  updatedBy User?                @relation("DrillBitUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
   movements DrillStockMovement[]
 
   @@index([typeId, sortOrder])
+  @@index([updatedById])
 }
 
 model DrillStockMovement {
@@ -1361,6 +1415,182 @@ model LabSettings {
   key       String   @unique
   value     String
   updatedAt DateTime @updatedAt
+}
+
+/// How often each inventory category must be counted. Does not change stock.
+model InventoryCountPolicy {
+  id             String              @id @default(cuid())
+  inventoryType  InventoryModuleType @unique
+  frequencyDays  Int                 @default(30)
+  enabled        Boolean             @default(true)
+  emailEnabled   Boolean             @default(false)
+  anchorDate     DateTime
+  updatedById    String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  updatedBy User? @relation("InventoryCountPolicyUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+}
+
+/// One required count for a category and period. Unique so the same period is not opened twice.
+model InventoryCountTask {
+  id            String                   @id @default(cuid())
+  inventoryType InventoryModuleType
+  periodKey     String
+  dueDate       DateTime
+  status        InventoryCountTaskStatus @default(PLANNED)
+  countId       String?                  @unique
+  assignedToId  String?
+  startedById   String?
+  submittedById String?
+  overdueDays   Int                      @default(0)
+  completedAt   DateTime?
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+
+  count       InventoryCount?  @relation(fields: [countId], references: [id], onDelete: Restrict)
+  assignedTo  User?            @relation("InventoryCountTaskAssignedTo", fields: [assignedToId], references: [id], onDelete: Restrict)
+  startedBy   User?            @relation("InventoryCountTaskStartedBy", fields: [startedById], references: [id], onDelete: Restrict)
+  submittedBy User?            @relation("InventoryCountTaskSubmittedBy", fields: [submittedById], references: [id], onDelete: Restrict)
+  alerts      InventoryAlert[]
+
+  @@unique([inventoryType, periodKey])
+  @@index([status, dueDate])
+  @@index([assignedToId])
+}
+
+model InventoryAlert {
+  id            String                  @id @default(cuid())
+  dedupeKey     String                  @unique
+  kind          InventoryAlertKind
+  severity      InventoryAlertSeverity
+  audience      InventoryAlertAudience  @default(BOTH)
+  inventoryType InventoryModuleType?
+  taskId        String?
+  itemId        String?
+  title         String
+  body          String
+  href          String
+  overdueDays   Int                     @default(0)
+  status        String                  @default("OPEN")
+  resolvedAt    DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  task   InventoryCountTask?   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  events InventoryAlertEvent[]
+
+  @@index([status, createdAt])
+  @@index([taskId])
+  @@index([kind, inventoryType])
+}
+
+model InventoryAlertEvent {
+  id        String   @id @default(cuid())
+  alertId   String
+  kind      String
+  channel   String
+  detail    String   @default("")
+  createdAt DateTime @default(now())
+
+  alert InventoryAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@index([alertId, createdAt])
+}
+
+/// Optional minimum and target. Alerts stay off until a manager enables them.
+model InventoryStockThreshold {
+  id             String              @id @default(cuid())
+  inventoryType  InventoryModuleType
+  itemId         String
+  minQuantity    Int?
+  targetQuantity Int?
+  alertsEnabled  Boolean             @default(false)
+  updatedById    String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  updatedBy User? @relation("InventoryStockThresholdUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@unique([inventoryType, itemId])
+}
+
+model InventoryReplenishmentTask {
+  id            String              @id @default(cuid())
+  inventoryType InventoryModuleType
+  itemId        String
+  itemName      String
+  quantity      Int?
+  minQuantity   Int?
+  status        String              @default("OPEN")
+  createdById   String
+  createdAt     DateTime            @default(now())
+
+  createdBy User @relation("InventoryReplenishmentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([status, inventoryType])
+}
+
+model InventoryReminderRun {
+  id         String    @id @default(cuid())
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  status     String
+  summary    Json?
+  error      String    @default("")
+
+  @@index([startedAt])
+}
+
+enum ProductionMaterialStage {
+  DESIGN
+  PRINTING_3D
+}
+
+/// Documents which zirconia item was used on a production stage. Never changes stock.
+model ProductionMaterialUse {
+  id           String                  @id @default(cuid())
+  orderId      String
+  orderSerial  String
+  stage        ProductionMaterialStage
+  heightId     String
+  modelName    String
+  colorName    String
+  heightLabel  String
+  imagePath    String                  @default("")
+  barcode      String                  @default("")
+  notes        String                  @default("")
+  recordedById String
+  recordedAt   DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+  removedAt    DateTime?
+
+  order      Order                           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  height     ZirconiaHeight                  @relation(fields: [heightId], references: [id], onDelete: Restrict)
+  recordedBy User                            @relation("ProductionMaterialRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  revisions  ProductionMaterialUseRevision[]
+
+  @@index([orderId, stage])
+  @@index([recordedAt])
+  @@index([heightId])
+  @@index([recordedById])
+}
+
+model ProductionMaterialUseRevision {
+  id          String   @id @default(cuid())
+  useId       String
+  action      String
+  modelName   String
+  colorName   String
+  heightLabel String
+  notes       String   @default("")
+  userId      String
+  createdAt   DateTime @default(now())
+
+  use  ProductionMaterialUse @relation(fields: [useId], references: [id], onDelete: Cascade)
+  user User                  @relation("ProductionMaterialRevisionBy", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([useId, createdAt])
 }
 
 model AuditLog {

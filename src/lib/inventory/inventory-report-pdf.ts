@@ -31,6 +31,7 @@ export type ReportRequest = {
   userId?: string;
   differencesOnly: boolean;
   uncountedOnly: boolean;
+  numbers?: string[];
   zeroOnly: boolean;
   images: boolean;
   barcodes: boolean;
@@ -69,6 +70,7 @@ function applyProductFilters(rows: ReportProduct[], request: ReportRequest) {
     if (request.categories.length > 0 && !request.categories.includes(row.module) && !request.categories.includes(row.category)) return false;
     if (request.models.length > 0 && !request.models.includes(row.model)) return false;
     if (request.materials.length > 0 && !request.materials.includes(row.material)) return false;
+    if ((request.numbers?.length ?? 0) > 0 && !request.numbers?.includes(row.size)) return false;
     if (request.zeroOnly && row.quantity !== 0) return false;
     return true;
   });
@@ -306,17 +308,31 @@ export async function renderInventoryReport(request: ReportRequest) {
   else if (request.kind === "uncounted") body = countSections(visibleCounts, byId, images, request, "uncounted");
   else if (request.kind === "count-status") body = statusReport(visibleCounts);
   else if (request.kind === "count-history") body = historyTable(visibleCounts);
-  else if (request.kind === "movements") body = movementTable((await listReportMovements(request.from, request.to)).filter((row) => matchesReportCategory(row.category, request)));
+  else if (request.kind === "movements") {
+    const narrowed = (request.models.length > 0 || request.materials.length > 0 || (request.numbers?.length ?? 0) > 0)
+      ? new Set(visibleProducts.map((product) => product.id))
+      : null;
+    body = movementTable((await listReportMovements(request.from, request.to)).filter((row) => matchesReportCategory(row.category, request) && (!narrowed || narrowed.has(row.itemId))));
+  }
   else if (request.kind === "low-zero") body = lowStock(visibleProducts, images, request);
   else if (request.kind === "with-media") body = productTable(visibleProducts.filter((row) => row.imagePath && row.barcode.trim()), images, request);
   else body = productTable(visibleProducts.filter((row) => !row.imagePath || !row.barcode.trim()), images, request);
 
+  const filters = [
+    request.models.length > 0 ? `דגמים: ${request.models.join(", ")}` : "",
+    request.materials.length > 0 ? `חומרים: ${request.materials.join(", ")}` : "",
+    (request.numbers?.length ?? 0) > 0 ? `מספרים: ${request.numbers?.join(", ")}` : "",
+    request.zeroOnly ? "כמות אפס" : "",
+    request.from ? `מתאריך ${request.from.toLocaleDateString("he-IL")}` : "",
+    request.to ? `עד ${request.to.toLocaleDateString("he-IL")}` : "",
+  ].filter(Boolean).join(" · ");
+  const units = visibleProducts.reduce((sum, row) => sum + (row.quantity ?? 0), 0);
   const title = REPORT_LABELS[request.kind];
   const logo = loadLogoDataUrl();
   const landscape = request.kind !== "count-status";
   const summary = request.kind.startsWith("count") || request.kind === "movements"
-    ? `${visibleCounts.length} ספירות בדוח`
-    : `${visibleProducts.length} מוצרים בדוח`;
+    ? `${visibleCounts.length} ספירות בדוח${request.categories.length === 1 && request.categories[0] === "DRILLS" ? ` · סה״כ יחידות במלאי ${units}` : ""}`
+    : `${visibleProducts.length} מוצרים בדוח${request.categories.length === 1 && request.categories[0] === "DRILLS" ? ` · סה״כ יחידות ${units}` : ""}`;
   const html = `<!doctype html>
 <html lang="he" dir="rtl">
 <head>
@@ -356,6 +372,7 @@ svg { max-width: 110px; height: auto; }
   <div>
     <h1>${escapeHtml(title)}</h1>
     <div class="meta">הופק: ${escapeHtml(new Date().toLocaleString("he-IL"))} · ${escapeHtml(request.producedBy)}</div>
+    ${filters ? `<div class="meta">סינון: ${escapeHtml(filters)}</div>` : ""}
     <div class="meta">${escapeHtml(summary)}${omitted > 0 ? ` · ${omitted} תמונות קיימות לא הוטמעו בגלל גודל הקובץ` : ""}</div>
   </div>
 </header>

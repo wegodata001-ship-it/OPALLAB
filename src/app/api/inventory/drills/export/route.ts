@@ -8,6 +8,13 @@ import { assertModuleAccess, requireSessionUser } from "@/lib/rbac";
 
 const KINDS = new Set<InventoryReportKind>(["drills", "current-stock", "count-full", "differences", "uncounted", "movements", "low-zero"]);
 
+function dateParam(value: string | null, end: boolean) {
+  if (!value) return undefined;
+  const date = new Date(`${value}T${end ? "23:59:59" : "00:00:00"}`);
+  if (Number.isNaN(date.getTime())) throw new AppError("VALIDATION_ERROR", "טווח התאריכים אינו תקין", 400);
+  return date;
+}
+
 export async function GET(request: Request) {
   try {
     const user = await requireSessionUser();
@@ -22,6 +29,9 @@ export async function GET(request: Request) {
       categories: ["DRILLS"],
       models: url.searchParams.get("models")?.split(",").filter(Boolean) ?? [],
       materials: url.searchParams.get("materials")?.split(",").filter(Boolean) ?? [],
+      numbers: url.searchParams.get("numbers")?.split(",").filter(Boolean) ?? [],
+      from: dateParam(url.searchParams.get("from"), false),
+      to: dateParam(url.searchParams.get("to"), true),
       zeroOnly: url.searchParams.get("zero") === "1",
       differencesOnly: url.searchParams.get("differences") === "1",
       uncountedOnly: false,

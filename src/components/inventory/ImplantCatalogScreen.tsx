@@ -9,6 +9,7 @@ import { MediaFace } from "@/components/inventory/InventoryMedia";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { expandImplantMatches, filterImplantTree, implantStockState, toggleImplantId, type ImplantStockFilter } from "@/lib/inventory/implant-tree";
 import { cn } from "@/lib/utils";
 
 type HeightNode = {
@@ -35,14 +36,13 @@ type MovementRow = {
   createdAt: string;
 };
 type Level = "brand" | "model" | "type" | "height";
-type StockFilter = "all" | "ok" | "low" | "out";
 type Dialog =
-  | { mode: "add"; kind: Level }
+  | { mode: "add"; kind: Level; parentId?: string }
   | { mode: "edit"; kind: Exclude<Level, "height">; id: string }
   | { mode: "edit-height"; id: string }
   | { mode: "history"; id: string; label: string };
 
-const FILTERS: { id: StockFilter; label: string }[] = [
+const FILTERS: { id: ImplantStockFilter; label: string }[] = [
   { id: "all", label: "הכל" },
   { id: "ok", label: "תקין" },
   { id: "low", label: "נמוך" },
@@ -51,12 +51,6 @@ const FILTERS: { id: StockFilter; label: string }[] = [
 
 function active<T extends { archivedAt: string | null }>(rows: T[]): T[] {
   return rows.filter((row) => !row.archivedAt);
-}
-
-function stockState(height: Pick<HeightNode, "quantity" | "minQuantity">): Exclude<StockFilter, "all"> {
-  if (height.quantity === 0) return "out";
-  if (height.minQuantity > 0 && height.quantity <= height.minQuantity) return "low";
-  return "ok";
 }
 
 function moveId(ids: string[], id: string, direction: -1 | 1): string[] | null {
@@ -89,11 +83,11 @@ export function ImplantCatalogScreen() {
   const [brands, setBrands] = useState<BrandNode[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [canEdit, setCanEdit] = useState(false);
-  const [brandId, setBrandId] = useState<string | null>(null);
-  const [modelId, setModelId] = useState<string | null>(null);
-  const [typeId, setTypeId] = useState<string | null>(null);
+  const [openBrands, setOpenBrands] = useState<string[]>([]);
+  const [openModels, setOpenModels] = useState<string[]>([]);
+  const [openTypes, setOpenTypes] = useState<string[]>([]);
   const [query, setQuery] = useState("");
-  const [stockFilter, setStockFilter] = useState<StockFilter>("all");
+  const [stockFilter, setStockFilter] = useState<ImplantStockFilter>("all");
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -114,22 +108,19 @@ export function ImplantCatalogScreen() {
     if (data.notice) setNotice(data.notice);
   }, []);
 
-  const run = useCallback(
-    async (action: () => Promise<CatalogResponse>) => {
-      setBusy(true);
-      setError(null);
-      try {
-        apply(await action());
-        return true;
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "שגיאה בשמירה");
-        return false;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [apply],
-  );
+  const run = useCallback(async (action: () => Promise<CatalogResponse>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      apply(await action());
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "שגיאה בשמירה");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [apply]);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,82 +134,24 @@ export function ImplantCatalogScreen() {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [apply]);
 
-  const activeBrands = useMemo(() => active(brands), [brands]);
-  const brand = activeBrands.find((item) => item.id === brandId) ?? null;
-  const model = brand ? active(brand.models).find((item) => item.id === modelId) ?? null : null;
-  const type = model ? active(model.types).find((item) => item.id === typeId) ?? null : null;
+  const visible = useMemo(() => filterImplantTree(brands, query, stockFilter) as BrandNode[], [brands, query, stockFilter]);
 
   useEffect(() => {
-    if (brandId && !brand) {
-      setBrandId(null);
-      setModelId(null);
-      setTypeId(null);
-    } else if (modelId && !model) {
-      setModelId(null);
-      setTypeId(null);
-    } else if (typeId && !type) {
-      setTypeId(null);
-    }
-  }, [brand, brandId, model, modelId, type, typeId]);
+    if (!query.trim() && stockFilter === "all") return;
+    const next = expandImplantMatches(brands, query, stockFilter);
+    setOpenBrands(next.brands);
+    setOpenModels(next.models);
+    setOpenTypes(next.types);
+  }, [brands, query, stockFilter]);
 
-  const searchHits = useMemo(() => {
-    const term = query.trim().toLocaleLowerCase("he");
-    if (!term) return [];
-    const hits: { key: string; label: string; brandId: string; modelId?: string; typeId?: string }[] = [];
-    for (const item of activeBrands) {
-      if (item.name.toLocaleLowerCase("he").includes(term)) hits.push({ key: item.id, label: item.name, brandId: item.id });
-      for (const child of active(item.models)) {
-        if (child.name.toLocaleLowerCase("he").includes(term)) {
-          hits.push({ key: child.id, label: `${item.name} / ${child.name}`, brandId: item.id, modelId: child.id });
-        }
-        for (const kind of active(child.types)) {
-          if (kind.name.toLocaleLowerCase("he").includes(term)) {
-            hits.push({ key: kind.id, label: `${item.name} / ${child.name} / ${kind.name}`, brandId: item.id, modelId: child.id, typeId: kind.id });
-          }
-          for (const height of active(kind.heights)) {
-            if (height.label.toLocaleLowerCase("he").includes(term)) {
-              hits.push({
-                key: height.id,
-                label: `${item.name} / ${child.name} / ${kind.name} / ${height.label}`,
-                brandId: item.id,
-                modelId: child.id,
-                typeId: kind.id,
-              });
-            }
-          }
-        }
-      }
-    }
-    return hits.slice(0, 30);
-  }, [activeBrands, query]);
-
-  const flatHeights = useMemo(() => {
-    const rows: (HeightNode & { path: string; brandId: string; modelId: string; typeId: string })[] = [];
-    for (const item of activeBrands) {
-      for (const child of active(item.models)) {
-        for (const kind of active(child.types)) {
-          for (const height of active(kind.heights)) {
-            if (stockFilter !== "all" && stockState(height) !== stockFilter) continue;
-            const path = `${item.name} / ${child.name} / ${kind.name}`;
-            if (query.trim() && !`${path} ${height.label}`.toLocaleLowerCase("he").includes(query.trim().toLocaleLowerCase("he"))) continue;
-            rows.push({ ...height, path, brandId: item.id, modelId: child.id, typeId: kind.id });
-          }
-        }
-      }
-    }
-    return rows;
-  }, [activeBrands, query, stockFilter]);
-
-  function openAdd(kind: Level) {
+  function openAdd(kind: Level, parentId?: string) {
     setDraftName("");
     setDraftQty("0");
     setDraftMin("0");
-    setDialog({ mode: "add", kind });
+    setDialog({ mode: "add", kind, parentId });
   }
 
   function openEdit(kind: Exclude<Level, "height">, id: string, name: string) {
@@ -237,28 +170,24 @@ export function ImplantCatalogScreen() {
     if (!dialog || dialog.mode === "history") return;
     let ok = false;
     if (dialog.mode === "add" && dialog.kind === "brand") ok = await run(() => requestCatalog({ method: "POST", body: { kind: "brand", name: draftName } }));
-    if (dialog.mode === "add" && dialog.kind === "model" && brand) {
-      ok = await run(() => requestCatalog({ method: "POST", body: { kind: "model", parentId: brand.id, name: draftName } }));
+    if (dialog.mode === "add" && dialog.kind === "model" && dialog.parentId) {
+      ok = await run(() => requestCatalog({ method: "POST", body: { kind: "model", parentId: dialog.parentId, name: draftName } }));
     }
-    if (dialog.mode === "add" && dialog.kind === "type" && model) {
-      ok = await run(() => requestCatalog({ method: "POST", body: { kind: "type", parentId: model.id, name: draftName } }));
+    if (dialog.mode === "add" && dialog.kind === "type" && dialog.parentId) {
+      ok = await run(() => requestCatalog({ method: "POST", body: { kind: "type", parentId: dialog.parentId, name: draftName } }));
     }
-    if (dialog.mode === "add" && dialog.kind === "height" && type) {
-      ok = await run(() =>
-        requestCatalog({
-          method: "POST",
-          body: { kind: "height", parentId: type.id, label: draftName, quantity: Number(draftQty), minQuantity: Number(draftMin), reason },
-        }),
-      );
+    if (dialog.mode === "add" && dialog.kind === "height" && dialog.parentId) {
+      ok = await run(() => requestCatalog({
+        method: "POST",
+        body: { kind: "height", parentId: dialog.parentId, label: draftName, quantity: Number(draftQty), minQuantity: Number(draftMin), reason },
+      }));
     }
     if (dialog.mode === "edit") ok = await run(() => requestCatalog({ method: "PATCH", body: { kind: dialog.kind, id: dialog.id, name: draftName } }));
     if (dialog.mode === "edit-height") {
-      ok = await run(() =>
-        requestCatalog({
-          method: "PATCH",
-          body: { kind: "height", id: dialog.id, label: draftName, quantity: Number(draftQty), minQuantity: Number(draftMin), reason },
-        }),
-      );
+      ok = await run(() => requestCatalog({
+        method: "PATCH",
+        body: { kind: "height", id: dialog.id, label: draftName, quantity: Number(draftQty), minQuantity: Number(draftMin), reason },
+      }));
     }
     if (ok) setDialog(null);
   }
@@ -271,15 +200,13 @@ export function ImplantCatalogScreen() {
 
   async function changeQuantity(id: string, patch: { delta?: number; quantity?: number }) {
     if (patch.delta !== undefined) {
-      await run(() =>
-        requestCatalog({
-          method: "POST",
-          body: { kind: "stock", heightId: id, action: patch.delta! > 0 ? "IN" : "OUT", quantity: Math.abs(patch.delta!), reason },
-        }),
-      );
+      await run(() => requestCatalog({
+        method: "POST",
+        body: { kind: "stock", heightId: id, action: patch.delta! > 0 ? "IN" : "OUT", quantity: Math.abs(patch.delta!), reason },
+      }));
       return;
     }
-    await run(() => requestCatalog({ method: "POST", body: { kind: "stock", heightId: id, action: "SET", quantity: patch.quantity, reason } }));
+    await run(() => requestCatalog({ method: "POST", body: { kind: "stock", heightId: id, action: "SET", quantity: patch.quantity, reason: reason || "קביעת כמות" } }));
   }
 
   async function openHistory(height: { id: string; label: string }) {
@@ -298,277 +225,169 @@ export function ImplantCatalogScreen() {
     }
   }
 
-  function goTo(next: { brandId: string | null; modelId?: string | null; typeId?: string | null }) {
-    setBrandId(next.brandId || null);
-    setModelId(next.modelId ?? null);
-    setTypeId(next.typeId ?? null);
-    setQuery("");
-    setStockFilter("all");
-  }
-
-  const archived = !brand
-    ? brands.filter((item) => item.archivedAt).map((item) => ({ kind: "brand" as const, id: item.id, name: item.name }))
-    : !model
-      ? brand.models.filter((item) => item.archivedAt).map((item) => ({ kind: "model" as const, id: item.id, name: item.name }))
-      : !type
-        ? model.types.filter((item) => item.archivedAt).map((item) => ({ kind: "type" as const, id: item.id, name: item.name }))
-        : type.heights.filter((item) => item.archivedAt).map((item) => ({ kind: "height" as const, id: item.id, name: item.label }));
-
-  const showSearch = query.trim().length > 0 && stockFilter === "all";
-  const showFlat = stockFilter !== "all";
+  const archivedBrands = brands.filter((item) => item.archivedAt);
 
   return (
     <InventoryModule type="IMPLANTS" title="מלאי שתלים">
-    <>
       <Header
         title="מלאי שתלים"
-        description="חברה, דגם, סוג וגובה"
+        description="חברה, דגם, סוג שתל ומידה"
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <StockButtons type="IMPLANTS" />
-            <Link href="/inventory" className="text-sm font-medium text-slate-600 underline-offset-4 hover:text-opal-gold-dark hover:underline">
-              חזרה למלאי
-            </Link>
+            <Link href="/inventory" className="text-sm font-medium text-slate-600 underline-offset-4 hover:text-opal-gold-dark hover:underline">חזרה למלאי</Link>
           </div>
         }
       />
-
       {loading ? (
-        <div className="flex items-center gap-2 text-slate-500">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          טוען מלאי שתלים
-        </div>
+        <div className="flex items-center gap-2 text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />טוען מלאי שתלים</div>
       ) : (
-        <div className="space-y-4">
-          {error && <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-          {notice && <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{notice}</p>}
-
-          <section className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            {[
-              ["כמות שתלים", summary?.totalQuantity ?? 0],
-              ["דגמים", summary?.modelCount ?? 0],
-              ["סוגים", summary?.typeCount ?? 0],
-              ["מלאי נמוך", summary?.lowStockCount ?? 0],
-              ["אזל", summary?.outOfStockCount ?? 0],
-            ].map(([label, value]) => (
-              <div key={String(label)} className="rounded-2xl bg-slate-900 px-3 py-3 text-white">
-                <p className="text-xs text-slate-300">{label}</p>
-                <p className="text-xl font-bold">{value}</p>
-              </div>
-            ))}
-          </section>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="space-y-3">
+          {error && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+          {notice && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</p>}
+          <dl className="flex flex-wrap gap-x-4 gap-y-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+            <Stat label="כמות" value={summary?.totalQuantity ?? 0} />
+            <Stat label="דגמים" value={summary?.modelCount ?? 0} />
+            <Stat label="סוגים" value={summary?.typeCount ?? 0} />
+            <Stat label="נמוך" value={summary?.lowStockCount ?? 0} />
+            <Stat label="אזל" value={summary?.outOfStockCount ?? 0} />
+          </dl>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="חיפוש חברה, דגם, סוג או גובה" className="pr-9" aria-label="חיפוש" />
+              <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="חיפוש חברה, דגם, סוג או מידה" className="h-9 pr-9" aria-label="חיפוש" />
             </div>
             <div className="flex flex-wrap gap-1">
               {FILTERS.map((filter) => (
-                <button
-                  key={filter.id}
-                  type="button"
-                  onClick={() => setStockFilter(filter.id)}
-                  className={cn(
-                    "rounded-full border px-3 py-1.5 text-sm",
-                    stockFilter === filter.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700",
-                  )}
-                >
+                <button key={filter.id} type="button" onClick={() => setStockFilter(filter.id)} className={cn("h-9 rounded-full border px-3 text-sm", stockFilter === filter.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700")}>
                   {filter.label}
                 </button>
               ))}
             </div>
+            {canEdit && <Button className="h-9" onClick={() => openAdd("brand")} disabled={busy}><Plus className="h-4 w-4" />חברה</Button>}
           </div>
+          {canEdit && <Input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="סיבה לשינוי כמות (אופציונלי)" aria-label="סיבה" className="h-9" />}
 
-          {!showSearch && !showFlat && (
-            <nav className="flex flex-wrap items-center gap-1 text-sm text-slate-500">
-              <Crumb label="מלאי שתלים" onClick={() => goTo({ brandId: null })} current={!brand} />
-              {brand && (
-                <>
-                  <span>/</span>
-                  <Crumb label={brand.name} current={!model} onClick={() => goTo({ brandId: brand.id })} />
-                </>
-              )}
-              {brand && model && (
-                <>
-                  <span>/</span>
-                  <Crumb label={model.name} current={!type} onClick={() => goTo({ brandId: brand.id, modelId: model.id })} />
-                </>
-              )}
-              {brand && model && type && (
-                <>
-                  <span>/</span>
-                  <Crumb label={type.name} current onClick={() => goTo({ brandId: brand.id, modelId: model.id, typeId: type.id })} />
-                </>
-              )}
-            </nav>
+          {visible.length === 0 ? <p className="rounded-xl border border-slate-200 bg-white px-3 py-6 text-center text-sm text-slate-500">לא נמצאו פריטים</p> : (
+            <div className="space-y-2">
+              {visible.map((brand) => {
+                const source = brands.find((item) => item.id === brand.id);
+                const opened = openBrands.includes(brand.id);
+                return (
+                  <section key={brand.id}>
+                    <Row
+                      open={opened}
+                      title={brand.name}
+                      meta={`${brand.models.length} דגמים`}
+                      kind="brand"
+                      id={brand.id}
+                      canEdit={canEdit}
+                      busy={busy}
+                      onToggle={() => setOpenBrands((current) => toggleImplantId(current, brand.id))}
+                      onEdit={() => openEdit("brand", brand.id, brand.name)}
+                      onDelete={() => setPendingDelete({ kind: "brand", id: brand.id, name: brand.name })}
+                      onUp={() => void reorder("brand", active(brands).map((item) => item.id), brand.id, -1)}
+                      onDown={() => void reorder("brand", active(brands).map((item) => item.id), brand.id, 1)}
+                    />
+                    <Collapse open={opened}>
+                      <div className="space-y-2 py-2 ps-3 sm:ps-6">
+                        {brand.models.map((model) => {
+                          const modelOpen = openModels.includes(model.id);
+                          return (
+                            <div key={model.id}>
+                              <Row
+                                open={modelOpen}
+                                title={model.name}
+                                meta={`${model.types.length} סוגים`}
+                                kind="model"
+                                id={model.id}
+                                canEdit={canEdit}
+                                busy={busy}
+                                onToggle={() => setOpenModels((current) => toggleImplantId(current, model.id))}
+                                onEdit={() => openEdit("model", model.id, model.name)}
+                                onDelete={() => setPendingDelete({ kind: "model", id: model.id, name: model.name })}
+                                onUp={() => void reorder("model", active(source?.models ?? []).map((item) => item.id), model.id, -1, brand.id)}
+                                onDown={() => void reorder("model", active(source?.models ?? []).map((item) => item.id), model.id, 1, brand.id)}
+                              />
+                              <Collapse open={modelOpen}>
+                                <div className="space-y-2 py-2 ps-3 sm:ps-6">
+                                  {model.types.map((type) => {
+                                    const typeOpen = openTypes.includes(type.id);
+                                    return (
+                                      <div key={type.id}>
+                                        <Row
+                                          open={typeOpen}
+                                          title={type.name}
+                                          meta={`${type.heights.length} מידות · ${qtyOf(type.heights)} במלאי`}
+                                          kind="type"
+                                          id={type.id}
+                                          canEdit={canEdit}
+                                          busy={busy}
+                                          onToggle={() => setOpenTypes((current) => toggleImplantId(current, type.id))}
+                                          onEdit={() => openEdit("type", type.id, type.name)}
+                                          onDelete={() => setPendingDelete({ kind: "type", id: type.id, name: type.name })}
+                                          onUp={() => void reorder("type", active(source?.models.find((item) => item.id === model.id)?.types ?? []).map((item) => item.id), type.id, -1, model.id)}
+                                          onDown={() => void reorder("type", active(source?.models.find((item) => item.id === model.id)?.types ?? []).map((item) => item.id), type.id, 1, model.id)}
+                                        />
+                                        <Collapse open={typeOpen}>
+                                          <div className="py-2 sm:-ms-12">
+                                            {type.heights.length === 0 ? <p className="px-3 text-sm text-slate-500">אין מידות</p> : (
+                                              <HeightTable
+                                                rows={type.heights}
+                                                canEdit={canEdit}
+                                                busy={busy}
+                                                onQuantity={changeQuantity}
+                                                onEdit={openHeightEdit}
+                                                onDelete={(row) => setPendingDelete({ kind: "height", id: row.id, name: row.label })}
+                                                onHistory={openHistory}
+                                                onReorder={(id, direction) => void reorder("height", type.heights.map((item) => item.id), id, direction, type.id)}
+                                              />
+                                            )}
+                                            {canEdit && <Button variant="outline" className="mt-2 h-9" disabled={busy} onClick={() => openAdd("height", type.id)}><Plus className="h-4 w-4" />הוסף מידה</Button>}
+                                            <Archive rows={(source?.models.find((item) => item.id === model.id)?.types.find((item) => item.id === type.id)?.heights ?? []).filter((item) => item.archivedAt).map((item) => ({ id: item.id, name: item.label }))} kind="height" canEdit={canEdit} busy={busy} onRestore={(id) => void run(() => requestCatalog({ method: "PATCH", body: { kind: "height", id, restore: true } }))} />
+                                          </div>
+                                        </Collapse>
+                                      </div>
+                                    );
+                                  })}
+                                  {canEdit && <Button variant="outline" className="h-9" disabled={busy} onClick={() => openAdd("type", model.id)}><Plus className="h-4 w-4" />הוסף סוג שתל</Button>}
+                                  <Archive rows={(source?.models.find((item) => item.id === model.id)?.types ?? []).filter((item) => item.archivedAt).map((item) => ({ id: item.id, name: item.name }))} kind="type" canEdit={canEdit} busy={busy} onRestore={(id) => void run(() => requestCatalog({ method: "PATCH", body: { kind: "type", id, restore: true } }))} />
+                                </div>
+                              </Collapse>
+                            </div>
+                          );
+                        })}
+                        {canEdit && <Button variant="outline" className="h-9" disabled={busy} onClick={() => openAdd("model", brand.id)}><Plus className="h-4 w-4" />הוסף דגם</Button>}
+                        <Archive rows={(source?.models ?? []).filter((item) => item.archivedAt).map((item) => ({ id: item.id, name: item.name }))} kind="model" canEdit={canEdit} busy={busy} onRestore={(id) => void run(() => requestCatalog({ method: "PATCH", body: { kind: "model", id, restore: true } }))} />
+                      </div>
+                    </Collapse>
+                  </section>
+                );
+              })}
+            </div>
           )}
-
-          {showSearch ? (
-            searchHits.length === 0 ? (
-              <Empty text="לא נמצאו תוצאות" />
-            ) : (
-              <div className="space-y-2">
-                {searchHits.map((hit) => (
-                  <button key={hit.key} type="button" onClick={() => goTo(hit)} className="block w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-right font-medium hover:border-opal-gold">
-                    {hit.label}
-                  </button>
-                ))}
-              </div>
-            )
-          ) : showFlat ? (
-            flatHeights.length === 0 ? (
-              <Empty text="אין פריטים במצב זה" />
-            ) : (
-              <HeightTable
-                rows={flatHeights.map((row) => ({ ...row, note: row.path }))}
-                canEdit={canEdit}
-                busy={busy}
-                onQuantity={changeQuantity}
-                onEdit={(row) => openHeightEdit(row)}
-                onDelete={(row) => setPendingDelete({ kind: "height", id: row.id, name: row.label })}
-                onHistory={openHistory}
-                onOpen={(row) => {
-                  const match = flatHeights.find((item) => item.id === row.id);
-                  if (match) goTo(match);
-                }}
-              />
-            )
-          ) : !brand ? (
-            <LevelGrid
-              title="חברות"
-              addLabel="הוסף חברה"
-              canEdit={canEdit}
-              busy={busy}
-              kind="brand"
-              empty="אין חברות"
-              onAdd={() => openAdd("brand")}
-              items={activeBrands.map((item) => ({
-                id: item.id,
-                title: item.name,
-                meta: `${active(item.models).length} דגמים · ${qtyOf(active(item.models).flatMap((child) => active(child.types).flatMap((kind) => kind.heights)))} במלאי`,
-              }))}
-              onOpen={(id) => goTo({ brandId: id })}
-              onEdit={(id, title) => openEdit("brand", id, title)}
-              onDelete={(id, title) => setPendingDelete({ kind: "brand", id, name: title })}
-              onReorder={(id, direction) => void reorder("brand", activeBrands.map((item) => item.id), id, direction)}
-            />
-          ) : !model ? (
-            <LevelGrid
-              title={brand.name}
-              addLabel="הוסף דגם"
-              canEdit={canEdit}
-              busy={busy}
-              kind="model"
-              empty="אין דגמים"
-              onAdd={() => openAdd("model")}
-              items={active(brand.models).map((item) => ({
-                id: item.id,
-                title: item.name,
-                meta: `${active(item.types).length} סוגים · ${qtyOf(active(item.types).flatMap((kind) => kind.heights))} במלאי`,
-              }))}
-              onOpen={(id) => goTo({ brandId: brand.id, modelId: id })}
-              onEdit={(id, title) => openEdit("model", id, title)}
-              onDelete={(id, title) => setPendingDelete({ kind: "model", id, name: title })}
-              onReorder={(id, direction) => void reorder("model", active(brand.models).map((item) => item.id), id, direction, brand.id)}
-            />
-          ) : !type ? (
-            <LevelGrid
-              title={model.name}
-              addLabel="הוסף סוג"
-              canEdit={canEdit}
-              busy={busy}
-              kind="type"
-              empty="אין סוגים"
-              onAdd={() => openAdd("type")}
-              items={active(model.types).map((item) => ({
-                id: item.id,
-                title: item.name,
-                meta: `${active(item.heights).length} גבהים · ${qtyOf(item.heights)} במלאי`,
-              }))}
-              onOpen={(id) => goTo({ brandId: brand.id, modelId: model.id, typeId: id })}
-              onEdit={(id, title) => openEdit("type", id, title)}
-              onDelete={(id, title) => setPendingDelete({ kind: "type", id, name: title })}
-              onReorder={(id, direction) => void reorder("type", active(model.types).map((item) => item.id), id, direction, model.id)}
-            />
-          ) : (
-            <section className="space-y-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <h2 className="text-lg font-bold text-slate-900">{type.name}</h2>
-                {canEdit && (
-                  <Button size="sm" onClick={() => openAdd("height")} disabled={busy}>
-                    <Plus className="h-4 w-4" />
-                    הוסף גובה
-                  </Button>
-                )}
-              </div>
-              {canEdit && (
-                <Input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="סיבה לשינוי הכמות (אופציונלי)" aria-label="סיבה" />
-              )}
-              {active(type.heights).length === 0 ? (
-                <Empty text="אין גבהים" />
-              ) : (
-                <HeightTable
-                  rows={active(type.heights)}
-                  canEdit={canEdit}
-                  busy={busy}
-                  onQuantity={changeQuantity}
-                  onEdit={openHeightEdit}
-                  onDelete={(row) => setPendingDelete({ kind: "height", id: row.id, name: row.label })}
-                  onHistory={openHistory}
-                  onReorder={(id, direction) => void reorder("height", active(type.heights).map((item) => item.id), id, direction, type.id)}
-                />
-              )}
-            </section>
-          )}
-
-          {!showSearch && !showFlat && archived.length > 0 && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-4">
-              <h3 className="mb-2 text-sm font-bold text-slate-700">ארכיון</h3>
-              <ul className="space-y-2">
-                {archived.map((item) => (
-                  <li key={item.id} className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2 text-sm">
-                    <span>{item.name}</span>
-                    {canEdit && (
-                      <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => requestCatalog({ method: "PATCH", body: { kind: item.kind, id: item.id, restore: true } }))}>
-                        שחזור
-                      </Button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
+          <Archive rows={archivedBrands.map((item) => ({ id: item.id, name: item.name }))} kind="brand" canEdit={canEdit} busy={busy} onRestore={(id) => void run(() => requestCatalog({ method: "PATCH", body: { kind: "brand", id, restore: true } }))} />
         </div>
       )}
 
       <Modal open={Boolean(dialog && dialog.mode !== "history")} onClose={() => setDialog(null)} title={dialogTitle(dialog)} className="max-w-md">
         <div className="space-y-3">
-          <Input
-            autoFocus
-            placeholder={dialog?.mode === "edit-height" || (dialog?.mode === "add" && dialog.kind === "height") ? "גובה / מידה" : "שם"}
-            value={draftName}
-            onChange={(event) => setDraftName(event.target.value)}
-          />
-          {dialog?.mode === "edit-height" || (dialog?.mode === "add" && dialog.kind === "height") ? (
+          <Input autoFocus placeholder={dialog?.mode === "edit-height" || (dialog?.mode === "add" && dialog.kind === "height") ? "מידה" : "שם"} value={draftName} onChange={(event) => setDraftName(event.target.value)} aria-label="שם" />
+          {(dialog?.mode === "edit-height" || (dialog?.mode === "add" && dialog.kind === "height")) && (
             <>
-              <Input inputMode="numeric" placeholder="כמות" value={draftQty} onChange={(event) => setDraftQty(event.target.value)} />
-              <Input inputMode="numeric" placeholder="כמות מינימום" value={draftMin} onChange={(event) => setDraftMin(event.target.value)} />
+              <Input inputMode="numeric" placeholder="כמות" value={draftQty} onChange={(event) => setDraftQty(event.target.value)} aria-label="כמות" />
+              <Input inputMode="numeric" placeholder="סף מלאי נמוך" value={draftMin} onChange={(event) => setDraftMin(event.target.value)} aria-label="סף מלאי נמוך" />
             </>
-          ) : null}
+          )}
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="outline" onClick={() => setDialog(null)}>ביטול</Button>
-          <Button onClick={() => void saveDialog()} disabled={busy}>שמירה</Button>
+          <Button onClick={() => void saveDialog()} disabled={busy || !draftName.trim()}>שמירה</Button>
         </div>
       </Modal>
 
       <Modal open={dialog?.mode === "history"} onClose={() => setDialog(null)} title={dialog?.mode === "history" ? `היסטוריה · ${dialog.label}` : ""} className="max-w-lg">
-        {historyLoading ? (
-          <div className="flex items-center gap-2 text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />טוען</div>
-        ) : movements.length === 0 ? (
-          <p className="text-sm text-slate-500">אין תנועות</p>
-        ) : (
+        {historyLoading ? <div className="flex items-center gap-2 text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />טוען</div> : movements.length === 0 ? <p className="text-sm text-slate-500">אין תנועות</p> : (
           <ul className="space-y-2">
             {movements.map((row) => (
               <li key={row.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
@@ -582,183 +401,148 @@ export function ImplantCatalogScreen() {
       </Modal>
 
       <Modal open={Boolean(pendingDelete)} onClose={() => setPendingDelete(null)} title="אישור מחיקה" className="max-w-md">
-        <p className="text-sm text-slate-600">האם למחוק את {pendingDelete?.name}? רשומה עם מלאי או תנועות תועבר לארכיון. רמה עם פריטים פעילים לא תימחק.</p>
+        <p className="text-sm text-slate-600">למחוק את {pendingDelete?.name}? רמה עם פריטים פעילים לא תימחק. מידה עם מלאי או תנועות תועבר לארכיון.</p>
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="outline" onClick={() => setPendingDelete(null)}>ביטול</Button>
-          <Button
-            variant="danger"
-            disabled={busy}
-            onClick={() => {
-              if (!pendingDelete) return;
-              void run(() => requestCatalog({ method: "DELETE", query: `?kind=${pendingDelete.kind}&id=${encodeURIComponent(pendingDelete.id)}` })).then((ok) => {
-                if (ok) setPendingDelete(null);
-              });
-            }}
-          >
-            מחק
-          </Button>
+          <Button variant="danger" disabled={busy} onClick={() => {
+            if (!pendingDelete) return;
+            void run(() => requestCatalog({ method: "DELETE", query: `?kind=${pendingDelete.kind}&id=${encodeURIComponent(pendingDelete.id)}` })).then((ok) => { if (ok) setPendingDelete(null); });
+          }}>מחק</Button>
         </div>
       </Modal>
-    </>
     </InventoryModule>
   );
 }
 
 function dialogTitle(dialog: Dialog | null): string {
   if (!dialog || dialog.mode === "history") return "";
-  if (dialog.mode === "edit-height") return "עריכת גובה";
-  const names = { brand: "חברה", model: "דגם", type: "סוג", height: "גובה" };
+  if (dialog.mode === "edit-height") return "עריכת מידה";
+  const names = { brand: "חברה", model: "דגם", type: "סוג שתל", height: "מידה" };
   return dialog.mode === "add" ? `הוספת ${names[dialog.kind]}` : `עריכת ${names[dialog.kind]}`;
 }
 
-function Crumb({ label, onClick, current }: { label: string; onClick: () => void; current?: boolean }) {
+function Stat({ label, value }: { label: string; value: number }) {
+  return <div><dt className="inline text-slate-500">{label} </dt><dd className="inline font-bold text-slate-900">{value}</dd></div>;
+}
+
+function Collapse({ open, children }: { open: boolean; children: ReactNode }) {
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => { if (open) setMounted(true); }, [open]);
   return (
-    <button type="button" onClick={onClick} className={cn("rounded-md px-1 py-0.5", current ? "font-bold text-slate-900" : "hover:text-opal-gold-dark")}>
-      {label}
-    </button>
+    <div className={cn("grid transition-[grid-template-rows] duration-300 ease-out", open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")} onTransitionEnd={(event) => { if (event.target === event.currentTarget && !open) setMounted(false); }}>
+      <div className="min-h-0 overflow-hidden">{mounted ? children : null}</div>
+    </div>
   );
 }
 
-function Empty({ text }: { text: string }) {
-  return <p className="rounded-2xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-500">{text}</p>;
-}
-
-function LevelGrid({
-  title,
-  addLabel,
-  canEdit,
-  busy,
-  empty,
-  items,
-  onAdd,
-  onOpen,
-  onEdit,
-  onDelete,
-  onReorder,
-  kind,
-}: {
+function Row({ open, title, meta, kind, id, canEdit, busy, onToggle, onEdit, onDelete, onUp, onDown }: {
+  open: boolean;
   title: string;
+  meta: string;
   kind: "brand" | "model" | "type";
-  addLabel: string;
+  id: string;
   canEdit: boolean;
   busy: boolean;
-  empty: string;
-  items: { id: string; title: string; meta: string }[];
-  onAdd: () => void;
-  onOpen: (id: string) => void;
-  onEdit: (id: string, title: string) => void;
-  onDelete: (id: string, title: string) => void;
-  onReorder: (id: string, direction: -1 | 1) => void;
+  onToggle: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onUp: () => void;
+  onDown: () => void;
 }) {
   return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-lg font-bold text-slate-900">{title}</h2>
-        {canEdit && (
-          <Button size="sm" onClick={onAdd} disabled={busy}>
-            <Plus className="h-4 w-4" />
-            {addLabel}
-          </Button>
-        )}
-      </div>
-      {items.length === 0 ? (
-        <Empty text={empty} />
-      ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {items.map((item) => (
-            <div key={item.id} className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <MediaFace kind={kind} id={item.id} name={item.title} canEdit={canEdit} />
-              <button type="button" onClick={() => onOpen(item.id)} className="min-w-0 flex-1 text-right">
-                <span className="block text-lg font-bold text-slate-900">{item.title}</span>
-                <span className="text-xs text-slate-500">{item.meta}</span>
-              </button>
-              {canEdit && (
-                <div className="flex shrink-0">
-                  <IconButton label="למעלה" onClick={() => onReorder(item.id, -1)}><ChevronUp className="h-4 w-4" /></IconButton>
-                  <IconButton label="למטה" onClick={() => onReorder(item.id, 1)}><ChevronDown className="h-4 w-4" /></IconButton>
-                  <IconButton label="עריכה" onClick={() => onEdit(item.id, item.title)}><Pencil className="h-4 w-4" /></IconButton>
-                  <IconButton label="מחיקה" onClick={() => onDelete(item.id, item.title)}><Trash2 className="h-4 w-4" /></IconButton>
-                </div>
-              )}
-            </div>
-          ))}
+    <div className={cn("flex items-center gap-2 rounded-xl border bg-white px-3 py-2", open ? "border-opal-gold" : "border-slate-200")}>
+      <MediaFace kind={kind} id={id} name={title} canEdit={canEdit} />
+      <button type="button" onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2 text-right" aria-expanded={open}>
+        <span className="min-w-0 flex-1">
+          <span className="block font-bold text-slate-900">{title}</span>
+          <span className="text-xs text-slate-500">{meta}</span>
+        </span>
+        <ChevronDown className={cn("h-4 w-4 shrink-0 text-slate-500 transition-transform duration-300", open && "rotate-180")} />
+      </button>
+      {canEdit && (
+        <div className="flex shrink-0">
+          <IconButton label="למעלה" disabled={busy} onClick={onUp}><ChevronUp className="h-4 w-4" /></IconButton>
+          <IconButton label="למטה" disabled={busy} onClick={onDown}><ChevronDown className="h-4 w-4" /></IconButton>
+          <IconButton label="עריכה" disabled={busy} onClick={onEdit}><Pencil className="h-4 w-4" /></IconButton>
+          <IconButton label="מחיקה" disabled={busy} onClick={onDelete}><Trash2 className="h-4 w-4" /></IconButton>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
-function HeightTable({
-  rows,
-  canEdit,
-  busy,
-  onQuantity,
-  onEdit,
-  onDelete,
-  onHistory,
-  onReorder,
-  onOpen,
-}: {
-  rows: (HeightNode & { note?: string })[];
+function Archive({ rows, kind, canEdit, busy, onRestore }: { rows: { id: string; name: string }[]; kind: Level; canEdit: boolean; busy: boolean; onRestore: (id: string) => void }) {
+  if (rows.length === 0) return null;
+  const label = kind === "brand" ? "חברות בארכיון" : kind === "model" ? "דגמים בארכיון" : kind === "type" ? "סוגים בארכיון" : "מידות בארכיון";
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+      <p className="mb-1 font-medium text-slate-600">{label}</p>
+      {rows.map((row) => (
+        <div key={row.id} className="flex items-center justify-between gap-2 py-1">
+          <span>{row.name}</span>
+          {canEdit && <button type="button" className="text-xs text-slate-600 hover:underline" disabled={busy} onClick={() => onRestore(row.id)}>שחזור</button>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HeightTable({ rows, canEdit, busy, onQuantity, onEdit, onDelete, onHistory, onReorder }: {
+  rows: HeightNode[];
   canEdit: boolean;
   busy: boolean;
   onQuantity: (id: string, patch: { delta?: number; quantity?: number }) => Promise<void>;
   onEdit: (row: HeightNode) => void;
   onDelete: (row: HeightNode) => void;
   onHistory: (row: HeightNode) => void;
-  onReorder?: (id: string, direction: -1 | 1) => void;
-  onOpen?: (row: HeightNode) => void;
+  onReorder: (id: string, direction: -1 | 1) => void;
 }) {
   return (
     <>
-      <div className="hidden overflow-hidden rounded-2xl border border-slate-200 bg-white md:block">
+      <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white md:block">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-500">
+          <thead className="bg-slate-900 text-white">
             <tr>
-              <th className="px-4 py-3 text-right font-medium">גובה</th>
-              <th className="px-4 py-3 text-right font-medium">כמות</th>
-              <th className="px-4 py-3 text-right font-medium">עדכון כמות</th>
-              <th className="px-4 py-3 text-right font-medium">פעולות</th>
+              <th className="px-3 py-2 text-right font-medium">מידה</th>
+              <th className="px-3 py-2 text-right font-medium">כמות</th>
+              <th className="px-3 py-2 text-right font-medium">עדכון</th>
+              <th className="px-3 py-2 text-right font-medium">פעולות</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.id} className="border-t border-slate-100">
-                <td className="px-4 py-3">
+                <td className="px-3 py-2">
                   <div className="flex items-center gap-2">
                     <MediaFace kind="height" id={row.id} name={row.label} canEdit={canEdit} />
                     <div>
-                      {onOpen ? (
-                        <button type="button" className="text-right font-medium text-slate-900" onClick={() => onOpen(row)}>{row.label}</button>
-                      ) : (
-                        <p className="font-medium text-slate-900">{row.label}</p>
-                      )}
-                      <p className="text-xs text-slate-500">{row.note ?? `מינימום ${row.minQuantity}`}</p>
+                      <p className="font-medium text-slate-900">{row.label}</p>
+                      <p className="text-xs text-slate-500">סף נמוך {row.minQuantity}</p>
                     </div>
                   </div>
                 </td>
-                <td className="px-4 py-3"><QtyBadge row={row} /></td>
-                <td className="px-4 py-3">{canEdit && <QuantityControl item={row} disabled={busy} onChange={onQuantity} />}</td>
-                <td className="px-4 py-3"><HeightActions row={row} canEdit={canEdit} busy={busy} onEdit={onEdit} onDelete={onDelete} onHistory={onHistory} onReorder={onReorder} /></td>
+                <td className="px-3 py-2"><QtyBadge row={row} /></td>
+                <td className="px-3 py-2">{canEdit && <QuantityControl item={row} disabled={busy} onChange={onQuantity} />}</td>
+                <td className="px-3 py-2"><HeightActions row={row} canEdit={canEdit} busy={busy} onEdit={onEdit} onDelete={onDelete} onHistory={onHistory} onReorder={onReorder} /></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <ul className="space-y-3 md:hidden">
+      <ul className="space-y-2 md:hidden">
         {rows.map((row) => (
-          <li key={row.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="flex items-start justify-between gap-3">
+          <li key={row.id} className="rounded-xl border border-slate-200 bg-white p-3">
+            <div className="flex items-start justify-between gap-2">
               <div className="flex items-center gap-2">
                 <MediaFace kind="height" id={row.id} name={row.label} canEdit={canEdit} />
                 <div>
                   <p className="font-bold text-slate-900">{row.label}</p>
-                  <p className="text-xs text-slate-500">{row.note ?? `מינימום ${row.minQuantity}`}</p>
+                  <p className="text-xs text-slate-500">סף נמוך {row.minQuantity}</p>
                 </div>
               </div>
               <QtyBadge row={row} />
             </div>
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               {canEdit && <QuantityControl item={row} disabled={busy} onChange={onQuantity} />}
               <HeightActions row={row} canEdit={canEdit} busy={busy} onEdit={onEdit} onDelete={onDelete} onHistory={onHistory} onReorder={onReorder} />
             </div>
@@ -770,87 +554,43 @@ function HeightTable({
 }
 
 function QtyBadge({ row }: { row: Pick<HeightNode, "quantity" | "minQuantity"> }) {
-  const state = stockState(row);
-  return (
-    <span className={cn("rounded-full px-3 py-1 text-sm font-bold", state === "out" ? "bg-red-50 text-red-700" : state === "low" ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800")}>
-      {row.quantity}
-    </span>
-  );
+  const state = implantStockState(row);
+  return <span className={cn("rounded-full px-3 py-1 text-sm font-bold", state === "out" ? "bg-red-50 text-red-700" : state === "low" ? "bg-orange-50 text-orange-700" : "text-slate-900")}>{row.quantity}{state === "out" ? " · אפס" : ""}</span>;
 }
 
-function HeightActions({
-  row,
-  canEdit,
-  busy,
-  onEdit,
-  onDelete,
-  onHistory,
-  onReorder,
-}: {
+function HeightActions({ row, canEdit, busy, onEdit, onDelete, onHistory, onReorder }: {
   row: HeightNode;
   canEdit: boolean;
   busy: boolean;
   onEdit: (row: HeightNode) => void;
   onDelete: (row: HeightNode) => void;
   onHistory: (row: HeightNode) => void;
-  onReorder?: (id: string, direction: -1 | 1) => void;
+  onReorder: (id: string, direction: -1 | 1) => void;
 }) {
   return (
-    <div className="flex items-center gap-1">
-      <Button size="sm" variant="ghost" disabled={busy} onClick={() => onHistory(row)}>היסטוריה</Button>
-      {canEdit && onReorder && (
-        <>
-          <IconButton label="למעלה" onClick={() => onReorder(row.id, -1)}><ChevronUp className="h-4 w-4" /></IconButton>
-          <IconButton label="למטה" onClick={() => onReorder(row.id, 1)}><ChevronDown className="h-4 w-4" /></IconButton>
-        </>
-      )}
-      {canEdit && <IconButton label="עריכה" onClick={() => onEdit(row)}><Pencil className="h-4 w-4" /></IconButton>}
-      {canEdit && <IconButton label="מחיקה" onClick={() => onDelete(row)}><Trash2 className="h-4 w-4" /></IconButton>}
+    <div className="flex flex-wrap items-center gap-1">
+      <button type="button" className="text-xs text-slate-600 hover:underline" disabled={busy} onClick={() => onHistory(row)}>היסטוריה</button>
+      {canEdit && <IconButton label="למעלה" disabled={busy} onClick={() => onReorder(row.id, -1)}><ChevronUp className="h-4 w-4" /></IconButton>}
+      {canEdit && <IconButton label="למטה" disabled={busy} onClick={() => onReorder(row.id, 1)}><ChevronDown className="h-4 w-4" /></IconButton>}
+      {canEdit && <IconButton label="עריכה" disabled={busy} onClick={() => onEdit(row)}><Pencil className="h-4 w-4" /></IconButton>}
+      {canEdit && <IconButton label="מחיקה" disabled={busy} onClick={() => onDelete(row)}><Trash2 className="h-4 w-4" /></IconButton>}
     </div>
   );
 }
 
-function QuantityControl({
-  item,
-  disabled,
-  onChange,
-}: {
-  item: HeightNode;
-  disabled: boolean;
-  onChange: (id: string, patch: { delta?: number; quantity?: number }) => Promise<void>;
-}) {
+function QuantityControl({ item, disabled, onChange }: { item: HeightNode; disabled: boolean; onChange: (id: string, patch: { delta?: number; quantity?: number }) => Promise<void> }) {
   const [draft, setDraft] = useState(String(item.quantity));
   useEffect(() => setDraft(String(item.quantity)), [item.quantity]);
   return (
-    <div className="flex items-center gap-1">
-      <button type="button" aria-label="הוספת כמות" disabled={disabled} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white disabled:opacity-50" onClick={() => void onChange(item.id, { delta: 1 })}>
-        <Plus className="h-4 w-4" />
-      </button>
-      <input
-        inputMode="numeric"
-        aria-label={`כמות ${item.label}`}
-        value={draft}
-        disabled={disabled}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => {
-          if (Number(draft) !== item.quantity) void onChange(item.id, { quantity: Number(draft) });
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-        }}
-        className="h-8 w-16 rounded-lg border border-slate-200 text-center text-sm font-bold outline-none focus:border-opal-gold"
-      />
-      <button type="button" aria-label="הפחתת כמות" disabled={disabled} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white disabled:opacity-50" onClick={() => void onChange(item.id, { delta: -1 })}>
-        <Minus className="h-4 w-4" />
-      </button>
+    <div className="flex flex-wrap items-center gap-1">
+      <button type="button" aria-label="הוספת כמות" disabled={disabled} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white" onClick={() => void onChange(item.id, { delta: 1 })}><Plus className="h-4 w-4" /></button>
+      <button type="button" aria-label="הפחתת כמות" disabled={disabled} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white" onClick={() => void onChange(item.id, { delta: -1 })}><Minus className="h-4 w-4" /></button>
+      <input inputMode="numeric" aria-label={`קביעת כמות ${item.label}`} value={draft} disabled={disabled} onChange={(event) => setDraft(event.target.value)} className="h-8 w-16 rounded-lg border border-slate-200 text-center text-sm font-bold outline-none focus:border-opal-gold" />
+      <button type="button" className="h-8 rounded-lg bg-opal-gold px-2 text-xs font-medium text-white disabled:opacity-50" disabled={disabled || !Number.isInteger(Number(draft)) || Number(draft) < 0} onClick={() => void onChange(item.id, { quantity: Number(draft) })}>קבע כמות</button>
     </div>
   );
 }
 
-function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
-  return (
-    <button type="button" aria-label={label} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-800" onClick={onClick}>
-      {children}
-    </button>
-  );
+function IconButton({ label, onClick, disabled, children }: { label: string; onClick: () => void; disabled?: boolean; children: ReactNode }) {
+  return <button type="button" aria-label={label} disabled={disabled} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40" onClick={onClick}>{children}</button>;
 }

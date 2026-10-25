@@ -14,7 +14,7 @@ import { formatDate, formatDateTime } from "@/lib/utils";
 import { Check, Circle, Loader2, RotateCcw } from "lucide-react";
 import type { DateRange, OrderWithRelations } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { filterByDateRange } from "@/lib/date-filter";
 import {
   PRODUCTION_STAGES,
@@ -27,6 +27,9 @@ import {
   isStageCompletionAdmin,
 } from "@/lib/workflow-permissions";
 import { OrderHistoryButton } from "@/components/orders/order-history-modal";
+import { MaterialStageUses } from "@/components/workflow/MaterialStageUses";
+import { isMaterialStage, type MaterialUseView } from "@/lib/workflow/material-usage-shared";
+import { isSystemAdminUser } from "@/lib/user-roles";
 import { shippingLog } from "@/lib/shipping/action-log";
 
 export default function WorkflowPage() {
@@ -37,7 +40,18 @@ export default function WorkflowPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [confirmOrder, setConfirmOrder] = useState<OrderWithRelations | null>(null);
+  const [materialUses, setMaterialUses] = useState<MaterialUseView[]>([]);
   const lockRef = useRef<Set<string>>(new Set());
+
+  const reloadMaterialUses = useCallback(async () => {
+    const response = await fetch("/api/workflow/materials", { credentials: "include" });
+    const body = await response.json().catch(() => null);
+    if (response.ok && body?.success) setMaterialUses(body.data as MaterialUseView[]);
+  }, []);
+
+  useEffect(() => {
+    void reloadMaterialUses();
+  }, [reloadMaterialUses]);
 
   const runStageAction = useCallback(
     async (key: string, fn: () => Promise<void>) => {
@@ -103,13 +117,20 @@ export default function WorkflowPage() {
             : "כל ההזמנות גלויות — ניתן לבצע פעולה רק בשלב שלך"
         }
         actions={
-          <ExportActions
-            title="מעקב ייצור"
-            whatsappText={activeOrders
-              .map((o) => `${o.serialNumber}: ${ORDER_STATUS_LABELS[o.status]}`)
-              .join("\n")}
-            pdfHtml={exportHtml}
-          />
+          <div className="flex items-center gap-3">
+            {isSystemAdminUser(currentUser) && (
+              <Link href="/inventory/material-usage" className="text-sm font-medium text-slate-600 hover:underline">
+                שימוש בחומרים
+              </Link>
+            )}
+            <ExportActions
+              title="מעקב ייצור"
+              whatsappText={activeOrders
+                .map((o) => `${o.serialNumber}: ${ORDER_STATUS_LABELS[o.status]}`)
+                .join("\n")}
+              pdfHtml={exportHtml}
+            />
+          </div>
         }
       />
 
@@ -298,6 +319,15 @@ export default function WorkflowPage() {
                             </div>
                             <p className="text-[10px] text-slate-400">ממתין</p>
                           </div>
+                        )}
+                        {isMaterialStage(stage.status) && (
+                          <MaterialStageUses
+                            orderId={order.id}
+                            stage={stage.status}
+                            canRecord={hasStageCompletionRole(currentUser, stage.status)}
+                            uses={materialUses.filter((use) => use.orderId === order.id && use.stage === stage.status)}
+                            onChanged={() => void reloadMaterialUses()}
+                          />
                         )}
                       </div>
                     );

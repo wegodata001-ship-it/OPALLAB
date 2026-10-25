@@ -84,7 +84,11 @@ export async function listZirconiaStock(): Promise<ZirconiaStockModel[]> {
           },
         },
       },
-      colors: { where: { archivedAt: null, variantId: null }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+      colors: {
+        where: { archivedAt: null, variantId: null },
+        orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+        include: { heights: { where: { archivedAt: null }, orderBy: [{ sortOrder: "asc" }, { label: "asc" }] } },
+      },
       heights: { where: { archivedAt: null, colorId: null }, orderBy: [{ sortOrder: "asc" }, { label: "asc" }] },
       attributes: { orderBy: { sortOrder: "asc" } },
     },
@@ -107,7 +111,12 @@ export async function listZirconiaStock(): Promise<ZirconiaStockModel[]> {
           heights: color.heights.map(mapHeight),
         })),
       })),
-      legacyColors: model.colors.map((color) => ({ id: color.id, name: color.name, sortOrder: color.sortOrder, heights: [] })),
+      legacyColors: model.colors.map((color) => ({
+        id: color.id,
+        name: color.name,
+        sortOrder: color.sortOrder,
+        heights: color.heights.map(mapHeight),
+      })),
       legacyHeights: model.heights.map(mapHeight),
       legacyAttributes: model.attributes
         .filter((attribute) => !STOCK_ATTRIBUTE_NAMES.has(attribute.name) && !promoted.has(attribute.id))
@@ -171,15 +180,27 @@ export async function deleteZirconiaVariant(id: string) {
   await prisma.zirconiaVariant.delete({ where: { id } });
 }
 
-export async function createZirconiaColor(input: { variantId: string; name: string }) {
-  const variant = await prisma.zirconiaVariant.findUnique({ where: { id: input.variantId } });
-  if (!variant || variant.archivedAt) throw new AppError("NOT_FOUND", "תת-הדגם לא נמצא", 404);
+export async function createZirconiaColor(input: { variantId?: string; modelId?: string; name: string }) {
   const name = cleanRequired(input.name, "שם צבע");
-  const clash = await prisma.zirconiaColor.findFirst({ where: { variantId: variant.id, name, archivedAt: null } });
-  if (clash) throw new AppError("CONFLICT", "הצבע כבר קיים בתת-דגם זה", 409);
-  const last = await prisma.zirconiaColor.aggregate({ where: { variantId: variant.id }, _max: { sortOrder: true } });
+  if (input.variantId) {
+    const variant = await prisma.zirconiaVariant.findUnique({ where: { id: input.variantId } });
+    if (!variant || variant.archivedAt) throw new AppError("NOT_FOUND", "תת-הדגם לא נמצא", 404);
+    const clash = await prisma.zirconiaColor.findFirst({ where: { variantId: variant.id, name, archivedAt: null } });
+    if (clash) throw new AppError("CONFLICT", "הצבע כבר קיים בתת-דגם זה", 409);
+    const last = await prisma.zirconiaColor.aggregate({ where: { variantId: variant.id }, _max: { sortOrder: true } });
+    await prisma.zirconiaColor.create({
+      data: { modelId: variant.modelId, variantId: variant.id, name, sortOrder: (last._max.sortOrder ?? -1) + 1 },
+    });
+    return;
+  }
+  if (!input.modelId) throw new AppError("VALIDATION_ERROR", "חסר דגם", 400);
+  const model = await prisma.zirconiaModel.findUnique({ where: { id: input.modelId } });
+  if (!model) throw new AppError("NOT_FOUND", "הדגם לא נמצא", 404);
+  const clash = await prisma.zirconiaColor.findFirst({ where: { modelId: model.id, variantId: null, name, archivedAt: null } });
+  if (clash) throw new AppError("CONFLICT", "הצבע כבר קיים בדגם זה", 409);
+  const last = await prisma.zirconiaColor.aggregate({ where: { modelId: model.id, variantId: null }, _max: { sortOrder: true } });
   await prisma.zirconiaColor.create({
-    data: { modelId: variant.modelId, variantId: variant.id, name, sortOrder: (last._max.sortOrder ?? -1) + 1 },
+    data: { modelId: model.id, name, sortOrder: (last._max.sortOrder ?? -1) + 1 },
   });
 }
 
@@ -197,12 +218,21 @@ export async function renameZirconiaColor(id: string, name: string) {
 }
 
 export async function deleteZirconiaColor(id: string) {
-  const color = await prisma.zirconiaColor.findUnique({ where: { id }, include: { _count: { select: { heights: true, products: true } } } });
+  const color = await prisma.zirconiaColor.findUnique({
+    where: { id },
+    include: {
+      heights: { include: { _count: { select: { movements: true, products: true } } } },
+      _count: { select: { products: true } },
+    },
+  });
   if (!color || color.archivedAt) throw new AppError("NOT_FOUND", "הצבע לא נמצא", 404);
-  if (color._count.heights > 0 || color._count.products > 0) {
-    throw new AppError("CONFLICT", "לא ניתן למחוק צבע כל עוד קיימים גבהים או מוצרים מקושרים.", 409);
-  }
-  await prisma.zirconiaColor.delete({ where: { id } });
+  if (color._count.products > 0) throw new AppError("CONFLICT", "לא ניתן למחוק צבע שמקושר למוצר.", 409);
+  const stocked = color.heights.some((height) => height.quantity != null || height._count.movements > 0 || height._count.products > 0);
+  if (stocked) throw new AppError("CONFLICT", "לא ניתן למחוק צבע כל עוד קיימת כמות או היסטוריית מלאי.", 409);
+  await prisma.$transaction(async (tx) => {
+    if (color.heights.length > 0) await tx.zirconiaHeight.deleteMany({ where: { colorId: color.id, quantity: null } });
+    await tx.zirconiaColor.delete({ where: { id: color.id } });
+  });
 }
 
 export async function createZirconiaHeight(input: { colorId: string; label: string; quantity: number; minQuantity?: number | null; userId: string }) {
@@ -318,21 +348,90 @@ export async function adjustZirconiaHeight(input: {
       data: { quantity: next },
     });
     if (updated.count !== 1) throw new AppError("CONFLICT", "הכמות עודכנה במקביל. נסו שוב.", 409);
+    const opening = height.quantity === null && input.delta === undefined;
     await writeHeightMovement(tx, {
       heightId: height.id,
-      action: height.quantity === null ? "SET" : action,
+      action: opening ? "SET" : action,
       before,
       after: next,
       userId: input.userId,
-      reason: input.reason ?? (input.count ? "ספירת מלאי" : height.quantity === null ? "הגדרת כמות" : undefined),
+      reason: input.reason ?? (input.count ? "ספירת מלאי" : opening ? "הגדרת כמות" : undefined),
     });
   });
+}
+
+export async function addZirconiaHeightColumn(input: { colorIds: string[]; label: string }) {
+  const label = cleanRequired(input.label, "גובה");
+  const ids = [...new Set(input.colorIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) throw new AppError("VALIDATION_ERROR", "יש להוסיף צבע לפני הוספת גובה", 400);
+  const colors = await prisma.zirconiaColor.findMany({ where: { id: { in: ids }, archivedAt: null } });
+  if (colors.length !== ids.length) throw new AppError("NOT_FOUND", "צבע לא נמצא", 404);
+  const variantKey = colors[0]?.variantId ?? null;
+  if (colors.some((color) => color.modelId !== colors[0]?.modelId || (color.variantId ?? null) !== variantKey)) {
+    throw new AppError("VALIDATION_ERROR", "אי אפשר לערבב מלאי בין דגמים", 400);
+  }
+  const created = await prisma.$transaction(async (tx) => {
+    let count = 0;
+    for (const color of colors) {
+      const clash = await tx.zirconiaHeight.findFirst({ where: { colorId: color.id, label, archivedAt: null } });
+      if (clash) continue;
+      const last = await tx.zirconiaHeight.aggregate({ where: { colorId: color.id }, _max: { sortOrder: true } });
+      await tx.zirconiaHeight.create({
+        data: {
+          modelId: color.modelId,
+          colorId: color.id,
+          label,
+          quantity: null,
+          sortOrder: (last._max.sortOrder ?? -1) + 1,
+        },
+      });
+      count += 1;
+    }
+    return count;
+  });
+  if (created === 0) throw new AppError("CONFLICT", "הגובה כבר קיים בכל הצבעים", 409);
+}
+
+export async function renameZirconiaHeightColumn(ids: string[], label: string) {
+  const next = cleanRequired(label, "גובה");
+  const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+  if (unique.length === 0) throw new AppError("VALIDATION_ERROR", "חסר גובה", 400);
+  const rows = await prisma.zirconiaHeight.findMany({ where: { id: { in: unique }, archivedAt: null } });
+  if (rows.length !== unique.length) throw new AppError("NOT_FOUND", "הגובה לא נמצא", 404);
+  await prisma.$transaction(async (tx) => {
+    for (const row of rows) {
+      if (row.label === next) continue;
+      const clash = await tx.zirconiaHeight.findFirst({
+        where: row.colorId
+          ? { colorId: row.colorId, label: next, archivedAt: null, NOT: { id: row.id } }
+          : { modelId: row.modelId, colorId: null, label: next, archivedAt: null, NOT: { id: row.id } },
+      });
+      if (clash) throw new AppError("CONFLICT", "הגובה כבר קיים", 409);
+      await tx.zirconiaHeight.update({ where: { id: row.id }, data: { label: next } });
+    }
+  });
+}
+
+export async function deleteZirconiaHeightColumn(ids: string[]) {
+  const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+  if (unique.length === 0) throw new AppError("VALIDATION_ERROR", "חסר גובה", 400);
+  const rows = await prisma.zirconiaHeight.findMany({
+    where: { id: { in: unique }, archivedAt: null },
+    include: { _count: { select: { movements: true, products: true } } },
+  });
+  if (rows.length !== unique.length) throw new AppError("NOT_FOUND", "הגובה לא נמצא", 404);
+  if (rows.some((row) => row.quantity != null || row._count.movements > 0 || row._count.products > 0)) {
+    throw new AppError("CONFLICT", "לא ניתן להסיר גובה כל עוד קיימת כמות או היסטוריית מלאי.", 409);
+  }
+  await prisma.zirconiaHeight.deleteMany({ where: { id: { in: unique }, quantity: null } });
 }
 
 export async function deleteZirconiaHeight(id: string) {
   const height = await prisma.zirconiaHeight.findUnique({ where: { id }, include: { _count: { select: { movements: true, products: true } } } });
   if (!height || height.archivedAt) throw new AppError("NOT_FOUND", "הגובה לא נמצא", 404);
   if (height._count.products > 0) throw new AppError("CONFLICT", "לא ניתן למחוק גובה שמקושר למוצר.", 409);
+  if (height.quantity != null && height.quantity > 0) throw new AppError("CONFLICT", "לא ניתן למחוק גובה כל עוד יש לו מלאי.", 409);
+  if (height.quantity === 0) throw new AppError("CONFLICT", "לא ניתן למחוק גובה עם כמות רשומה. המלאי לא נמחק.", 409);
   if (height._count.movements > 0) {
     await prisma.zirconiaHeight.update({ where: { id }, data: { archivedAt: new Date() } });
     return { archived: true };

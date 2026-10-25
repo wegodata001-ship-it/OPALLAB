@@ -47,6 +47,12 @@ export function canEditInventoryCount(user: Pick<User, "role" | "roles">, type: 
   return isSystemAdminUser(user);
 }
 
+/** Draft counts for every category. Approval and direct stock changes stay on canEditInventoryCount. */
+export function canParticipateInInventoryCount(user: Pick<User, "role" | "roles">, type: InventoryModuleType) {
+  if (canEditInventoryCount(user, type) || type === "DRILLS") return true;
+  return isSystemAdminUser(user);
+}
+
 function cleanText(value: string | undefined, max: number) {
   const text = value?.trim() ?? "";
   if (text.length > max) throw new AppError("VALIDATION_ERROR", "הטקסט ארוך מדי", 400);
@@ -419,6 +425,9 @@ export async function approveInventoryCount(input: { countId: string; userId: st
         Prisma.sql`UPDATE ${tableSql(count.inventoryType)} SET quantity = ${next}, "updatedAt" = CURRENT_TIMESTAMP WHERE id = ${entry.line.itemId} AND quantity IS NOT DISTINCT FROM ${entry.current}`,
       );
       if (Number(updated) !== 1) throw new AppError("CONFLICT", "המלאי השתנה במהלך האישור. נסו שוב.", 409);
+      if (count.inventoryType === "DRILLS") {
+        await tx.drillBit.update({ where: { id: entry.line.itemId }, data: { updatedById: input.userId } });
+      }
       await writeCountMovement(tx, {
         type: count.inventoryType,
         itemId: entry.line.itemId,
@@ -488,6 +497,7 @@ export async function adjustCountableItem(input: { type: InventoryModuleType; it
       Prisma.sql`UPDATE ${tableSql(stockType)} SET quantity = ${next}, "updatedAt" = CURRENT_TIMESTAMP WHERE id = ${input.itemId} AND quantity IS NOT DISTINCT FROM ${current}`,
     );
     if (Number(updated) !== 1) throw new AppError("CONFLICT", "הכמות עודכנה במקביל. נסו שוב.", 409);
+    if (stockType === "DRILLS") await tx.drillBit.update({ where: { id: input.itemId }, data: { updatedById: input.userId } });
     await writeAdjustMovement(tx, { type: stockType, itemId: input.itemId, before: current, after: next, userId: input.userId, delta: input.delta });
   });
 }

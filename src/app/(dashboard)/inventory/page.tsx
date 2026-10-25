@@ -118,6 +118,10 @@ export default function InventoryHubPage() {
         <Link href="/inventory/classic" className="font-medium text-slate-700 underline-offset-4 hover:text-opal-gold-dark hover:underline">
           ניהול המלאי הקיים
         </Link>
+        {" · "}
+        <Link href="/inventory/reminders" className="font-medium text-slate-700 underline-offset-4 hover:text-opal-gold-dark hover:underline">
+          התראות וספירות חובה
+        </Link>
       </p>
     </>
   );

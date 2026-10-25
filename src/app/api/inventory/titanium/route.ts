@@ -7,6 +7,7 @@ import {
 } from "@/lib/rbac";
 import { canDeleteOrders } from "@/lib/user-roles";
 import {
+  adjustTitaniumQuantity,
   createTitaniumNode,
   deleteTitaniumNode,
   getTitaniumCatalog,
@@ -47,7 +48,24 @@ export async function POST(request: Request) {
       name?: string;
       modelId?: string;
       radiusId?: string;
+      id?: string;
+      delta?: number;
+      quantity?: number;
+      count?: boolean;
+      reason?: string;
     }>(request);
+    if (body.kind === "stock") {
+      if (!body.id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
+      await adjustTitaniumQuantity({
+        id: body.id,
+        delta: body.delta,
+        quantity: body.quantity,
+        count: body.count,
+        reason: body.reason,
+        userId: user.id,
+      });
+      return jsonOk(await payload(true));
+    }
     const kind = parseKind(body.kind);
     if (kind === "category") throw new AppError("VALIDATION_ERROR", "סוג לא תקין", 400);
     await createTitaniumNode({ kind, name: body.name, modelId: body.modelId, radiusId: body.radiusId });

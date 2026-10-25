@@ -88,11 +88,11 @@ async function listCountableItemsRaw(type: InventoryModuleType): Promise<Countab
     return rows
       .map((row) => ({
         id: row.id,
-        name: row.type.name,
+        name: row.label,
         modelName: row.type.machine.name,
         kindName: row.type.name,
         colorName: "",
-        sizeName: row.label === row.type.name ? "" : row.label,
+        sizeName: row.label,
         barcode: "",
         quantity: row.quantity,
         updatedAt: row.updatedAt.toISOString(),

@@ -48,13 +48,6 @@ export async function ensureDrillCatalog() {
         type = created;
       }
       if (type.archivedAt) continue;
-      if (type.bits.length === 0) {
-        const bit = await prisma.drillBit.create({
-          data: { typeId: type.id, label: type.name, quantity: 0, sortOrder: 0 },
-          select: { id: true },
-        });
-        type.bits.push(bit);
-      }
     }
   }
 }
@@ -66,7 +59,16 @@ export async function listDrills() {
     include: {
       types: {
         orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-        include: { bits: { where: { archivedAt: null }, orderBy: [{ sortOrder: "asc" }, { label: "asc" }] } },
+        include: {
+          bits: {
+            where: { archivedAt: null },
+            orderBy: [{ sortOrder: "asc" }, { label: "asc" }],
+            include: {
+              updatedBy: { select: { name: true } },
+              movements: { orderBy: { createdAt: "desc" }, take: 1, include: { performer: { select: { name: true } } } },
+            },
+          },
+        },
       },
     },
   });
@@ -87,6 +89,7 @@ export async function listDrills() {
         label: bit.label,
         quantity: bit.quantity,
         updatedAt: bit.updatedAt.toISOString(),
+        updatedByName: bit.movements[0]?.performer.name || bit.updatedBy?.name || "",
       })),
     })),
   }));
@@ -120,18 +123,35 @@ export async function createDrillMachine(input: { name: string; description?: st
   });
 }
 
-export async function createDrillType(input: { machineId: string; name: string; note?: string; quantity?: number; barcode?: string; userId: string }) {
+export async function createDrillType(input: { machineId: string; name: string; note?: string }) {
   const machine = await prisma.drillMachine.findUnique({ where: { id: input.machineId } });
   if (!machine || machine.archivedAt) throw new AppError("NOT_FOUND", "הדגם לא נמצא", 404);
-  const name = cleanName(input.name, "סוג מקדח");
+  const name = cleanName(input.name, "סוג חומר");
   await assertUniqueType(machine.id, name);
-  const quantity = input.quantity ?? 0;
-  if (!Number.isInteger(quantity) || quantity < 0) throw new AppError("VALIDATION_ERROR", "הכמות אינה תקינה", 400);
   const last = await prisma.drillType.aggregate({ where: { machineId: machine.id }, _max: { sortOrder: true } });
-  const type = await prisma.drillType.create({
+  await prisma.drillType.create({
     data: { machineId: machine.id, name, note: cleanNote(input.note), sortOrder: (last._max.sortOrder ?? -1) + 1 },
   });
-  const bit = await prisma.drillBit.create({ data: { typeId: type.id, label: name, quantity: 0, sortOrder: 0 } });
+}
+
+async function assertUniqueBit(typeId: string, label: string, exceptId?: string) {
+  const rows = await prisma.drillBit.findMany({ where: { typeId, archivedAt: null }, select: { id: true, label: true } });
+  if (rows.some((row) => row.id !== exceptId && sameName(row.label, label))) {
+    throw new AppError("CONFLICT", "מספר המקדח כבר קיים בחומר זה", 409);
+  }
+}
+
+export async function createDrillBit(input: { typeId: string; label: string; quantity?: number; barcode?: string; userId: string }) {
+  const type = await prisma.drillType.findUnique({ where: { id: input.typeId }, include: { machine: true } });
+  if (!type || type.archivedAt || type.machine.archivedAt) throw new AppError("NOT_FOUND", "סוג החומר לא נמצא", 404);
+  const label = cleanName(input.label, "מספר מקדח");
+  const quantity = input.quantity ?? 0;
+  if (!Number.isInteger(quantity) || quantity < 0) throw new AppError("VALIDATION_ERROR", "הכמות אינה תקינה", 400);
+  await assertUniqueBit(type.id, label);
+  const last = await prisma.drillBit.aggregate({ where: { typeId: type.id }, _max: { sortOrder: true } });
+  const bit = await prisma.drillBit.create({
+    data: { typeId: type.id, label, quantity: 0, sortOrder: (last._max.sortOrder ?? -1) + 1, updatedById: input.userId },
+  });
   try {
     if (quantity > 0) await adjustDrillQuantity({ bitId: bit.id, delta: quantity, reason: "כמות התחלתית", userId: input.userId });
     if (input.barcode?.trim()) {
@@ -140,9 +160,30 @@ export async function createDrillType(input: { machineId: string; name: string; 
   } catch (error) {
     await prisma.drillStockMovement.deleteMany({ where: { bitId: bit.id } });
     await prisma.drillBit.delete({ where: { id: bit.id } });
-    await prisma.drillType.delete({ where: { id: type.id } });
     throw error;
   }
+}
+
+export async function renameDrillBit(id: string, label: string) {
+  const bit = await prisma.drillBit.findUnique({ where: { id } });
+  if (!bit || bit.archivedAt) throw new AppError("NOT_FOUND", "מספר המקדח לא נמצא", 404);
+  const next = cleanName(label, "מספר מקדח");
+  await assertUniqueBit(bit.typeId, next, id);
+  await prisma.drillBit.update({ where: { id }, data: { label: next } });
+}
+
+export async function deleteDrillBit(id: string) {
+  const bit = await prisma.drillBit.findUnique({ where: { id }, include: { _count: { select: { movements: true } } } });
+  if (!bit || bit.archivedAt) throw new AppError("NOT_FOUND", "מספר המקדח לא נמצא", 404);
+  if ((bit.quantity ?? 0) > 0) {
+    throw new AppError("CONFLICT", "לא ניתן למחוק מספר מקדח כל עוד יש לו מלאי. אפשר להפחית את הכמות לאפס, והתנועות יישמרו.", 409);
+  }
+  if (bit._count.movements > 0) {
+    await prisma.drillBit.update({ where: { id }, data: { archivedAt: new Date() } });
+    return { archived: true };
+  }
+  await prisma.drillBit.delete({ where: { id } });
+  return { archived: false };
 }
 
 export async function adjustDrillQuantity(input: { bitId: string; delta?: number; quantity?: number; reason?: string; userId: string }) {
@@ -164,7 +205,7 @@ export async function adjustDrillQuantity(input: { bitId: string; delta?: number
     const action = hasQuantity ? "SET" : (input.delta ?? 0) > 0 ? "IN" : "OUT";
     const stored = rows[0]?.quantity ?? null;
     const updated = await tx.$executeRaw`
-      UPDATE "DrillBit" SET quantity = ${after}, "updatedAt" = CURRENT_TIMESTAMP
+      UPDATE "DrillBit" SET quantity = ${after}, "updatedAt" = CURRENT_TIMESTAMP, "updatedById" = ${input.userId}
       WHERE id = ${input.bitId} AND quantity IS NOT DISTINCT FROM ${stored}
     `;
     if (Number(updated) !== 1) throw new AppError("CONFLICT", "הכמות עודכנה במקביל. נסו שוב.", 409);
@@ -192,13 +233,10 @@ export async function renameDrillNode(kind: "machine" | "type", id: string, name
     });
     return;
   }
-  const type = await prisma.drillType.findUnique({ where: { id }, include: { bits: { where: { archivedAt: null } } } });
+  const type = await prisma.drillType.findUnique({ where: { id } });
   if (!type || type.archivedAt) throw new AppError("NOT_FOUND", "הסוג לא נמצא", 404);
   await assertUniqueType(type.machineId, clean, id);
   await prisma.drillType.update({ where: { id }, data: { name: clean, ...(description !== undefined ? { note: cleanNote(description) } : {}) } });
-  if (type.bits.length === 1 && sameName(type.bits[0]?.label ?? "", type.name)) {
-    await prisma.drillBit.update({ where: { id: type.bits[0]!.id }, data: { label: clean } });
-  }
 }
 
 export async function setDrillActive(kind: "machine" | "type", id: string, active: boolean) {

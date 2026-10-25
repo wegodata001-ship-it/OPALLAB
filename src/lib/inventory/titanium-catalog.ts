@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/errors/app-error";
 import { TITANIUM_HUB_LAST_INDEX } from "@/lib/inventory/titanium-constants";
@@ -9,6 +10,7 @@ export type TitaniumCatalogKind = "category" | "model" | "radius" | "size";
 export type TitaniumSizeNode = {
   id: string;
   label: string;
+  quantity: number | null;
   sortOrder: number;
   archivedAt: string | null;
 };
@@ -49,6 +51,25 @@ function cleanName(raw: string | undefined, label: string): string {
   if (!name) throw new AppError("VALIDATION_ERROR", `חסר ${label}`, 400);
   if (name.length > NAME_MAX) throw new AppError("VALIDATION_ERROR", `${label} ארוך מדי`, 400);
   return name;
+}
+
+function sameName(left: string, right: string) {
+  return left.trim().toLocaleLowerCase("en") === right.trim().toLocaleLowerCase("en");
+}
+
+async function assertUniqueModel(categoryId: string, name: string, exceptId?: string) {
+  const rows = await prisma.titaniumModel.findMany({ where: { categoryId, archivedAt: null }, select: { id: true, name: true } });
+  if (rows.some((row) => row.id !== exceptId && sameName(row.name, name))) throw new AppError("CONFLICT", "דגם בשם זה כבר קיים", 409);
+}
+
+async function assertUniqueRadius(modelId: string, name: string, exceptId?: string) {
+  const rows = await prisma.titaniumRadius.findMany({ where: { modelId, archivedAt: null }, select: { id: true, name: true } });
+  if (rows.some((row) => row.id !== exceptId && sameName(row.name, name))) throw new AppError("CONFLICT", "רדיוס בשם זה כבר קיים בדגם", 409);
+}
+
+async function assertUniqueSize(radiusId: string, label: string, exceptId?: string) {
+  const rows = await prisma.titaniumSize.findMany({ where: { radiusId, archivedAt: null }, select: { id: true, label: true } });
+  if (rows.some((row) => row.id !== exceptId && sameName(row.label, label))) throw new AppError("CONFLICT", "גודל זה כבר קיים ברדיוס", 409);
 }
 
 function assertSameSet(existing: string[], orderedIds: string[], message: string) {
@@ -104,6 +125,7 @@ export async function getTitaniumCatalog(): Promise<{
         sizes: radius.sizes.map((size) => ({
           id: size.id,
           label: size.label,
+          quantity: size.quantity,
           sortOrder: size.sortOrder,
           archivedAt: size.archivedAt?.toISOString() ?? null,
         })),
@@ -125,6 +147,7 @@ export async function createTitaniumNode(input: {
 
   if (input.kind === "model") {
     const name = cleanName(input.name, "שם דגם");
+    await assertUniqueModel(category.id, name);
     const last = await prisma.titaniumModel.aggregate({
       where: { categoryId: category.id, archivedAt: null },
       _max: { sortOrder: true },
@@ -142,6 +165,7 @@ export async function createTitaniumNode(input: {
       where: { id: input.modelId, categoryId: category.id, archivedAt: null },
     });
     if (!model) throw new AppError("NOT_FOUND", "הדגם לא נמצא", 404);
+    await assertUniqueRadius(model.id, name);
     const last = await prisma.titaniumRadius.aggregate({
       where: { modelId: model.id, archivedAt: null },
       _max: { sortOrder: true },
@@ -158,6 +182,7 @@ export async function createTitaniumNode(input: {
     where: { id: input.radiusId, archivedAt: null, model: { archivedAt: null, categoryId: category.id } },
   });
   if (!radius) throw new AppError("NOT_FOUND", "הרדיוס לא נמצא", 404);
+  await assertUniqueSize(radius.id, label);
   const last = await prisma.titaniumSize.aggregate({
     where: { radiusId: radius.id, archivedAt: null },
     _max: { sortOrder: true },
@@ -208,22 +233,44 @@ export async function renameTitaniumNode(input: {
 }): Promise<void> {
   if (input.kind === "model") {
     const name = cleanName(input.name, "שם דגם");
+    const model = await prisma.titaniumModel.findUnique({ where: { id: input.id } });
+    if (!model) throw new AppError("NOT_FOUND", "הדגם לא נמצא", 404);
+    await assertUniqueModel(model.categoryId, name, model.id);
     const updated = await prisma.titaniumModel.updateMany({ where: { id: input.id }, data: { name } });
     if (updated.count === 0) throw new AppError("NOT_FOUND", "הדגם לא נמצא", 404);
     return;
   }
   if (input.kind === "radius") {
     const name = cleanName(input.name, "שם רדיוס");
+    const radius = await prisma.titaniumRadius.findUnique({ where: { id: input.id } });
+    if (!radius) throw new AppError("NOT_FOUND", "הרדיוס לא נמצא", 404);
+    await assertUniqueRadius(radius.modelId, name, radius.id);
     const updated = await prisma.titaniumRadius.updateMany({ where: { id: input.id }, data: { name } });
     if (updated.count === 0) throw new AppError("NOT_FOUND", "הרדיוס לא נמצא", 404);
     return;
   }
   const label = cleanName(input.name, "גודל");
+  const size = await prisma.titaniumSize.findUnique({ where: { id: input.id } });
+  if (!size) throw new AppError("NOT_FOUND", "הגודל לא נמצא", 404);
+  await assertUniqueSize(size.radiusId, label, size.id);
   const updated = await prisma.titaniumSize.updateMany({ where: { id: input.id }, data: { label } });
   if (updated.count === 0) throw new AppError("NOT_FOUND", "הגודל לא נמצא", 404);
 }
 
 export async function restoreTitaniumNode(kind: Exclude<TitaniumCatalogKind, "category">, id: string): Promise<void> {
+  if (kind === "model") {
+    const row = await prisma.titaniumModel.findUnique({ where: { id } });
+    if (!row) throw new AppError("NOT_FOUND", "הרשומה לא נמצאה", 404);
+    await assertUniqueModel(row.categoryId, row.name, row.id);
+  } else if (kind === "radius") {
+    const row = await prisma.titaniumRadius.findUnique({ where: { id } });
+    if (!row) throw new AppError("NOT_FOUND", "הרשומה לא נמצאה", 404);
+    await assertUniqueRadius(row.modelId, row.name, row.id);
+  } else {
+    const row = await prisma.titaniumSize.findUnique({ where: { id } });
+    if (!row) throw new AppError("NOT_FOUND", "הרשומה לא נמצאה", 404);
+    await assertUniqueSize(row.radiusId, row.label, row.id);
+  }
   const data = { archivedAt: null };
   const updated =
     kind === "model"
@@ -282,8 +329,12 @@ export async function deleteTitaniumNode(
   id: string,
 ): Promise<TitaniumMutationResult> {
   if (kind === "size") {
-    const size = await prisma.titaniumSize.findUnique({ where: { id } });
+    const size = await prisma.titaniumSize.findUnique({ where: { id }, include: { _count: { select: { movements: true } } } });
     if (!size) throw new AppError("NOT_FOUND", "הגודל לא נמצא", 404);
+    if (size.quantity != null || size._count.movements > 0) {
+      await prisma.titaniumSize.update({ where: { id }, data: { archivedAt: new Date() } });
+      return { archived: true };
+    }
     await prisma.titaniumSize.delete({ where: { id } });
     return { archived: false };
   }
@@ -313,4 +364,55 @@ export async function deleteTitaniumNode(
   }
   await prisma.titaniumModel.delete({ where: { id } });
   return { archived: false };
+}
+
+export async function adjustTitaniumQuantity(input: {
+  id: string;
+  delta?: number;
+  quantity?: number;
+  count?: boolean;
+  userId: string;
+  reason?: string;
+}): Promise<void> {
+  const hasDelta = input.delta !== undefined;
+  const hasAbsolute = input.quantity !== undefined;
+  if (hasDelta === hasAbsolute) throw new AppError("VALIDATION_ERROR", "יש לבחור הוספה, הפחתה או כמות מדויקת", 400);
+  if (input.count && !hasAbsolute) throw new AppError("VALIDATION_ERROR", "ספירה דורשת כמות מדויקת", 400);
+  if (hasDelta && (!Number.isInteger(input.delta) || input.delta === 0)) {
+    throw new AppError("VALIDATION_ERROR", "הכמות אינה תקינה", 400);
+  }
+  if (hasAbsolute && (!Number.isInteger(input.quantity) || (input.quantity as number) < 0)) {
+    throw new AppError("VALIDATION_ERROR", "הכמות אינה תקינה", 400);
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ quantity: number | null }>>(
+      Prisma.sql`SELECT quantity FROM "TitaniumSize" WHERE id = ${input.id} AND "archivedAt" IS NULL FOR UPDATE`,
+    );
+    if (rows.length === 0) throw new AppError("NOT_FOUND", "הגודל לא נמצא", 404);
+    const raw = rows[0]?.quantity;
+    const stored = raw === null || raw === undefined ? null : Number(raw);
+    const before = stored ?? 0;
+    const after = hasDelta ? before + (input.delta as number) : (input.quantity as number);
+    if (!Number.isInteger(after) || after < 0) throw new AppError("VALIDATION_ERROR", "אין מספיק מלאי להפחתה", 400);
+    if (stored !== null && after === stored) return;
+    const updated = await tx.$executeRaw(
+      Prisma.sql`UPDATE "TitaniumSize" SET quantity = ${after}, "updatedAt" = CURRENT_TIMESTAMP WHERE id = ${input.id} AND quantity IS NOT DISTINCT FROM ${stored}`,
+    );
+    if (Number(updated) !== 1) throw new AppError("CONFLICT", "הכמות עודכנה במקביל. נסו שוב.", 409);
+    const action = input.count ? "COUNT" : hasDelta ? ((input.delta as number) > 0 ? "IN" : "OUT") : "SET";
+    const reason = input.reason?.trim()
+      || (action === "IN" ? "הוספת מלאי" : action === "OUT" ? "הפחתת מלאי" : action === "COUNT" ? "ספירה" : "עריכת כמות");
+    await tx.titaniumStockMovement.create({
+      data: {
+        sizeId: input.id,
+        action,
+        quantityBefore: before,
+        quantityChange: after - before,
+        quantityAfter: after,
+        reason,
+        performedBy: input.userId,
+      },
+    });
+  });
 }

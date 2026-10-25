@@ -99,7 +99,7 @@ export function InventoryReportsScreen() {
 
   return (
     <>
-      <Header title="דוחות מלאי" description="הפקת PDF מנתוני המלאי והספירות" actions={<Link href="/inventory" className="text-sm font-medium text-slate-600 hover:underline">חזרה למלאי</Link>} />
+      <Header title="דוחות מלאי" description="הפקת PDF מנתוני המלאי והספירות" actions={<div className="flex items-center gap-3"><Link href="/inventory/material-usage" className="text-sm font-medium text-slate-600 hover:underline">שימוש בחומרים במעקב ייצור</Link><Link href="/inventory" className="text-sm font-medium text-slate-600 hover:underline">חזרה למלאי</Link></div>} />
       {error && <p className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       <p className="mb-3 text-sm text-slate-600">{meta ? `${meta.productCount} פריטי מלאי זמינים לדוח. ברירת המחדל היא כל הפריטים.` : "טוען נתונים"}</p>
       <section className="mb-4 grid gap-2 rounded-2xl border border-slate-200 bg-white p-3 sm:grid-cols-2 lg:grid-cols-4">

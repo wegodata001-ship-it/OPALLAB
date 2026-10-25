@@ -5,6 +5,7 @@ import {
   adjustCountableItem,
   approveInventoryCount,
   canEditInventoryCount,
+  canParticipateInInventoryCount,
   cancelInventoryCount,
   createInventoryCount,
   getInventoryCount,
@@ -21,7 +22,7 @@ async function viewer(typeRaw: string | null) {
   await assertModuleAccess(user, "inventory", "INVENTORY_COUNT_VIEW");
   const type = parseInventoryModuleType(typeRaw);
   const canEdit = canAccessModule(user, "inventory") && canEditInventoryCount(user, type);
-  const canCount = canAccessModule(user, "inventory") && (type === "DRILLS" || canEditInventoryCount(user, type));
+  const canCount = canAccessModule(user, "inventory") && canParticipateInInventoryCount(user, type);
   return { user, type, canEdit, canCount };
 }
 

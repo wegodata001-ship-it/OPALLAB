@@ -24,7 +24,8 @@ import { cn } from "@/lib/utils";
 import { useApp } from "@/providers/AppProvider";
 import { LAB_INFO, USER_ROLE_LABELS } from "@/lib/constants/labels";
 import { canAccessUser, type AppModule } from "@/lib/permissions";
-import { getUserRoles } from "@/lib/user-roles";
+import { getUserRoles, isSystemAdminUser } from "@/lib/user-roles";
+import { InventoryReminderBell } from "@/components/inventory/InventoryReminderCenter";
 import { useState } from "react";
 import type { UserRole } from "@/lib/types";
 
@@ -156,6 +157,7 @@ export function Header({ title, description, actions }: { title: string; descrip
         {description && <p className="text-slate-500 mt-0.5 text-sm">{description}</p>}
       </div>
       <div className="flex items-center gap-2 flex-wrap">
+        {currentUser && isSystemAdminUser(currentUser) && <InventoryReminderBell />}
         {actions}
         {currentUser && (
           <span className="text-xs text-slate-400 hidden sm:inline">{currentUser.name}</span>

@@ -11,6 +11,8 @@ import { StatusBadge } from "@/components/orders/status-badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { filterByDateRange } from "@/lib/date-filter";
 import { canAccessCalendar } from "@/lib/calendar/permissions";
+import { InventoryCountStatus } from "@/components/dashboard/InventoryCountStatus";
+import { isSystemAdminUser } from "@/lib/user-roles";
 import type { DateRange, OrderStatus } from "@/lib/types";
 import { useState } from "react";
 import {
@@ -58,6 +60,8 @@ export default function DashboardPage() {
       />
 
       <DateRangeFilter value={dateRange} onChange={setDateRange} className="mb-6" />
+
+      {currentUser && isSystemAdminUser(currentUser) && <InventoryCountStatus />}
 
       {isOwner && (
         <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 mb-8">
