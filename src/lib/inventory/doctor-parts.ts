@@ -12,6 +12,7 @@ export type DoctorPartRow = {
   quantity: number;
   unit: string;
   notes: string;
+  minQuantity: number | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -58,7 +59,7 @@ function mapPart(row: {
   notes: string;
   createdAt: Date;
   updatedAt: Date;
-}): DoctorPartRow {
+}, minQuantity: number | null): DoctorPartRow {
   return {
     id: row.id,
     name: row.name,
@@ -66,6 +67,7 @@ function mapPart(row: {
     quantity: row.quantity,
     unit: row.unit,
     notes: row.notes,
+    minQuantity,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -76,7 +78,12 @@ export async function listDoctorParts(): Promise<DoctorPartRow[]> {
     where: { archivedAt: null },
     orderBy: { name: "asc" },
   });
-  return rows.map(mapPart);
+  const thresholds = rows.length === 0 ? [] : await prisma.inventoryStockThreshold.findMany({
+    where: { inventoryType: "DOCTOR_PARTS", itemId: { in: rows.map((row) => row.id) } },
+    select: { itemId: true, minQuantity: true },
+  });
+  const mins = new Map(thresholds.map((row) => [row.itemId, row.minQuantity]));
+  return rows.map((row) => mapPart(row, mins.get(row.id) ?? null));
 }
 
 export async function doctorPartSummary(from?: Date, to?: Date) {
@@ -171,6 +178,25 @@ function movementKey(prefix: string) {
   return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function cleanMin(value: number | null | undefined): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!Number.isInteger(value) || value < 0) throw new AppError("VALIDATION_ERROR", "כמות המינימום אינה תקינה", 400);
+  return value;
+}
+
+async function saveMinQuantity(partId: string, minQuantity: number | null, userId: string) {
+  if (minQuantity === null) {
+    await prisma.inventoryStockThreshold.deleteMany({ where: { inventoryType: "DOCTOR_PARTS", itemId: partId } });
+    return;
+  }
+  await prisma.inventoryStockThreshold.upsert({
+    where: { inventoryType_itemId: { inventoryType: "DOCTOR_PARTS", itemId: partId } },
+    create: { inventoryType: "DOCTOR_PARTS", itemId: partId, minQuantity, alertsEnabled: minQuantity > 0, updatedById: userId },
+    update: { minQuantity, alertsEnabled: minQuantity > 0, updatedById: userId },
+  });
+}
+
 export async function createDoctorPart(input: {
   name: string;
   code?: string;
@@ -179,11 +205,11 @@ export async function createDoctorPart(input: {
   notes?: string;
   userId: string;
   reason?: string;
-}): Promise<void> {
+}): Promise<string> {
   const name = cleanName(input.name);
   const quantity = input.quantity ?? 0;
   if (!Number.isInteger(quantity)) throw new AppError("VALIDATION_ERROR", "הכמות אינה תקינה", 400);
-  await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const part = await tx.doctorPart.create({
       data: {
         name,
@@ -206,7 +232,80 @@ export async function createDoctorPart(input: {
         source: "MANUAL",
       });
     }
+    return part.id;
   });
+}
+
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_IMAGE_BYTES = 6_000_000;
+
+export async function discardNewDoctorPart(id: string): Promise<void> {
+  const linked = await prisma.orderPart.count({ where: { partId: id } });
+  if (linked > 0) throw new AppError("CONFLICT", "החלק משויך להזמנה ולא נמחק", 409);
+  const { deleteFile } = await import("@/lib/supabase/storage");
+  const { STORAGE_BUCKETS } = await import("@/lib/supabase/admin");
+  const images = await prisma.inventoryImage.findMany({ where: { module: "DOCTOR_PARTS", entityKind: "part", entityId: id } });
+  for (const image of images) {
+    await deleteFile(STORAGE_BUCKETS.INVENTORY_IMAGES, image.storagePath).catch(() => undefined);
+  }
+  await prisma.inventoryImage.deleteMany({ where: { module: "DOCTOR_PARTS", entityKind: "part", entityId: id } });
+  await prisma.inventoryScanCode.deleteMany({ where: { module: "DOCTOR_PARTS", entityKind: "part", entityId: id } });
+  await prisma.inventoryStockThreshold.deleteMany({ where: { inventoryType: "DOCTOR_PARTS", itemId: id } });
+  await prisma.doctorPartMovement.deleteMany({ where: { partId: id } });
+  await prisma.doctorPart.deleteMany({ where: { id } });
+}
+
+export async function createDoctorPartProduct(input: {
+  name: string;
+  code?: string;
+  quantity?: number;
+  unit?: string;
+  notes?: string;
+  minQuantity?: number | null;
+  barcode?: string;
+  image?: { bytes: Buffer; mimeType: string } | null;
+  userId: string;
+  reason?: string;
+}): Promise<string> {
+  const barcode = input.barcode?.trim() ?? "";
+  if (barcode) {
+    const [scan, classic] = await Promise.all([
+      prisma.inventoryScanCode.findUnique({ where: { code: barcode }, select: { id: true } }),
+      prisma.inventoryItem.findFirst({ where: { barcode }, select: { id: true } }),
+    ]);
+    if (scan || classic) throw new AppError("CONFLICT", "הברקוד כבר משויך לפריט אחר", 409);
+  }
+  if (input.image) {
+    if (!IMAGE_TYPES.has(input.image.mimeType)) throw new AppError("VALIDATION_ERROR", "אפשר להעלות JPG, PNG או WEBP", 400);
+    if (input.image.bytes.byteLength === 0 || input.image.bytes.byteLength > MAX_IMAGE_BYTES) {
+      throw new AppError("VALIDATION_ERROR", "גודל התמונה גדול מדי", 400);
+    }
+  }
+  const minQuantity = cleanMin(input.minQuantity);
+  const id = await createDoctorPart(input);
+  try {
+    if (input.image) {
+      const { uploadInventoryImage } = await import("@/lib/inventory/inventory-media");
+      await uploadInventoryImage({
+        module: "DOCTOR_PARTS",
+        entityKind: "part",
+        entityId: id,
+        userId: input.userId,
+        bytes: input.image.bytes,
+        mimeType: input.image.mimeType,
+        makePrimary: true,
+      });
+    }
+    if (barcode) {
+      const { setInventoryBarcode } = await import("@/lib/inventory/inventory-media");
+      await setInventoryBarcode({ module: "DOCTOR_PARTS", entityKind: "part", entityId: id, code: barcode, userId: input.userId });
+    }
+    if (minQuantity !== undefined) await saveMinQuantity(id, minQuantity, input.userId);
+  } catch (error) {
+    await discardNewDoctorPart(id).catch(() => undefined);
+    throw error;
+  }
+  return id;
 }
 
 type StockMove = { quantityBefore: number; quantityAfter: number };
@@ -256,6 +355,7 @@ export async function updateDoctorPart(input: {
   notes?: string;
   quantity?: number;
   delta?: number;
+  minQuantity?: number | null;
   userId: string;
   reason?: string;
 }): Promise<void> {
@@ -296,6 +396,7 @@ export async function updateDoctorPart(input: {
       source: "MANUAL",
     });
   });
+  if (input.minQuantity !== undefined) await saveMinQuantity(input.id, cleanMin(input.minQuantity) ?? null, input.userId);
 }
 
 export async function countDoctorPart(input: { id: string; physicalQuantity: number; userId: string; reason?: string }): Promise<void> {

@@ -10,7 +10,9 @@ import {
   createInventoryCount,
   getInventoryCount,
   listInventoryCounts,
+  listItemCountHistory,
   listItemMovements,
+  saveItemCountDraft,
   parseInventoryModuleType,
   refreshInventoryCount,
   saveInventoryCount,
@@ -41,6 +43,11 @@ export async function GET(request: Request) {
       if (!itemId) throw new AppError("VALIDATION_ERROR", "חסר פריט", 400);
       return jsonOk({ canEdit, canCount, movements: await listItemMovements(type, itemId) });
     }
+    if (url.searchParams.get("itemCounts") === "1") {
+      const itemId = url.searchParams.get("itemId")?.trim();
+      if (!itemId) throw new AppError("VALIDATION_ERROR", "חסר פריט", 400);
+      return jsonOk({ canEdit, canCount, counts: await listItemCountHistory(type, itemId) });
+    }
     const countId = url.searchParams.get("countId")?.trim();
     if (countId) return jsonOk({ canEdit, canCount, count: await getInventoryCount(countId) });
     return jsonOk({ canEdit, canCount, ...(await listInventoryCounts(type)) });
@@ -58,6 +65,7 @@ export async function POST(request: Request) {
       itemId?: string;
       itemIds?: string[];
       delta?: number;
+      countedQuantity?: number;
       notes?: string;
       counterName?: string;
       location?: string;
@@ -68,6 +76,18 @@ export async function POST(request: Request) {
       if (!body.itemId || body.delta === undefined) throw new AppError("VALIDATION_ERROR", "חסרה כמות", 400);
       await adjustCountableItem({ type, itemId: body.itemId, delta: body.delta, userId: user.id });
       return jsonOk({ canEdit: true, ...(await listInventoryCounts(type)) });
+    }
+    if (body.action === "count-item") {
+      const viewed = await viewer(body.type ?? null);
+      if (!viewed.canCount) throw new AppError("FORBIDDEN", "ספירת מלאי זמינה למשתמש עם הרשאת מלאי", 403);
+      if (!body.itemId || body.countedQuantity === undefined) throw new AppError("VALIDATION_ERROR", "חסרה כמות שנספרה", 400);
+      const itemCount = await saveItemCountDraft({
+        type: viewed.type,
+        itemId: body.itemId,
+        countedQuantity: body.countedQuantity,
+        userId: viewed.user.id,
+      });
+      return jsonOk({ canEdit: viewed.canEdit, canCount: true, itemCount });
     }
     if (body.action === "create") {
       const viewed = await viewer(body.type ?? null);
@@ -89,7 +109,7 @@ export async function POST(request: Request) {
       await assertModuleAccess(user, "inventory", "INVENTORY_COUNT");
       const current = await getInventoryCount(body.countId);
       const manager = canEditInventoryCount(user, current.inventoryType);
-      const counter = manager || (current.inventoryType === "DRILLS" && canAccessModule(user, "inventory"));
+      const counter = canParticipateInInventoryCount(user, current.inventoryType) && canAccessModule(user, "inventory");
       if (body.action === "approve" && !manager) throw new AppError("FORBIDDEN", "אישור ספירה זמין למנהל בלבד", 403);
       if (!counter) throw new AppError("FORBIDDEN", "עריכת ספירת מלאי זמינה למנהל בלבד", 403);
       if (body.action === "save") {

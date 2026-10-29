@@ -185,7 +185,7 @@ export function MaterialStageUses({
               {models.length === 0 && <p className="text-xs text-slate-500">אין שילובי דגם, צבע וגובה במלאי הזירקוניה. הרשימה נטענת מהמלאי הקיים.</p>}
               {selected && (
                 <div className="flex items-center gap-2 text-xs text-slate-600">
-                  {selected.imageUrl && <img src={selected.imageUrl} alt="" className="h-12 w-12 rounded-md object-cover" />}
+                  {selected.imageUrl && <img src={selected.imageUrl} alt="" className="h-28 w-28 rounded-2xl bg-white object-contain" />}
                   <span>{selected.barcode ? `ברקוד ${selected.barcode}` : "אין ברקוד"}</span>
                 </div>
               )}

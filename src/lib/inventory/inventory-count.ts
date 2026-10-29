@@ -192,6 +192,100 @@ export async function listInventoryCounts(type: InventoryModuleType) {
   };
 }
 
+export async function listItemCountHistory(type: InventoryModuleType, itemId: string) {
+  const lines = await prisma.inventoryCountLine.findMany({
+    where: { itemId, count: { inventoryType: type } },
+    orderBy: { count: { createdAt: "desc" } },
+    take: 40,
+    include: {
+      count: {
+        select: {
+          id: true,
+          serial: true,
+          status: true,
+          createdAt: true,
+          approvedAt: true,
+          createdBy: { select: { name: true } },
+        },
+      },
+    },
+  });
+  return lines.map((line) => ({
+    id: line.id,
+    countId: line.count.id,
+    serial: line.count.serial,
+    status: line.count.status,
+    quantityAtStart: line.quantityAtStart,
+    countedQuantity: line.countedQuantity,
+    difference: line.countedQuantity == null || line.quantityAtStart == null ? null : line.countedQuantity - line.quantityAtStart,
+    createdByName: line.count.createdBy.name,
+    createdAt: line.count.createdAt.toISOString(),
+    approvedAt: line.count.approvedAt?.toISOString() ?? null,
+  }));
+}
+
+/** Saves one counted quantity on a draft. Does not change the stock balance. */
+export async function saveItemCountDraft(input: {
+  type: InventoryModuleType;
+  itemId: string;
+  countedQuantity: number;
+  userId: string;
+}) {
+  assertCounted(input.type, input.countedQuantity);
+  const items = await listCountableItems(input.type);
+  const item = items.find((row) => row.id === input.itemId);
+  if (!item) throw new AppError("NOT_FOUND", "הפריט לא נמצא במלאי", 404);
+
+  const draft = await prisma.inventoryCount.findFirst({
+    where: { inventoryType: input.type, status: "DRAFT" },
+    orderBy: { createdAt: "desc" },
+    include: { lines: { where: { itemId: item.id }, take: 1 } },
+  });
+
+  if (!draft) {
+    const created = await createInventoryCount({ type: input.type, itemIds: [item.id], userId: input.userId });
+    await prisma.inventoryCountLine.update({
+      where: { countId_itemId: { countId: created.id, itemId: item.id } },
+      data: { countedQuantity: input.countedQuantity, quantityAtStart: item.quantity },
+    });
+    return itemCountResult(created.id, item.id, item.quantity, input.countedQuantity);
+  }
+
+  const existing = draft.lines[0];
+  if (!existing) {
+    await prisma.inventoryCountLine.create({
+      data: {
+        countId: draft.id,
+        itemId: item.id,
+        name: item.name,
+        modelName: item.modelName,
+        kindName: item.kindName,
+        colorName: item.colorName,
+        sizeName: item.sizeName,
+        barcode: item.barcode,
+        quantityAtStart: item.quantity,
+        countedQuantity: input.countedQuantity,
+      },
+    });
+  } else {
+    await prisma.inventoryCountLine.update({
+      where: { id: existing.id },
+      data: { countedQuantity: input.countedQuantity, quantityAtStart: item.quantity },
+    });
+  }
+  return itemCountResult(draft.id, item.id, item.quantity, input.countedQuantity);
+}
+
+function itemCountResult(countId: string, itemId: string, quantityAtStart: number | null, countedQuantity: number) {
+  return {
+    countId,
+    itemId,
+    quantityAtStart,
+    countedQuantity,
+    difference: quantityAtStart == null ? null : countedQuantity - quantityAtStart,
+  };
+}
+
 export async function getInventoryCount(id: string) {
   const count = await prisma.inventoryCount.findUnique({ where: { id }, include: countInclude });
   if (!count) throw new AppError("NOT_FOUND", "הספירה לא נמצאה", 404);

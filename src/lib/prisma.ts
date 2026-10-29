@@ -3,7 +3,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
 /** Bump when Prisma schema / migrations change — invalidates cached dev client. */
-const PRISMA_SCHEMA_GENERATION = 18;
+const PRISMA_SCHEMA_GENERATION = 19;
 
 type PrismaGlobal = {
   prisma?: PrismaClient;

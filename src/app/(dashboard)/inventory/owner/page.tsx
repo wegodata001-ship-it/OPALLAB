@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
-export default function Redirect() {
-  redirect("/inventory/classic?tab=owner");
+export default function LegacyOwnerRedirect() {
+  redirect("/inventory");
 }

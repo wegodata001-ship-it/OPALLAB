@@ -3,6 +3,8 @@ import { AppError } from "@/lib/errors/app-error";
 import { jsonError, jsonOk, parseJsonBody } from "@/lib/api/response";
 import { assertCanManageInventory, assertModuleAccess, requireSessionUser } from "@/lib/rbac";
 import { isSystemAdminUser } from "@/lib/user-roles";
+import { canParticipateInInventoryCount } from "@/lib/inventory/inventory-count";
+import { setInventoryBarcode, uploadInventoryImage } from "@/lib/inventory/inventory-media";
 import {
   adjustImplantStock,
   createImplantBrand,
@@ -10,6 +12,7 @@ import {
   createImplantModel,
   createImplantType,
   deleteImplantNode,
+  discardNewImplantHeight,
   getImplantCatalog,
   listImplantMovements,
   renameImplantBrand,
@@ -30,9 +33,36 @@ function parseAction(value: string | undefined): ImplantStockAction {
   throw new AppError("VALIDATION_ERROR", "פעולת מלאי לא תקינה", 400);
 }
 
-async function payload(canEdit: boolean, notice?: string | null) {
+async function payload(user: Parameters<typeof canParticipateInInventoryCount>[0], notice?: string | null) {
   const catalog = await getImplantCatalog();
-  return { canEdit, notice: notice ?? null, ...catalog };
+  return {
+    canEdit: isSystemAdminUser(user),
+    canCount: canParticipateInInventoryCount(user, "IMPLANTS"),
+    notice: notice ?? null,
+    ...catalog,
+  };
+}
+
+async function attachNewHeightMedia(id: string, userId: string, barcode: string, file: File | null) {
+  try {
+    if (file && file.size > 0) {
+      await uploadInventoryImage({
+        module: "IMPLANTS",
+        entityKind: "height",
+        entityId: id,
+        userId,
+        bytes: Buffer.from(await file.arrayBuffer()),
+        mimeType: file.type,
+        makePrimary: true,
+      });
+    }
+    if (barcode.trim()) {
+      await setInventoryBarcode({ module: "IMPLANTS", entityKind: "height", entityId: id, code: barcode, userId });
+    }
+  } catch (error) {
+    await discardNewImplantHeight(id);
+    throw error;
+  }
 }
 
 export async function GET(request: Request) {
@@ -41,7 +71,7 @@ export async function GET(request: Request) {
     await assertModuleAccess(user, "inventory", "IMPLANT_VIEW");
     const heightId = new URL(request.url).searchParams.get("heightId");
     if (heightId) return jsonOk({ movements: await listImplantMovements(heightId) });
-    return jsonOk(await payload(isSystemAdminUser(user)));
+    return jsonOk(await payload(user));
   } catch (error) {
     return jsonError(error);
   }
@@ -52,10 +82,35 @@ export async function POST(request: Request) {
     const user = await requireSessionUser();
     await assertModuleAccess(user, "inventory", "IMPLANT_EDIT");
     await assertCanManageInventory(user);
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("multipart/form-data")) {
+      const form = await request.formData();
+      if (String(form.get("kind") ?? "") !== "height") throw new AppError("VALIDATION_ERROR", "סוג לא תקין", 400);
+      const parentId = String(form.get("parentId") ?? "");
+      if (!parentId) throw new AppError("VALIDATION_ERROR", "חסר סוג", 400);
+      const quantityRaw = String(form.get("quantity") ?? "").trim();
+      const minRaw = String(form.get("minQuantity") ?? "").trim();
+      const file = form.get("file");
+      const id = await createImplantHeight({
+        typeId: parentId,
+        label: String(form.get("label") ?? ""),
+        unit: String(form.get("unit") ?? ""),
+        notes: String(form.get("notes") ?? ""),
+        quantity: quantityRaw === "" ? 0 : Number(quantityRaw),
+        minQuantity: minRaw === "" ? 0 : Number(minRaw),
+        reason: String(form.get("reason") ?? ""),
+        performedBy: user.id,
+      });
+      await attachNewHeightMedia(id, user.id, String(form.get("barcode") ?? ""), file instanceof File ? file : null);
+      return jsonOk(await payload(user));
+    }
     const body = await parseJsonBody<{
       kind?: string;
       name?: string;
       label?: string;
+      unit?: string;
+      notes?: string;
+      barcode?: string;
       parentId?: string;
       quantity?: number;
       minQuantity?: number;
@@ -83,19 +138,22 @@ export async function POST(request: Request) {
       await createImplantType(body.parentId, body.name ?? "");
     } else if (body.kind === "height") {
       if (!body.parentId) throw new AppError("VALIDATION_ERROR", "חסר סוג", 400);
-      await createImplantHeight({
+      const id = await createImplantHeight({
         typeId: body.parentId,
         label: body.label ?? body.name ?? "",
+        unit: body.unit,
+        notes: body.notes,
         quantity: body.quantity,
         minQuantity: body.minQuantity,
         reason: body.reason,
         performedBy: user.id,
       });
+      await attachNewHeightMedia(id, user.id, body.barcode ?? "", null);
     } else {
       throw new AppError("VALIDATION_ERROR", "סוג לא תקין", 400);
     }
 
-    return jsonOk(await payload(true));
+    return jsonOk(await payload(user));
   } catch (error) {
     return jsonError(error);
   }
@@ -111,6 +169,8 @@ export async function PATCH(request: Request) {
       id?: string;
       name?: string;
       label?: string;
+      unit?: string;
+      notes?: string;
       quantity?: number;
       minQuantity?: number;
       reason?: string;
@@ -139,6 +199,8 @@ export async function PATCH(request: Request) {
       await updateImplantHeight({
         id: body.id,
         label: body.label ?? body.name,
+        unit: body.unit,
+        notes: body.notes,
         minQuantity: body.minQuantity,
         quantity: body.quantity,
         reason: body.reason,
@@ -146,7 +208,7 @@ export async function PATCH(request: Request) {
       });
     }
 
-    return jsonOk(await payload(true));
+    return jsonOk(await payload(user));
   } catch (error) {
     return jsonError(error);
   }
@@ -162,7 +224,7 @@ export async function DELETE(request: Request) {
     const id = url.searchParams.get("id")?.trim();
     if (!id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
     const result = await deleteImplantNode(kind, id);
-    return jsonOk(await payload(true, result.archived ? "הרשומה הועברה לארכיון כי קיים מלאי או היסטוריה." : null));
+    return jsonOk(await payload(user, result.archived ? "הרשומה הועברה לארכיון כי קיים מלאי או היסטוריה." : null));
   } catch (error) {
     return jsonError(error);
   }

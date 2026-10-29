@@ -2,7 +2,7 @@ import { jsonError, jsonOk, parseJsonBody } from "@/lib/api/response";
 import { AppError } from "@/lib/errors/app-error";
 import {
   countDoctorPart,
-  createDoctorPart,
+  createDoctorPartProduct,
   deleteDoctorPart,
   doctorPartSummary,
   listDoctorPartMovements,
@@ -48,6 +48,25 @@ export async function POST(request: Request) {
   try {
     const user = await requireSessionUser();
     await assertCanManageInventory(user);
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("multipart/form-data")) {
+      const form = await request.formData();
+      const file = form.get("file");
+      const quantityRaw = String(form.get("quantity") ?? "").trim();
+      const minRaw = String(form.get("minQuantity") ?? "").trim();
+      await createDoctorPartProduct({
+        name: String(form.get("name") ?? ""),
+        code: String(form.get("code") ?? ""),
+        quantity: quantityRaw === "" ? 0 : Number(quantityRaw),
+        unit: String(form.get("unit") ?? ""),
+        notes: String(form.get("notes") ?? ""),
+        minQuantity: minRaw === "" ? null : Number(minRaw),
+        barcode: String(form.get("barcode") ?? ""),
+        image: file instanceof File && file.size > 0 ? { bytes: Buffer.from(await file.arrayBuffer()), mimeType: file.type } : null,
+        userId: user.id,
+      });
+      return jsonOk({ parts: await listDoctorParts(), canEdit: true });
+    }
     const body = await parseJsonBody<{
       kind?: string;
       name?: string;
@@ -55,6 +74,8 @@ export async function POST(request: Request) {
       quantity?: number;
       unit?: string;
       notes?: string;
+      minQuantity?: number | null;
+      barcode?: string;
       id?: string;
       physicalQuantity?: number;
       reason?: string;
@@ -68,12 +89,14 @@ export async function POST(request: Request) {
         reason: body.reason,
       });
     } else {
-      await createDoctorPart({
+      await createDoctorPartProduct({
         name: body.name ?? "",
         code: body.code,
         quantity: body.quantity,
         unit: body.unit,
         notes: body.notes,
+        minQuantity: body.minQuantity,
+        barcode: body.barcode,
         userId: user.id,
         reason: body.reason,
       });
@@ -97,6 +120,7 @@ export async function PATCH(request: Request) {
       notes?: string;
       quantity?: number;
       delta?: number;
+      minQuantity?: number | null;
       reason?: string;
     }>(request);
     if (!body.id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);

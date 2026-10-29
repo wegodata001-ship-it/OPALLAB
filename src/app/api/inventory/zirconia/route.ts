@@ -30,6 +30,7 @@ import {
   renameZirconiaVariant,
   reorderZirconiaVariants,
 } from "@/lib/inventory/zirconia-stock";
+import { canParticipateInInventoryCount } from "@/lib/inventory/inventory-count";
 import { canDeleteOrders } from "@/lib/user-roles";
 
 function parseCatalogKind(kind: string | null | undefined): ZirconiaCatalogKind {
@@ -37,8 +38,12 @@ function parseCatalogKind(kind: string | null | undefined): ZirconiaCatalogKind 
   throw new AppError("VALIDATION_ERROR", "סוג לא תקין", 400);
 }
 
-async function stockPayload(userCanEdit: boolean) {
-  return { canEdit: userCanEdit, models: await listZirconiaStock() };
+async function stockPayload(user: Parameters<typeof canDeleteOrders>[0]) {
+  return {
+    canEdit: canDeleteOrders(user),
+    canCount: canParticipateInInventoryCount(user, "ZIRCONIA"),
+    models: await listZirconiaStock(),
+  };
 }
 
 export async function GET(request: Request) {
@@ -51,7 +56,7 @@ export async function GET(request: Request) {
       if (!heightId) throw new AppError("VALIDATION_ERROR", "חסר מזהה גובה", 400);
       return jsonOk({ movements: await listZirconiaMovements(heightId) });
     }
-    return jsonOk(await stockPayload(canDeleteOrders(user)));
+    return jsonOk(await stockPayload(user));
   } catch (error) {
     return jsonError(error);
   }
@@ -114,7 +119,7 @@ export async function POST(request: Request) {
         attributeId: body.attributeId,
       });
     }
-    return jsonOk(await stockPayload(true));
+    return jsonOk(await stockPayload(user));
   } catch (error) {
     return jsonError(error);
   }
@@ -178,7 +183,7 @@ export async function PATCH(request: Request) {
         await renameZirconiaNode({ kind, id: body.id, name: body.name });
       }
     }
-    return jsonOk(await stockPayload(true));
+    return jsonOk(await stockPayload(user));
   } catch (error) {
     return jsonError(error);
   }
@@ -195,7 +200,7 @@ export async function DELETE(request: Request) {
     let notice: string | null = null;
     if (kind === "height-column") {
       await deleteZirconiaHeightColumn((url.searchParams.get("ids") ?? "").split(","));
-      return jsonOk(await stockPayload(true));
+      return jsonOk(await stockPayload(user));
     }
     if (!id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
     if (kind === "variant") await deleteZirconiaVariant(id);
@@ -204,7 +209,7 @@ export async function DELETE(request: Request) {
       const result = await deleteZirconiaHeight(id);
       notice = result.archived ? "הגובה הוסר מהרשימה. היסטוריית הכמויות נשמרה." : null;
     } else await deleteZirconiaNode(parseCatalogKind(kind), id);
-    return jsonOk({ ...(await stockPayload(true)), notice });
+    return jsonOk({ ...(await stockPayload(user)), notice });
   } catch (error) {
     return jsonError(error);
   }

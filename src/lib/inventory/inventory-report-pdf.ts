@@ -4,6 +4,7 @@ import { htmlToPdfBuffer } from "@/lib/attendance/pdf-v2/render-pdf";
 import { STORAGE_BUCKETS } from "@/lib/supabase/admin";
 import { downloadStorageFile } from "@/lib/supabase/storage";
 import { barcodeMarkup } from "@/lib/inventory/barcode-svg";
+import { stockStatus } from "@/lib/inventory/inventory-dashboard";
 import { listReportCounts, listReportMovements, listReportProducts, type ReportCount, type ReportMovement, type ReportProduct } from "@/lib/inventory/inventory-report-data";
 import {
   MODULE_LABELS,
@@ -33,6 +34,7 @@ export type ReportRequest = {
   uncountedOnly: boolean;
   numbers?: string[];
   zeroOnly: boolean;
+  stock?: string;
   images: boolean;
   barcodes: boolean;
   producedBy: string;
@@ -57,14 +59,14 @@ function inRange(value: string, from?: Date, to?: Date) {
   return true;
 }
 
-function matchesReportCategory(category: string, request: ReportRequest) {
+export function matchesReportCategory(category: string, request: ReportRequest) {
   if (request.scope === "all" || request.categories.length === 0) return true;
   if (request.categories.includes(category)) return true;
   const label = MODULE_LABELS[category as ReportModule];
   return request.categories.some((item) => MODULE_LABELS[item as ReportModule] === category || item === label);
 }
 
-function applyProductFilters(rows: ReportProduct[], request: ReportRequest) {
+export function applyProductFilters(rows: ReportProduct[], request: ReportRequest) {
   if (request.scope === "all") return rows;
   return rows.filter((row) => {
     if (request.categories.length > 0 && !request.categories.includes(row.module) && !request.categories.includes(row.category)) return false;
@@ -72,11 +74,14 @@ function applyProductFilters(rows: ReportProduct[], request: ReportRequest) {
     if (request.materials.length > 0 && !request.materials.includes(row.material)) return false;
     if ((request.numbers?.length ?? 0) > 0 && !request.numbers?.includes(row.size)) return false;
     if (request.zeroOnly && row.quantity !== 0) return false;
+    if (request.stock === "missing-image" && row.imagePath) return false;
+    if (request.stock === "missing-barcode" && row.barcode.trim()) return false;
+    if (request.stock && ["ok", "low", "zero", "negative", "unset"].includes(request.stock) && stockStatus(row) !== request.stock) return false;
     return true;
   });
 }
 
-function selectCounts(counts: ReportCount[], request: ReportRequest) {
+export function selectCounts(counts: ReportCount[], request: ReportRequest) {
   return counts.filter((count) => {
     if (request.countId && count.id !== request.countId) return false;
     if (!request.countId && !inRange(count.createdAt, request.from, request.to)) return false;

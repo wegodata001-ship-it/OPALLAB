@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { downloadInventoryReport } from "@/components/inventory/InventoryReportsScreen";
-import { BarcodeScanBox, InventoryMediaProvider, MediaFace, useInventoryMedia } from "@/components/inventory/InventoryMedia";
+import { BarcodeScanBox, hasInventoryMedia, InventoryMediaProvider, MediaFace, useInventoryMedia } from "@/components/inventory/InventoryMedia";
 import { MEDIA_LEAF } from "@/lib/inventory/inventory-media-shared";
 
 export type InventoryModuleType =
@@ -89,8 +89,16 @@ const ACTION: Record<string, string> = {
 
 const STATUS: Record<CountRow["status"], string> = { DRAFT: "טיוטה", APPROVED: "מאושרת", CANCELLED: "מבוטלת" };
 
+const VIEW_KEY = "opal-inventory-view";
 const views = new Map<string, StockView>();
 const listeners = new Set<() => void>();
+
+function storedView(type: string): StockView {
+  if (typeof window === "undefined") return "cards";
+  const saved = window.localStorage.getItem(`${VIEW_KEY}:${type}`);
+  if (saved === "cards" || saved === "table" || saved === "count" || saved === "history") return saved;
+  return views.get(type) ?? "cards";
+}
 
 function emitViews() {
   listeners.forEach((listener) => listener());
@@ -143,7 +151,11 @@ function takeScan(type: InventoryModuleType) {
   return hit;
 }
 
-export function StockButtons({ type }: { type: InventoryModuleType }) {
+export function queueInventoryScan(type: InventoryModuleType, hit: { entityId: string; code: string }) {
+  rememberScan(type, hit);
+}
+
+export function StockButtons({ type, onLeafScan }: { type: InventoryModuleType; onLeafScan?: (hit: { module: string; entityKind: string; entityId: string; code: string }) => void }) {
   const [mode, setMode] = useInventoryView(type);
   const [scanError, setScanError] = useState<string | null>(null);
   return (
@@ -156,7 +168,10 @@ export function StockButtons({ type }: { type: InventoryModuleType }) {
               return;
             }
             setScanError(null);
-            rememberScan(type, hit);
+            if (onLeafScan) {
+              onLeafScan(hit);
+              return;
+            }
             setMode("table");
           }} />
           {scanError && <p className="mt-1 text-xs text-red-700">{scanError}</p>}
@@ -193,11 +208,10 @@ function MenuButton({ onClick, children }: { onClick: () => void; children: Reac
 
 export function InventoryModule({ type, title, children }: { type: InventoryModuleType; title: string; children: ReactNode }) {
   const [mode, setMode] = useInventoryView(type);
-  return (
-    <InventoryMediaProvider module={type}>
-      {mode === "cards" ? children : <InventoryStockPanel type={type} title={title} mode={mode} onMode={setMode} />}
-    </InventoryMediaProvider>
-  );
+  const covered = hasInventoryMedia(type);
+  const body = mode === "cards" ? children : <InventoryStockPanel type={type} title={title} mode={mode} onMode={setMode} />;
+  if (covered) return body;
+  return <InventoryMediaProvider module={type}>{body}</InventoryMediaProvider>;
 }
 
 function qtyLabel(value: number | null | undefined) {
@@ -473,7 +487,7 @@ function ItemTable({ items, canEdit, allowNegative, selected, onToggle, onAdjust
           {items.map((item) => (
             <tr key={item.id} id={`stock-row-${item.id}`} className="border-t border-slate-100">
               <td className="px-2 py-2"><input type="checkbox" checked={selected.includes(item.id)} onChange={() => onToggle(item.id)} aria-label={`בחירת ${item.name}`} /></td>
-              <td className="px-2 py-2"><MediaFace kind={leaf} id={item.id} name={item.name} canEdit={canEdit} /></td>
+              <td className="px-2 py-2"><MediaFace kind={leaf} id={item.id} name={item.name} canEdit={canEdit} size="thumb" /></td>
               <td className="px-2 py-2 font-medium">{item.name}<span className="mt-0.5 block text-xs font-normal text-slate-500">{[item.modelName, item.kindName, item.colorName, item.sizeName].filter(Boolean).join(" · ")}</span></td>
               <td className="px-2 py-2">{item.barcode || media.byId.get(item.id)?.barcode || "—"}</td>
               <td className="px-2 py-2 font-bold">{qtyLabel(item.quantity)}</td>
@@ -510,7 +524,7 @@ function LineTable({ lines, drafts, onDraft, readOnly, showResult, canEdit = fal
             const difference = parsed === null || !Number.isInteger(parsed) ? null : parsed - (line.quantityAtStart ?? 0);
             return (
               <tr key={line.itemId} id={`count-row-${line.itemId}`} className="border-t border-slate-100">
-                <td className="px-2 py-2"><MediaFace kind={leaf} id={line.itemId} name={line.name} canEdit={canEdit && !readOnly} /></td>
+                <td className="px-2 py-2"><MediaFace kind={leaf} id={line.itemId} name={line.name} canEdit={canEdit && !readOnly} size="thumb" /></td>
                 <td className="px-2 py-2 font-medium">{line.name}<span className="mt-0.5 block text-xs font-normal text-slate-500">{[line.modelName, line.kindName, line.colorName, line.sizeName].filter(Boolean).join(" · ")}</span></td>
                 <td className="px-2 py-2">{line.barcode || media.byId.get(line.itemId)?.barcode || "—"}</td>
                 <td className="px-2 py-2 font-bold">{qtyLabel(line.liveQuantity ?? line.quantityAtStart)}</td>

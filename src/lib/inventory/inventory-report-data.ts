@@ -1,6 +1,5 @@
 import type { InventoryCountStatus, InventoryModuleType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { INVENTORY_TYPE_LABELS } from "@/lib/constants/labels";
 import { MODULE_LABELS, type ReportModule } from "@/lib/inventory/inventory-reports";
 
 export type ReportProduct = {
@@ -89,7 +88,7 @@ function productName(parts: string[]) {
 }
 
 export async function listReportProducts(): Promise<ReportProduct[]> {
-  const [zirconia, titanium, bmma, drills, implants, simple, parts, classic] = await Promise.all([
+  const [zirconia, titanium, bmma, drills, implants, simple, parts] = await Promise.all([
     prisma.zirconiaHeight.findMany({
       where: { archivedAt: null },
       include: { model: { select: { name: true } }, color: { select: { name: true, variant: { select: { name: true } } } } },
@@ -112,7 +111,6 @@ export async function listReportProducts(): Promise<ReportProduct[]> {
     }),
     prisma.simpleStockItem.findMany({ where: { archivedAt: null } }),
     prisma.doctorPart.findMany({ where: { archivedAt: null } }),
-    prisma.inventoryItem.findMany({ where: { isActive: true } }),
   ]);
 
   const rows: ReportProduct[] = [
@@ -235,27 +233,15 @@ export async function listReportProducts(): Promise<ReportProduct[]> {
       updatedAt: row.updatedAt.toISOString(),
       imagePath: null,
     })),
-    ...classic.map((row) => ({
-      id: row.id,
-      module: "CLASSIC" as const,
-      category: INVENTORY_TYPE_LABELS[row.inventoryType] ?? row.inventoryType,
-      subcategory: "",
-      model: "",
-      material: "",
-      color: "",
-      size: "",
-      name: row.name,
-      barcode: row.barcode,
-      quantity: row.quantity,
-      minQuantity: row.minQuantity,
-      unit: row.unit || "יחידה",
-      updatedAt: row.updatedAt.toISOString(),
-      imagePath: row.storagePath || (row.imageUrl && !row.imageUrl.startsWith("http") ? row.imageUrl : null),
-    })),
   ];
 
   const decorated = await applyStoredMedia(rows);
-  return decorated.sort((left, right) => [left.category, left.model, left.subcategory, left.color, left.size, left.name].join("\u0000").localeCompare([right.category, right.model, right.subcategory, right.color, right.size, right.name].join("\u0000"), "he"));
+  const thresholds = await prisma.inventoryStockThreshold.findMany({ select: { itemId: true, minQuantity: true } });
+  const minById = new Map(thresholds.flatMap((row) => (row.minQuantity !== null && row.minQuantity > 0 ? [[row.itemId, row.minQuantity] as const] : [])));
+  return decorated.map((row) => ({
+    ...row,
+    minQuantity: row.minQuantity !== null && row.minQuantity > 0 ? row.minQuantity : (minById.get(row.id) ?? null),
+  })).sort((left, right) => [left.category, left.model, left.subcategory, left.color, left.size, left.name].join("\u0000").localeCompare([right.category, right.model, right.subcategory, right.color, right.size, right.name].join("\u0000"), "he"));
 }
 
 async function applyStoredMedia(rows: ReportProduct[]) {
@@ -268,7 +254,7 @@ async function applyStoredMedia(rows: ReportProduct[]) {
   return rows.map((row) => ({
     ...row,
     imagePath: row.imagePath || imageById.get(row.id) || null,
-    barcode: codeById.get(row.id) || row.barcode,
+    barcode: codeById.get(row.id) || (row.module === "DOCTOR_PARTS" ? "" : row.barcode),
   }));
 }
 

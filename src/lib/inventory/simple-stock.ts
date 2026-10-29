@@ -1,6 +1,7 @@
 import type { SimpleStockKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/errors/app-error";
+import { setInventoryBarcode, uploadInventoryImage } from "@/lib/inventory/inventory-media";
 
 export type SimpleStockItemRow = {
   id: string;
@@ -9,13 +10,26 @@ export type SimpleStockItemRow = {
   quantity: number;
   unit: string;
   note: string;
+  minQuantity: number | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type SimpleStockHistoryRow = {
+  id: string;
+  action: string;
+  quantity: number;
+  delta: number;
+  balanceAfter: number;
+  userName: string;
+  createdAt: string;
 };
 
 const NAME_MAX = 120;
 const UNIT_MAX = 40;
 const NOTE_MAX = 500;
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_IMAGE_BYTES = 6_000_000;
 
 function cleanName(raw: string | undefined): string {
   const name = raw?.trim() ?? "";
@@ -46,7 +60,7 @@ function mapItem(row: {
   note: string;
   createdAt: Date;
   updatedAt: Date;
-}): SimpleStockItemRow {
+}, minQuantity: number | null): SimpleStockItemRow {
   return {
     id: row.id,
     kind: row.kind,
@@ -54,6 +68,7 @@ function mapItem(row: {
     quantity: row.quantity,
     unit: row.unit,
     note: row.note,
+    minQuantity,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -64,7 +79,49 @@ export async function listSimpleStock(kind: SimpleStockKind): Promise<SimpleStoc
     where: { kind, archivedAt: null },
     orderBy: { name: "asc" },
   });
-  return rows.map(mapItem);
+  const thresholds = rows.length === 0 ? [] : await prisma.inventoryStockThreshold.findMany({
+    where: { inventoryType: kind, itemId: { in: rows.map((row) => row.id) } },
+    select: { itemId: true, minQuantity: true },
+  });
+  const mins = new Map(thresholds.map((row) => [row.itemId, row.minQuantity]));
+  return rows.map((row) => mapItem(row, mins.get(row.id) ?? null));
+}
+
+export async function listSimpleStockHistory(id: string): Promise<SimpleStockHistoryRow[]> {
+  const rows = await prisma.simpleStockMovement.findMany({
+    where: { itemId: id },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+    include: { performer: { select: { name: true } } },
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    action: row.action,
+    quantity: row.quantity,
+    delta: row.delta,
+    balanceAfter: row.balanceAfter,
+    userName: row.performer.name,
+    createdAt: row.createdAt.toISOString(),
+  }));
+}
+
+function cleanMin(value: number | null | undefined): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!Number.isInteger(value) || value < 0) throw new AppError("VALIDATION_ERROR", "כמות המינימום אינה תקינה", 400);
+  return value;
+}
+
+async function saveMinQuantity(kind: SimpleStockKind, itemId: string, minQuantity: number | null, userId: string) {
+  if (minQuantity === null) {
+    await prisma.inventoryStockThreshold.deleteMany({ where: { inventoryType: kind, itemId } });
+    return;
+  }
+  await prisma.inventoryStockThreshold.upsert({
+    where: { inventoryType_itemId: { inventoryType: kind, itemId } },
+    create: { inventoryType: kind, itemId, minQuantity, alertsEnabled: minQuantity > 0, updatedById: userId },
+    update: { minQuantity, alertsEnabled: minQuantity > 0, updatedById: userId },
+  });
 }
 
 export async function createSimpleStockItem(input: {
@@ -74,19 +131,19 @@ export async function createSimpleStockItem(input: {
   unit?: string;
   note?: string;
   performedBy: string;
-}): Promise<void> {
+}): Promise<string> {
   const name = cleanName(input.name);
   const quantity = cleanQuantity(input.quantity ?? 0);
   const unit = cleanOptional(input.unit, UNIT_MAX, "יחידת המידה");
   const note = cleanOptional(input.note, NOTE_MAX, "ההערה");
 
-  await prisma.$transaction(async (tx) => {
-    const item = await tx.simpleStockItem.create({
+  const item = await prisma.$transaction(async (tx) => {
+    const created = await tx.simpleStockItem.create({
       data: { kind: input.kind, name, quantity, unit, note },
     });
     await tx.simpleStockMovement.create({
       data: {
-        itemId: item.id,
+        itemId: created.id,
         action: "SET",
         quantity,
         delta: quantity,
@@ -94,7 +151,81 @@ export async function createSimpleStockItem(input: {
         performedBy: input.performedBy,
       },
     });
+    return created;
   });
+  return item.id;
+}
+
+export async function discardNewSimpleStockItem(id: string): Promise<void> {
+  const { deleteFile } = await import("@/lib/supabase/storage");
+  const { STORAGE_BUCKETS } = await import("@/lib/supabase/admin");
+  const images = await prisma.inventoryImage.findMany({
+    where: { entityId: id, module: { in: ["CLINIC_MATERIALS", "OTHER_MATERIALS"] }, entityKind: "item" },
+  });
+  for (const image of images) {
+    await deleteFile(STORAGE_BUCKETS.INVENTORY_IMAGES, image.storagePath).catch(() => undefined);
+    await prisma.inventoryImage.delete({ where: { id: image.id } });
+  }
+  await prisma.inventoryScanCode.deleteMany({ where: { entityId: id, module: { in: ["CLINIC_MATERIALS", "OTHER_MATERIALS"] }, entityKind: "item" } });
+  await prisma.inventoryStockThreshold.deleteMany({ where: { itemId: id, inventoryType: { in: ["CLINIC_MATERIALS", "OTHER_MATERIALS"] } } });
+  await prisma.simpleStockMovement.deleteMany({ where: { itemId: id } });
+  await prisma.simpleStockItem.delete({ where: { id } });
+}
+
+export async function createSimpleStockProduct(input: {
+  kind: SimpleStockKind;
+  name: string;
+  quantity?: number;
+  unit?: string;
+  note?: string;
+  minQuantity?: number | null;
+  barcode?: string;
+  image?: { bytes: Buffer; mimeType: string } | null;
+  performedBy: string;
+}): Promise<string> {
+  const barcode = input.barcode?.trim() ?? "";
+  if (barcode) {
+    const [scan, classic] = await Promise.all([
+      prisma.inventoryScanCode.findUnique({ where: { code: barcode }, select: { id: true } }),
+      prisma.inventoryItem.findFirst({ where: { barcode }, select: { id: true } }),
+    ]);
+    if (scan || classic) throw new AppError("CONFLICT", "הברקוד כבר משויך למוצר אחר", 409);
+  }
+  if (input.image) {
+    if (!IMAGE_TYPES.has(input.image.mimeType)) throw new AppError("VALIDATION_ERROR", "אפשר להעלות JPG, PNG או WEBP", 400);
+    if (input.image.bytes.byteLength === 0 || input.image.bytes.byteLength > MAX_IMAGE_BYTES) {
+      throw new AppError("VALIDATION_ERROR", "גודל התמונה גדול מדי", 400);
+    }
+  }
+  const minQuantity = cleanMin(input.minQuantity);
+  const id = await createSimpleStockItem(input);
+  try {
+    if (input.image) {
+      await uploadInventoryImage({
+        module: input.kind,
+        entityKind: "item",
+        entityId: id,
+        userId: input.performedBy,
+        bytes: input.image.bytes,
+        mimeType: input.image.mimeType,
+        makePrimary: true,
+      });
+    }
+    if (barcode) {
+      await setInventoryBarcode({ module: input.kind, entityKind: "item", entityId: id, code: barcode, userId: input.performedBy });
+    }
+    if (minQuantity !== undefined) await saveMinQuantity(input.kind, id, minQuantity, input.performedBy);
+  } catch (error) {
+    await discardNewSimpleStockItem(id).catch(() => undefined);
+    throw error;
+  }
+  return id;
+}
+
+async function itemKind(id: string): Promise<SimpleStockKind> {
+  const item = await prisma.simpleStockItem.findUnique({ where: { id }, select: { kind: true } });
+  if (!item) throw new AppError("NOT_FOUND", "המוצר לא נמצא", 404);
+  return item.kind;
 }
 
 export async function updateSimpleStockItem(input: {
@@ -105,6 +236,7 @@ export async function updateSimpleStockItem(input: {
   note?: string;
   delta?: number;
   performedBy: string;
+  minQuantity?: number | null;
 }): Promise<void> {
   if (input.quantity !== undefined && input.delta !== undefined) {
     throw new AppError("VALIDATION_ERROR", "יש לעדכן כמות באחת מהדרכים", 400);
@@ -159,6 +291,9 @@ export async function updateSimpleStockItem(input: {
       });
     }
   });
+  if (input.minQuantity !== undefined) {
+    await saveMinQuantity(await itemKind(input.id), input.id, cleanMin(input.minQuantity) ?? null, input.performedBy);
+  }
 }
 
 export async function deleteSimpleStockItem(id: string): Promise<{ archived: boolean }> {

@@ -45,6 +45,11 @@ export function isMediaLeaf(module: MediaModule, kind: string) {
   return MEDIA_LEAF[module] === kind;
 }
 
+/** A barcode may identify a stock leaf, or a titanium radius that is not itself a size. */
+export function canStoreBarcode(module: MediaModule, kind: string) {
+  return isMediaLeaf(module, kind) || (module === "TITANIUM" && kind === "radius");
+}
+
 export const DRILL_CATALOG_ID = "drills-catalog";
 export const DRILL_MODELS = ["AI", "SI", "250 PRO", "350 PRO"] as const;
 export const DRILL_TYPES = ["E-MAX", "TI", "Z", "PMTT"] as const;

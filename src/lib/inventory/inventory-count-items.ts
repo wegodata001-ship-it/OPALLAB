@@ -143,11 +143,11 @@ async function listCountableItemsRaw(type: InventoryModuleType): Promise<Countab
   return rows.map((row) => ({
     id: row.id,
     name: row.name,
-    modelName: "",
+    modelName: row.code ? `קוד ${row.code}` : "",
     kindName: row.unit,
     colorName: "",
     sizeName: "",
-    barcode: row.code,
+    barcode: "",
     quantity: row.quantity,
   }));
 }

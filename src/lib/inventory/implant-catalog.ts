@@ -5,6 +5,8 @@ import { AppError } from "@/lib/errors/app-error";
 export type ImplantHeightNode = {
   id: string;
   label: string;
+  unit: string;
+  notes: string;
   quantity: number;
   minQuantity: number;
   sortOrder: number;
@@ -69,6 +71,12 @@ function cleanName(raw: string | undefined, label: string): string {
   return name;
 }
 
+function cleanOptional(raw: string | undefined, max = NAME_MAX): string {
+  const value = raw?.trim() ?? "";
+  if (value.length > max) throw new AppError("VALIDATION_ERROR", "הטקסט ארוך מדי", 400);
+  return value;
+}
+
 function cleanQuantity(value: number, label = "הכמות"): number {
   if (!Number.isInteger(value) || value < 0) throw new AppError("VALIDATION_ERROR", `${label} אינה תקינה`, 400);
   return value;
@@ -81,6 +89,8 @@ function duplicate(message: string): never {
 function mapHeight(row: {
   id: string;
   label: string;
+  unit: string;
+  notes: string;
   quantity: number;
   minQuantity: number;
   sortOrder: number;
@@ -89,6 +99,8 @@ function mapHeight(row: {
   return {
     id: row.id,
     label: row.label,
+    unit: row.unit,
+    notes: row.notes,
     quantity: row.quantity,
     minQuantity: row.minQuantity,
     sortOrder: row.sortOrder,
@@ -249,21 +261,25 @@ export async function renameImplantType(id: string, name: string): Promise<void>
 export async function createImplantHeight(input: {
   typeId: string;
   label: string;
+  unit?: string;
+  notes?: string;
   quantity?: number;
   minQuantity?: number;
   performedBy: string;
   reason?: string;
-}): Promise<void> {
+}): Promise<string> {
   const type = await prisma.implantType.findFirst({ where: { id: input.typeId, archivedAt: null } });
   if (!type) throw new AppError("NOT_FOUND", "הסוג לא נמצא", 404);
-  const label = cleanName(input.label, "גובה");
+  const label = cleanName(input.label, "מידה");
+  const unit = cleanOptional(input.unit);
+  const notes = cleanOptional(input.notes, 500);
   await assertUniqueHeight(type.id, label);
   const quantity = cleanQuantity(input.quantity ?? 0);
   const minQuantity = cleanQuantity(input.minQuantity ?? 0, "כמות המינימום");
   const sortOrder = await nextSort("height", type.id);
-  await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const height = await tx.implantHeight.create({
-      data: { typeId: type.id, label, quantity, minQuantity, sortOrder },
+      data: { typeId: type.id, label, unit, notes, quantity, minQuantity, sortOrder },
     });
     await tx.implantStockMovement.create({
       data: {
@@ -277,27 +293,53 @@ export async function createImplantHeight(input: {
         performedBy: input.performedBy,
       },
     });
+    return height.id;
   });
+}
+
+export async function discardNewImplantHeight(id: string): Promise<void> {
+  const images = await prisma.inventoryImage.findMany({
+    where: { module: "IMPLANTS", entityKind: "height", entityId: id },
+  });
+  const { deleteFile } = await import("@/lib/supabase/storage");
+  const { STORAGE_BUCKETS } = await import("@/lib/supabase/admin");
+  for (const image of images) {
+    try {
+      await deleteFile(STORAGE_BUCKETS.INVENTORY_IMAGES, image.storagePath);
+    } catch {
+      /* already gone */
+    }
+  }
+  await prisma.inventoryImage.deleteMany({ where: { module: "IMPLANTS", entityKind: "height", entityId: id } });
+  await prisma.inventoryScanCode.deleteMany({ where: { module: "IMPLANTS", entityKind: "height", entityId: id } });
+  await prisma.implantStockMovement.deleteMany({ where: { heightId: id } });
+  await prisma.implantHeight.deleteMany({ where: { id } });
 }
 
 export async function updateImplantHeight(input: {
   id: string;
   label?: string;
+  unit?: string;
+  notes?: string;
   minQuantity?: number;
   quantity?: number;
   reason?: string;
   performedBy: string;
 }): Promise<void> {
-  const label = input.label !== undefined ? cleanName(input.label, "גובה") : undefined;
+  const label = input.label !== undefined ? cleanName(input.label, "מידה") : undefined;
+  const unit = input.unit !== undefined ? cleanOptional(input.unit) : undefined;
+  const notes = input.notes !== undefined ? cleanOptional(input.notes, 500) : undefined;
   const minQuantity = input.minQuantity !== undefined ? cleanQuantity(input.minQuantity, "כמות המינימום") : undefined;
   const quantity = input.quantity !== undefined ? cleanQuantity(input.quantity) : undefined;
 
   await prisma.$transaction(async (tx) => {
     const height = await tx.implantHeight.findUnique({ where: { id: input.id } });
-    if (!height || height.archivedAt) throw new AppError("NOT_FOUND", "הגובה לא נמצא", 404);
+    if (!height || height.archivedAt) throw new AppError("NOT_FOUND", "המידה לא נמצאה", 404);
     if (label !== undefined) await assertUniqueHeight(height.typeId, label, height.id);
-    const data: { label?: string; minQuantity?: number; quantity?: number } = {};
+    const data: { label?: string; unit?: string; notes?: string; minQuantity?: number; quantity?: number } = {};
     if (label !== undefined) data.label = label;
+    if (unit !== undefined) data.unit = unit;
+    if (notes !== undefined) data.notes = notes;
     if (minQuantity !== undefined) data.minQuantity = minQuantity;
     if (quantity !== undefined && quantity !== height.quantity) data.quantity = quantity;
     if (Object.keys(data).length === 0) return;

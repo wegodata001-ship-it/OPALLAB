@@ -15,8 +15,9 @@ import {
   Trash2,
 } from "lucide-react";
 import { Header } from "@/components/layout/sidebar";
-import { InventoryModule, StockButtons } from "@/components/inventory/InventoryStockTools";
-import { MediaFace } from "@/components/inventory/InventoryMedia";
+import { InventoryModule, StockButtons, queueInventoryScan } from "@/components/inventory/InventoryStockTools";
+import { BarcodeScanBox, InventoryMediaProvider, MediaFace, useInventoryMedia } from "@/components/inventory/InventoryMedia";
+import { barcodeMarkup } from "@/lib/inventory/barcode-svg";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { TITANIUM_HUB_LAST_INDEX } from "@/lib/inventory/titanium-constants";
@@ -73,11 +74,12 @@ async function requestCatalog(input: {
   body?: unknown;
   query?: string;
 }): Promise<CatalogResponse> {
+  const form = typeof FormData !== "undefined" && input.body instanceof FormData;
   const res = await fetch(`/api/inventory/titanium${input.query ?? ""}`, {
     method: input.method,
     credentials: "include",
-    headers: input.body ? { "Content-Type": "application/json" } : undefined,
-    body: input.body ? JSON.stringify(input.body) : undefined,
+    headers: input.body && !form ? { "Content-Type": "application/json" } : undefined,
+    body: form ? input.body as FormData : input.body ? JSON.stringify(input.body) : undefined,
   });
   const json = (await res.json()) as {
     success: boolean;
@@ -104,6 +106,39 @@ function active<T extends { archivedAt: string | null }>(rows: T[]): T[] {
 
 function formatQty(value: number | null): string {
   return value === null ? "—" : String(value);
+}
+
+const BARCODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function suggestBarcode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return `OP${[...bytes].map((value) => BARCODE_ALPHABET[value % BARCODE_ALPHABET.length]).join("")}`;
+}
+
+type RadiusDialog =
+  | { mode: "add"; modelId: string; modelName: string }
+  | { mode: "edit"; modelName: string; radius: TitaniumRadiusNode };
+
+type ScanFocus = {
+  kind: "model" | "radius" | "size";
+  id: string;
+  title: string;
+  path: string;
+  quantity: number | null;
+  barcode: string;
+};
+
+function locateScan(rows: TitaniumModelNode[], kind: string, id: string, barcode = ""): ScanFocus | null {
+  for (const model of rows) {
+    if (kind === "model" && model.id === id) return { kind: "model", id, title: model.name, path: model.name, quantity: null, barcode };
+    for (const radius of model.radii) {
+      if (kind === "radius" && radius.id === id) return { kind: "radius", id, title: `רדיוס ${radius.name}`, path: `${model.name} / ${radius.name}`, quantity: null, barcode };
+      for (const size of radius.sizes) {
+        if (kind === "size" && size.id === id) return { kind: "size", id, title: size.label, path: `${model.name} / ${radius.name} / ${size.label}`, quantity: size.quantity, barcode };
+      }
+    }
+  }
+  return null;
 }
 
 function modelSizes(model: TitaniumModelNode): TitaniumSizeNode[] {
@@ -179,6 +214,14 @@ function EditableName({
 }
 
 export function TitaniumCatalogScreen() {
+  return (
+    <InventoryMediaProvider module="TITANIUM">
+      <TitaniumCatalogBody />
+    </InventoryMediaProvider>
+  );
+}
+
+function TitaniumCatalogBody() {
   const [category, setCategory] = useState<Category | null>(null);
   const [models, setModels] = useState<TitaniumModelNode[]>([]);
   const [canEdit, setCanEdit] = useState(false);
@@ -192,11 +235,20 @@ export function TitaniumCatalogScreen() {
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [detailsDraft, setDetailsDraft] = useState("");
   const [newModel, setNewModel] = useState("");
-  const [newRadius, setNewRadius] = useState<Record<string, string>>({});
   const [newSizes, setNewSizes] = useState<Record<string, string>>({});
   const [countDrafts, setCountDrafts] = useState<Record<string, string>>({});
   const [history, setHistory] = useState<{ title: string; rows: Movement[] } | null>(null);
   const [showArchive, setShowArchive] = useState(false);
+  const media = useInventoryMedia();
+  const [radiusDialog, setRadiusDialog] = useState<RadiusDialog | null>(null);
+  const [radiusName, setRadiusName] = useState("");
+  const [radiusBarcode, setRadiusBarcode] = useState("");
+  const [savedRadiusBarcode, setSavedRadiusBarcode] = useState("");
+  const [radiusFile, setRadiusFile] = useState<File | null>(null);
+  const [radiusPreview, setRadiusPreview] = useState<string | null>(null);
+  const [focus, setFocus] = useState<ScanFocus | null>(null);
+  const [counted, setCounted] = useState("");
+  const [countNote, setCountNote] = useState<string | null>(null);
 
   const apply = useCallback((data: CatalogResponse) => {
     setCategory(data.category);
@@ -222,6 +274,158 @@ export function TitaniumCatalogScreen() {
     },
     [apply],
   );
+
+  function resetRadiusMedia() {
+    setRadiusFile(null);
+    setRadiusPreview((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+  }
+
+  function openAddRadius(modelId: string, modelName: string) {
+    resetRadiusMedia();
+    setRadiusName("");
+    setRadiusBarcode("");
+    setSavedRadiusBarcode("");
+    setRadiusDialog({ mode: "add", modelId, modelName });
+  }
+
+  function openEditRadius(modelName: string, radius: TitaniumRadiusNode) {
+    resetRadiusMedia();
+    const code = media.byId.get(radius.id)?.barcode ?? "";
+    setRadiusName(radius.name);
+    setRadiusBarcode(code);
+    setSavedRadiusBarcode(code);
+    setRadiusDialog({ mode: "edit", modelName, radius });
+  }
+
+  function chooseRadiusImage(file: File | null) {
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setError("אפשר להעלות JPG, PNG או WEBP");
+      return;
+    }
+    if (file.size > 6_000_000) {
+      setError("גודל התמונה גדול מדי");
+      return;
+    }
+    setRadiusFile(file);
+    setRadiusPreview((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return URL.createObjectURL(file);
+    });
+  }
+
+  async function suggestFreeBarcode() {
+    if (savedRadiusBarcode.trim()) return;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const code = suggestBarcode();
+      const res = await fetch(`/api/inventory/media?code=${encodeURIComponent(code)}`, { credentials: "include" });
+      const json = (await res.json()) as { success?: boolean; data?: { match: unknown } };
+      if (json.success && !json.data?.match) {
+        setRadiusBarcode(code);
+        return;
+      }
+    }
+    setError("לא הצלחנו ליצור ברקוד פנוי");
+  }
+
+  function printRadiusBarcode() {
+    const graphic = barcodeMarkup(radiusBarcode);
+    if (!graphic.svg) {
+      setError("אי אפשר להדפיס את הברקוד הזה כ־Code 128");
+      return;
+    }
+    const popup = window.open("", "_blank", "noopener,width=420,height=320");
+    if (!popup) return;
+    popup.document.write(`<!doctype html><html dir="rtl"><body style="font-family:sans-serif;text-align:center;padding:16px">${graphic.svg}<p>${radiusName}</p><p>${radiusBarcode}</p><script>print()<\/script></body></html>`);
+    popup.document.close();
+  }
+
+  function locate(kind: string, id: string, barcode = ""): ScanFocus | null {
+    return locateScan(models, kind, id, barcode || media.byId.get(id)?.barcode || "");
+  }
+
+  async function saveRadiusDialog() {
+    if (!radiusDialog || !radiusName.trim()) return;
+    const ok = await run(async () => {
+      if (radiusDialog.mode === "add") {
+        const form = new FormData();
+        form.set("kind", "radius");
+        form.set("modelId", radiusDialog.modelId);
+        form.set("name", radiusName);
+        form.set("barcode", radiusBarcode);
+        if (radiusFile) form.set("file", radiusFile);
+        return requestCatalog({ method: "POST", body: form });
+      }
+      const data = await requestCatalog({ method: "PATCH", body: { kind: "radius", id: radiusDialog.radius.id, name: radiusName } });
+      if (radiusBarcode.trim() !== savedRadiusBarcode.trim()) {
+        const response = await fetch("/api/inventory/media", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: radiusBarcode.trim() ? "barcode" : "clear-barcode",
+            module: "TITANIUM",
+            entityKind: "radius",
+            entityId: radiusDialog.radius.id,
+            code: radiusBarcode.trim(),
+          }),
+        });
+        const json = (await response.json()) as { success?: boolean; error?: { message?: string } };
+        if (!json.success) throw new Error(json.error?.message ?? "שמירת הברקוד נכשלה");
+      }
+      if (radiusFile) {
+        const previousId = media.byId.get(radiusDialog.radius.id)?.images.find((image) => image.isPrimary)?.id;
+        const form = new FormData();
+        form.set("module", "TITANIUM");
+        form.set("entityKind", "radius");
+        form.set("entityId", radiusDialog.radius.id);
+        form.set("file", radiusFile);
+        form.set("makePrimary", "1");
+        const response = await fetch("/api/inventory/media", { method: "POST", credentials: "include", body: form });
+        const json = (await response.json()) as { success?: boolean; error?: { message?: string } };
+        if (!json.success) throw new Error(json.error?.message ?? "העלאת התמונה נכשלה");
+        if (previousId) await fetch(`/api/inventory/media?imageId=${previousId}`, { method: "DELETE", credentials: "include" });
+      }
+      return data;
+    });
+    if (ok) {
+      await media.reload();
+      setRadiusDialog(null);
+    }
+  }
+
+  async function saveSizeCount() {
+    if (!focus || focus.kind !== "size") return;
+    const value = Number(counted);
+    if (!Number.isInteger(value) || value < 0) {
+      setError("כמות שנספרה אינה תקינה");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/inventory/counts", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "count-item", type: "TITANIUM", itemId: focus.id, countedQuantity: value }),
+      });
+      const json = (await res.json()) as { success?: boolean; data?: { itemCount?: { difference: number | null } }; error?: { message?: string } };
+      if (!json.success) throw new Error(json.error?.message ?? "שמירת הספירה נכשלה");
+      const fresh = await requestCatalog({ method: "GET" });
+      apply(fresh);
+      const after = locateScan(fresh.models, "size", focus.id, focus.barcode);
+      setCountNote(`נספר ${value}. הפרש ${json.data?.itemCount?.difference ?? "—"}. הכמות במלאי נשארה ${formatQty(after?.quantity ?? focus.quantity)}. הסריקה לא שינתה מלאי.`);
+      if (after) setFocus(after);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "שמירת הספירה נכשלה");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -288,7 +492,18 @@ export function TitaniumCatalogScreen() {
   return (
     <InventoryModule type="TITANIUM" title="מלאי טיטניום">
       <>
-        <Header title={category?.name ?? "מלאי טיטניום"} description="דגם, רדיוס, גודל וכמות" actions={<StockButtons type="TITANIUM" />} />
+        <Header title={category?.name ?? "מלאי טיטניום"} description="דגם, רדיוס, גודל וכמות" actions={<StockButtons type="TITANIUM" onLeafScan={(hit) => {
+          const found = locate(hit.entityKind, hit.entityId, hit.code);
+          if (!found) {
+            setError("הברקוד לא מזהה פריט טיטניום");
+            return;
+          }
+          setError(null);
+          setCounted("");
+          setCountNote(found.kind === "size" ? "הסריקה לא שינתה את כמות המלאי." : "הברקוד מזהה את הרדיוס או הדגם, לא גודל ספציפי, ולא משנה כמות.");
+          setFocus(found);
+          if (found.kind === "size") queueInventoryScan("TITANIUM", { entityId: found.id, code: found.barcode });
+        }} />} />
 
         {error && <p className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         {notice && <p className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{notice}</p>}
@@ -369,7 +584,7 @@ export function TitaniumCatalogScreen() {
                   return (
                     <article key={model.id} className={cn("rounded-xl border bg-white shadow-sm", open ? "border-opal-gold" : "border-slate-200")}>
                       <div className="flex items-center gap-2 px-3 py-2">
-                        <MediaFace kind="model" id={model.id} name={model.name} canEdit={canEdit} />
+                        <MediaFace kind="model" id={model.id} name={model.name} canEdit={canEdit} size="thumb" />
                         <div className="min-w-0 flex-1">
                           <EditableName
                             value={model.name}
@@ -428,20 +643,11 @@ export function TitaniumCatalogScreen() {
                               onAdjust={adjust}
                               onCountDraft={(id, value) => setCountDrafts((current) => ({ ...current, [id]: value }))}
                               onHistory={(size) => void openHistory(size)}
+                              onEdit={() => openEditRadius(model.name, radius)}
                             />
                           ))}
                           {canEdit && (
-                            <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(event) => {
-                              event.preventDefault();
-                              const name = (newRadius[model.id] ?? "").trim();
-                              if (!name) return;
-                              void run(() => requestCatalog({ method: "POST", body: { kind: "radius", modelId: model.id, name } })).then((ok) => {
-                                if (ok) setNewRadius((current) => ({ ...current, [model.id]: "" }));
-                              });
-                            }}>
-                              <input value={newRadius[model.id] ?? ""} onChange={(event) => setNewRadius((current) => ({ ...current, [model.id]: event.target.value }))} placeholder="רדיוס חדש" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-                              <Button type="submit" size="sm" disabled={busy || !(newRadius[model.id] ?? "").trim()}><Plus className="h-4 w-4" />הוסף רדיוס</Button>
-                            </form>
+                            <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => openAddRadius(model.id, model.name)}><Plus className="h-4 w-4" />הוסף רדיוס</Button>
                           )}
                         </div>
                       </Collapse>
@@ -484,6 +690,71 @@ export function TitaniumCatalogScreen() {
             )}
           </div>
         )}
+
+        <Modal open={Boolean(radiusDialog)} onClose={() => setRadiusDialog(null)} title={radiusDialog?.mode === "edit" ? "עריכת רדיוס" : "הוסף רדיוס"} className="max-w-xl">
+          <div className="space-y-3">
+            <p className="text-sm text-slate-500">{radiusDialog?.modelName}{radiusDialog?.mode === "edit" ? ` / ${radiusDialog.radius.name}` : ""}</p>
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-3">
+              <p className="mb-2 text-sm font-medium text-slate-700">תמונת רדיוס</p>
+              <div className="flex min-h-32 items-center justify-center overflow-hidden rounded-2xl bg-white">
+                {radiusPreview || (radiusDialog?.mode === "edit" ? media.byId.get(radiusDialog.radius.id)?.images.find((image) => image.isPrimary)?.url : "") ? (
+                  <img src={radiusPreview || (radiusDialog?.mode === "edit" ? media.byId.get(radiusDialog.radius.id)?.images.find((image) => image.isPrimary)?.url : "") || ""} alt="" className="max-h-40 w-full object-contain" />
+                ) : <span className="text-sm text-slate-400">הוסף תמונה</span>}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <label className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">העלאה
+                  <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => chooseRadiusImage(event.target.files?.[0] ?? null)} />
+                </label>
+                <label className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">צילום
+                  <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="sr-only" onChange={(event) => chooseRadiusImage(event.target.files?.[0] ?? null)} />
+                </label>
+                {radiusPreview && <Button type="button" variant="outline" onClick={() => { setRadiusFile(null); setRadiusPreview((current) => { if (current) URL.revokeObjectURL(current); return null; }); }}>הסרת תמונה</Button>}
+              </div>
+            </div>
+            <label className="block text-sm font-medium text-slate-700">שם או מספר רדיוס
+              <input className="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm" value={radiusName} onChange={(event) => setRadiusName(event.target.value)} aria-label="שם רדיוס" />
+            </label>
+            <label className="block text-sm font-medium text-slate-700">ברקוד
+              <input className="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm" value={radiusBarcode} onChange={(event) => setRadiusBarcode(event.target.value)} aria-label="ברקוד" />
+            </label>
+            <p className="text-xs text-slate-500">ברקוד של רדיוס מזהה את הרדיוס בלבד, לא גודל מסוים. תמונה וברקוד אינם חובה.</p>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" disabled={busy || Boolean(savedRadiusBarcode.trim())} onClick={() => void suggestFreeBarcode()}>צור ברקוד</Button>
+              <Button type="button" variant="outline" disabled={!radiusBarcode.trim()} onClick={printRadiusBarcode}>הדפסת מדבקה</Button>
+            </div>
+            <BarcodeScanBox videoId="titanium-radius-barcode" onCapture={setRadiusBarcode} />
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setRadiusDialog(null)}>ביטול</Button>
+            <Button disabled={busy || !radiusName.trim()} onClick={() => void saveRadiusDialog()}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}שמירה</Button>
+          </div>
+        </Modal>
+
+        <Modal open={Boolean(focus)} onClose={() => setFocus(null)} title="פריט שנסרק" className="max-w-lg">
+          {focus && (
+            <div className="space-y-3">
+              <div className="flex items-start gap-3">
+                <MediaFace kind={focus.kind} id={focus.id} name={focus.title} canEdit={false} size="thumb" />
+                <div>
+                  <p className="text-sm text-slate-500">{focus.path}</p>
+                  <p className="font-bold text-slate-900">{focus.title}</p>
+                  <p className="text-sm text-slate-600">ברקוד {focus.barcode || "אין"}</p>
+                  {focus.kind === "size" && <p className="text-sm text-slate-600">כמות במערכת {formatQty(focus.quantity)}</p>}
+                </div>
+              </div>
+              {countNote && <p className="text-sm text-slate-600">{countNote}</p>}
+              {focus.kind === "size" && (
+                <label className="block text-sm font-medium text-slate-700">כמות שנספרה
+                  <input className="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm" inputMode="numeric" value={counted} onChange={(event) => setCounted(event.target.value)} aria-label="כמות שנספרה" />
+                </label>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setFocus(null)}>סגירה</Button>
+                {focus.kind === "size" && <Button disabled={busy} onClick={() => void saveSizeCount()}>שמירת ספירה</Button>}
+              </div>
+            </div>
+          )}
+        </Modal>
 
         <Modal open={Boolean(pendingDelete)} onClose={() => setPendingDelete(null)} title="אישור מחיקה" className="max-w-md">
           <div className="space-y-4">
@@ -568,6 +839,7 @@ function RadiusBranch({
   onAdjust,
   onCountDraft,
   onHistory,
+  onEdit,
 }: {
   radius: TitaniumRadiusNode;
   open: boolean;
@@ -590,22 +862,29 @@ function RadiusBranch({
   onAdjust: (id: string, body: { delta?: number; quantity?: number; count?: boolean }) => void;
   onCountDraft: (id: string, value: string) => void;
   onHistory: (size: TitaniumSizeNode) => void;
+  onEdit: () => void;
 }) {
+  const media = useInventoryMedia();
+  const barcode = media.byId.get(radius.id)?.barcode ?? "";
   const sizes = active(radius.sizes);
   const units = titaniumQuantityTotal(sizes);
   return (
     <div className={cn("rounded-lg border bg-slate-50", open ? "border-opal-gold/60" : "border-slate-200")}>
       <div className="flex items-center gap-2 px-2 py-1.5">
-        <MediaFace kind="radius" id={radius.id} name={radius.name} canEdit={canEdit} />
+        <MediaFace kind="radius" id={radius.id} name={`רדיוס ${radius.name}`} canEdit={canEdit} size="thumb" />
         <div className="min-w-0 flex-1">
-          <EditableName value={radius.name} canEdit={canEdit} onOpen={onToggle} onSave={onRename} className="font-semibold text-slate-900" />
+          <div className="flex min-w-0 items-center gap-1">
+            <span className="shrink-0 text-sm font-semibold text-slate-900">רדיוס</span>
+            <EditableName value={radius.name} canEdit={canEdit} onOpen={onToggle} onSave={onRename} className="font-semibold text-slate-900" />
+          </div>
           <button type="button" className="flex w-full items-center gap-2 text-right text-xs text-slate-500" aria-expanded={open} onClick={onToggle}>
-            <span className="min-w-0 flex-1">{sizes.length} גדלים · {formatQty(units)} יח׳</span>
+            <span className="min-w-0 flex-1">{sizes.length} גדלים · {formatQty(units)} יח׳{barcode ? ` · ${barcode}` : ""}</span>
             <ChevronDown className={cn("h-4 w-4 shrink-0 text-slate-500 transition-transform duration-300", open && "rotate-180")} />
           </button>
         </div>
         {canEdit && (
           <div className="flex shrink-0">
+            <IconButton label="עריכה" disabled={busy} onClick={onEdit}><Pencil className="h-4 w-4" /></IconButton>
             {arrange && (
               <>
                 <IconButton label="הזז למעלה" disabled={busy || index === 0} onClick={() => onMove(-1)}><ChevronUp className="h-4 w-4" /></IconButton>
@@ -669,12 +948,15 @@ type SizeControlProps = {
 };
 
 function SizeControls({ size, sizeIndex, total, canEdit, arrange, busy, draft, onRename, onMove, onDelete, onAdjust, onDraft, onHistory }: SizeControlProps) {
+  const media = useInventoryMedia();
+  const barcode = media.byId.get(size.id)?.barcode ?? "";
   const parsed = Number(draft);
   const exact = draft.trim() !== "" && Number.isInteger(parsed) && parsed >= 0;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <MediaFace kind="size" id={size.id} name={size.label} canEdit={canEdit} />
+      <MediaFace kind="size" id={size.id} name={size.label} canEdit={canEdit} size="thumb" />
       <EditableName value={size.label} canEdit={canEdit} onSave={onRename} className="text-sm font-medium text-slate-800" />
+      {barcode && <span className="text-xs text-slate-500">{barcode}</span>}
       <span className={cn("min-w-8 text-center text-sm font-bold", size.quantity === 0 ? "text-red-600" : "text-slate-900")}>{formatQty(size.quantity)}</span>
       {canEdit && (
         <>

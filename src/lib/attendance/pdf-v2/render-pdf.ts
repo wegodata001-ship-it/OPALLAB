@@ -2,24 +2,37 @@
  * HTML → PDF via headless Chromium.
  * Native RTL/BiDi — no pdfmake visual reorder hacks.
  */
+import { existsSync } from "node:fs";
 import type { Browser } from "puppeteer";
 
 let browserPromise: Promise<Browser> | null = null;
 
+function chromeExecutable() {
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
+  const windowsChrome = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+  if (process.platform === "win32" && existsSync(windowsChrome)) return windowsChrome;
+  return undefined;
+}
+
 async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
     browserPromise = (async () => {
-      const puppeteer = await import("puppeteer");
-      return puppeteer.default.launch({
-        headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--font-render-hinting=none",
-          "--disable-dev-shm-usage",
-        ],
-      });
+      try {
+        const puppeteer = await import("puppeteer");
+        return await puppeteer.default.launch({
+          headless: true,
+          executablePath: chromeExecutable(),
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--font-render-hinting=none",
+            "--disable-dev-shm-usage",
+          ],
+        });
+      } catch (error) {
+        browserPromise = null;
+        throw error;
+      }
     })();
   }
   return browserPromise;

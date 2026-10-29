@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { History, Loader2, Plus, Search } from "lucide-react";
+import { Loader2, Plus, Search } from "lucide-react";
 import { Header } from "@/components/layout/sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,9 +12,33 @@ import type { ZirconiaColorNode, ZirconiaHeightNode, ZirconiaMovementRow, Zircon
 
 type CatalogResponse = {
   canEdit: boolean;
+  canCount?: boolean;
   models: ZirconiaStockModel[];
   notice?: string | null;
   movements?: ZirconiaMovementRow[];
+};
+
+type CountHistoryRow = {
+  id: string;
+  serial: number;
+  status: string;
+  quantityAtStart: number | null;
+  countedQuantity: number | null;
+  difference: number | null;
+  createdByName: string;
+  createdAt: string;
+};
+
+type ItemFocus = {
+  modelId: string;
+  scope: string;
+  modelName: string;
+  variantName: string;
+  colorId: string | null;
+  colorName: string;
+  label: string;
+  heightId: string | null;
+  quantity: number | null;
 };
 
 type StockFilter = "all" | "low" | "zero";
@@ -67,6 +91,56 @@ function quantityClass(quantity: number | null, threshold: number) {
   return "text-slate-900";
 }
 
+function focusFromHeight(model: ZirconiaStockModel, scope: string, variantName: string, colorId: string | null, colorName: string, label: string, height: ZirconiaHeightNode | null): ItemFocus {
+  return {
+    modelId: model.id,
+    scope,
+    modelName: model.name,
+    variantName,
+    colorId,
+    colorName,
+    label,
+    heightId: height?.id ?? null,
+    quantity: height?.quantity ?? null,
+  };
+}
+
+function itemTitle(focus: ItemFocus) {
+  return [focus.modelName, focus.variantName, focus.colorName || "ללא שיוך צבע", focus.label].filter(Boolean).join(" / ");
+}
+
+function findCreatedFocus(models: ZirconiaStockModel[], colorId: string, label: string): ItemFocus | null {
+  for (const model of models) {
+    for (const variant of model.variants) {
+      const color = variant.colors.find((item) => item.id === colorId);
+      const height = color?.heights.find((item) => item.label === label);
+      if (color && height) return focusFromHeight(model, variant.id, variant.name, color.id, color.name, height.label, height);
+    }
+    const color = model.legacyColors.find((item) => item.id === colorId);
+    const height = color?.heights.find((item) => item.label === label);
+    if (color && height) return focusFromHeight(model, "model", "", color.id, color.name, height.label, height);
+  }
+  return null;
+}
+
+function findHeightFocus(models: ZirconiaStockModel[], heightId: string): ItemFocus | null {
+  for (const model of models) {
+    for (const variant of model.variants) {
+      for (const color of variant.colors) {
+        const height = color.heights.find((item) => item.id === heightId);
+        if (height) return focusFromHeight(model, variant.id, variant.name, color.id, color.name, height.label, height);
+      }
+    }
+    for (const color of model.legacyColors) {
+      const height = color.heights.find((item) => item.id === heightId);
+      if (height) return focusFromHeight(model, "model", "", color.id, color.name, height.label, height);
+    }
+    const loose = model.legacyHeights.find((item) => item.id === heightId);
+    if (loose) return focusFromHeight(model, "model", "", null, "", loose.label, loose);
+  }
+  return null;
+}
+
 function previewQuantity(current: number | null, mode: QtyMode, raw: string) {
   if (!/^\d+$/.test(raw.trim())) return null;
   const value = Number(raw);
@@ -78,6 +152,11 @@ function previewQuantity(current: number | null, mode: QtyMode, raw: string) {
 export function ZirconiaCatalogScreen() {
   const [models, setModels] = useState<ZirconiaStockModel[]>([]);
   const [canEdit, setCanEdit] = useState(false);
+  const [canCount, setCanCount] = useState(false);
+  const [item, setItem] = useState<ItemFocus | null>(null);
+  const [counted, setCounted] = useState("");
+  const [countRows, setCountRows] = useState<CountHistoryRow[]>([]);
+  const [countNote, setCountNote] = useState<string | null>(null);
   const [modelId, setModelId] = useState<string | null>(null);
   const [scope, setScope] = useState<string>("model");
   const [colorQuery, setColorQuery] = useState("");
@@ -96,6 +175,7 @@ export function ZirconiaCatalogScreen() {
   const applyCatalog = useCallback((data: CatalogResponse) => {
     setModels(data.models);
     setCanEdit(data.canEdit);
+    setCanCount(Boolean(data.canCount));
     if (data.notice) setNotice(data.notice);
   }, []);
 
@@ -103,11 +183,12 @@ export function ZirconiaCatalogScreen() {
     setBusy(true);
     setError(null);
     try {
-      applyCatalog(await action());
-      return true;
+      const data = await action();
+      applyCatalog(data);
+      return data;
     } catch (err) {
       setError(err instanceof Error ? err.message : "השמירה נכשלה");
-      return false;
+      return null;
     } finally {
       setBusy(false);
     }
@@ -191,17 +272,7 @@ export function ZirconiaCatalogScreen() {
     setHeightFilter("all");
     setStockFilter("all");
     setEdit(null);
-  };
-
-  const openHistory = async (heightId: string, title: string) => {
-    setHistory({ title, rows: [] });
-    try {
-      const data = await requestCatalog({ method: "GET", query: `?history=1&heightId=${encodeURIComponent(heightId)}` });
-      setHistory({ title, rows: data.movements ?? [] });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "שגיאה בטעינת ההיסטוריה");
-      setHistory(null);
-    }
+    setItem(null);
   };
 
   const saveCell = async () => {
@@ -210,31 +281,97 @@ export function ZirconiaCatalogScreen() {
       return;
     }
     const amount = Number(edit.value);
-    let ok = false;
+    let data: CatalogResponse | null = null;
     if (!edit.heightId) {
       if (edit.mode === "subtract") {
         setError("אין מלאי להפחתה בשילוב הזה");
         return;
       }
-      ok = await run(() => requestCatalog({
+      data = await run(() => requestCatalog({
         method: "POST",
         body: { kind: "height", colorId: edit.colorId, label: edit.label, quantity: edit.mode === "set" ? preview : amount },
       }));
     } else if (edit.mode === "set") {
-      ok = await run(() => requestCatalog({ method: "PATCH", body: { kind: "height", id: edit.heightId, quantity: preview } }));
+      data = await run(() => requestCatalog({ method: "PATCH", body: { kind: "height", id: edit.heightId, quantity: preview } }));
     } else {
-      ok = await run(() => requestCatalog({
+      data = await run(() => requestCatalog({
         method: "POST",
         body: { kind: "adjust", id: edit.heightId, delta: edit.mode === "add" ? amount : -amount },
       }));
     }
-    if (ok) setEdit(null);
+    if (!data) return;
+    const next = edit.heightId ? findHeightFocus(data.models, edit.heightId) : findCreatedFocus(data.models, edit.colorId, edit.label);
+    if (next) {
+      setItem(next);
+      setEdit({ ...edit, heightId: next.heightId, quantity: next.quantity, value: "" });
+    }
+  };
+
+  const openItem = (focus: ItemFocus) => {
+    setModelId(focus.modelId);
+    setScope(focus.scope);
+    setItem(focus);
+    setEdit({ colorId: focus.colorId ?? "", colorName: focus.colorName, label: focus.label, heightId: focus.heightId, quantity: focus.quantity, mode: "set", value: "" });
+    setCounted("");
+    setCountNote(null);
+    setCountRows([]);
+    setHistory(focus.heightId ? { title: itemTitle(focus), rows: [] } : null);
+    if (!focus.heightId) return;
+    void requestCatalog({ method: "GET", query: `?history=1&heightId=${encodeURIComponent(focus.heightId)}` })
+      .then((data) => setHistory({ title: itemTitle(focus), rows: data.movements ?? [] }))
+      .catch(() => undefined);
+    void fetch(`/api/inventory/counts?type=ZIRCONIA&itemCounts=1&itemId=${encodeURIComponent(focus.heightId)}`, { credentials: "include" })
+      .then((response) => response.json())
+      .then((body) => { if (body?.success) setCountRows(body.data.counts ?? []); })
+      .catch(() => undefined);
+  };
+
+  const saveCount = async () => {
+    if (!item?.heightId) {
+      setError("אפשר לספור רק שילוב שכבר נפתח כפריט מלאי");
+      return;
+    }
+    if (!/^\d+$/.test(counted.trim())) {
+      setError("יש להזין כמות שנספרה בפועל");
+      return;
+    }
+    const before = item.quantity;
+    setBusy(true);
+    setError(null);
+    setCountNote(null);
+    try {
+      const response = await fetch("/api/inventory/counts", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "count-item", type: "ZIRCONIA", itemId: item.heightId, countedQuantity: Number(counted) }),
+      });
+      const json = await response.json() as { success?: boolean; data?: { itemCount?: { difference: number | null } }; error?: { message?: string } };
+      if (!json.success) throw new Error(json.error?.message ?? "השמירה נכשלה");
+      const fresh = await requestCatalog({ method: "GET" });
+      applyCatalog(fresh);
+      const next = findHeightFocus(fresh.models, item.heightId);
+      if (next) setItem(next);
+      if ((next?.quantity ?? null) !== before) {
+        setError("הספירה שינתה את יתרת המלאי. היתרה אמורה להישאר עד אישור הספירה.");
+        return;
+      }
+      const difference = json.data?.itemCount?.difference;
+      setCountNote(`הספירה נשמרה בלי לשנות את היתרה. הפרש: ${difference == null ? "—" : difference}. אישור ההתאמה נשאר במסך ספירת המלאי.`);
+      const historyResponse = await fetch(`/api/inventory/counts?type=ZIRCONIA&itemCounts=1&itemId=${encodeURIComponent(item.heightId)}`, { credentials: "include" });
+      const historyJson = await historyResponse.json() as { success?: boolean; data?: { counts?: CountHistoryRow[] } };
+      if (historyJson.success) setCountRows(historyJson.data?.counts ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "השמירה נכשלה");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const submitName = async () => {
     const name = draftName.trim();
     if (!name || !dialog) return;
-    let ok = false;
+    let ok: CatalogResponse | null = null;
     if (dialog.type === "model") ok = await run(() => requestCatalog({ method: "POST", body: { kind: "model", name } }));
     else if (dialog.type === "variant") ok = await run(() => requestCatalog({ method: "POST", body: { kind: "variant", modelId: model?.id, name } }));
     else if (dialog.type === "color") {
@@ -256,7 +393,15 @@ export function ZirconiaCatalogScreen() {
       <Header
         title="מלאי זרקוניה"
         description="טבלת מלאי לפי צבע וגובה"
-        actions={<div className="flex flex-wrap items-center justify-end gap-2"><StockButtons type="ZIRCONIA" /></div>}
+        actions={<div className="flex flex-wrap items-center justify-end gap-2"><StockButtons type="ZIRCONIA" onLeafScan={(hit) => {
+          const found = findHeightFocus(models, hit.entityId);
+          if (!found) {
+            setError("הברקוד לא מזהה פריט במלאי הזירקוניה הפתוח. הסריקה לא שינתה כמות.");
+            return;
+          }
+          setError(null);
+          openItem(found);
+        }} /></div>}
       />
       {error && <p className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {notice && <p className="mb-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</p>}
@@ -271,6 +416,7 @@ export function ZirconiaCatalogScreen() {
             ))}
             {canEdit && <Button variant="outline" className="h-8 px-2" onClick={() => { setDraftName(""); setDialog({ type: "model" }); }}><Plus className="h-3.5 w-3.5" />דגם</Button>}
             {canEdit && model && <button type="button" className="text-xs text-slate-500 hover:underline" onClick={() => { setDraftName(model.name); setDialog({ type: "rename-model", id: model.id, value: model.name }); }}>עריכת שם הדגם</button>}
+            {canEdit && model && <button type="button" className="text-xs text-red-600 hover:underline" onClick={() => setDialog({ type: "delete", kind: "model", id: model.id, name: model.name })}>מחיקת דגם</button>}
           </div>
 
           {model && (model.variants.length > 0 || hasLegacy) && (
@@ -282,6 +428,7 @@ export function ZirconiaCatalogScreen() {
               {hasLegacy && <button type="button" onClick={() => { setScope("model"); setEdit(null); setHeightFilter("all"); }} className={`rounded-full border px-3 py-1 text-sm ${scope === "model" ? "border-amber-400 bg-amber-50 font-bold" : "border-slate-200 bg-white"}`}>ללא תת-דגם</button>}
               {canEdit && <Button variant="outline" className="h-8 px-2" onClick={() => { setDraftName(""); setDialog({ type: "variant" }); }}><Plus className="h-3.5 w-3.5" />תת-דגם</Button>}
               {canEdit && variant && <button type="button" className="text-xs text-slate-500 hover:underline" onClick={() => { setDraftName(variant.name); setDialog({ type: "rename-variant", id: variant.id, value: variant.name }); }}>עריכת שם</button>}
+              {canEdit && variant && <button type="button" className="text-xs text-red-600 hover:underline" onClick={() => setDialog({ type: "delete", kind: "variant", id: variant.id, name: variant.name })}>מחיקת תת-דגם</button>}
             </div>
           )}
 
@@ -325,33 +472,6 @@ export function ZirconiaCatalogScreen() {
             {canEdit && <Button className="h-9" onClick={() => { setDraftName(""); setDialog({ type: "color" }); }} disabled={!model}><Plus className="h-3.5 w-3.5" />צבע</Button>}
             {canEdit && <Button variant="outline" className="h-9" onClick={() => { setDraftName(""); setDialog({ type: "height" }); }} disabled={colors.length === 0}><Plus className="h-3.5 w-3.5" />גובה</Button>}
           </div>
-
-          {edit && (
-            <form className="flex flex-wrap items-end gap-2 rounded-xl border border-opal-gold/50 bg-opal-gold-light px-3 py-2" onSubmit={(event) => { event.preventDefault(); void saveCell(); }}>
-              <div className="min-w-36">
-                <p className="text-xs text-slate-500">שילוב</p>
-                <p className="text-sm font-bold text-slate-900">{edit.colorName} × {edit.label}</p>
-                <p className="text-xs text-slate-500">נוכחי: {edit.quantity == null ? "—" : edit.quantity}</p>
-              </div>
-              <label className="text-xs text-slate-600">
-                פעולה
-                <select aria-label="סוג עדכון כמות" value={edit.mode} onChange={(event) => setEdit({ ...edit, mode: event.target.value as QtyMode })} className="mt-1 block h-9 rounded-md border border-slate-200 bg-white px-2 text-sm">
-                  <option value="set">קביעת כמות</option>
-                  <option value="add">הוספה</option>
-                  <option value="subtract">הפחתה</option>
-                </select>
-              </label>
-              <label className="text-xs text-slate-600">
-                כמות
-                <input autoFocus inputMode="numeric" aria-label="כמות לעדכון" value={edit.value} onChange={(event) => setEdit({ ...edit, value: event.target.value })} className="mt-1 block h-9 w-20 rounded-md border border-slate-200 bg-white text-center text-sm font-bold" />
-              </label>
-              <p className="pb-2 text-sm">התוצאה: <span className="font-bold">{preview == null ? "—" : preview}</span></p>
-              {edit.heightId && <button type="button" className="mb-1 text-slate-500" aria-label="היסטוריה" onClick={() => void openHistory(edit.heightId!, `${edit.colorName} × ${edit.label}`)}><History className="h-4 w-4" /></button>}
-              {edit.heightId && <MediaFace kind="height" id={edit.heightId} name={`${edit.colorName} ${edit.label}`} canEdit={canEdit} />}
-              <Button type="submit" className="h-9" disabled={busy || preview == null || preview < 0}>שמירה</Button>
-              <Button type="button" variant="outline" className="h-9" onClick={() => setEdit(null)}>סגירה</Button>
-            </form>
-          )}
 
           {colors.length === 0 ? (
             <p className="rounded-xl border border-dashed border-slate-300 bg-white px-3 py-6 text-center text-sm text-slate-500">אין צבעים בדגם שנבחר. הוסיפו צבע כדי לפתוח את טבלת המלאי.</p>
@@ -421,12 +541,100 @@ export function ZirconiaCatalogScreen() {
           )}
 
           {scope === "model" && model && model.legacyHeights.length > 0 && (
-            <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              גבהים שלא שויכו לצבע נשארו ללא שיוך: {model.legacyHeights.map((height) => height.label).join(" · ")}. הם לא שובצו אוטומטית לצבע.
-            </p>
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <p>גבהים שלא שויכו לצבע נשארו ללא שיוך. הם לא שובצו אוטומטית לצבע.</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {model.legacyHeights.map((height) => (
+                  <button key={height.id} type="button" className="rounded-full border border-amber-300 bg-white px-3 py-1" onClick={() => openItem(focusFromHeight(model, "model", "", null, "", height.label, height))}>
+                    {height.label} · {height.quantity == null ? "—" : height.quantity}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}
+
+      <Modal open={item != null} onClose={() => { setItem(null); setEdit(null); }} title={item ? itemTitle(item) : "פריט מלאי"} className="max-w-lg">
+        {item && (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-500">פריט מלאי עצמאי לפי דגם, תת-דגם, צבע וגובה. סריקה וספירה לא משנות את היתרה לפני אישור.</p>
+            {item.heightId ? (
+              <MediaFace kind="height" id={item.heightId} name={itemTitle(item)} canEdit={canEdit} />
+            ) : (
+              <p className="rounded-xl border border-dashed border-slate-300 px-3 py-4 text-sm text-slate-500">השילוב עדיין לא נפתח כפריט. קביעת כמות תיצור אותו, ואז אפשר לצרף תמונה, ברקוד וספירה.</p>
+            )}
+            <dl className="grid grid-cols-3 gap-2 text-center text-sm">
+              <div className="rounded-xl bg-slate-50 px-2 py-2"><dt className="text-slate-500">כמות מערכת</dt><dd className="text-xl font-bold">{item.quantity == null ? "—" : item.quantity}</dd></div>
+              <div className="rounded-xl bg-slate-50 px-2 py-2"><dt className="text-slate-500">כמות בפועל</dt><dd className="text-xl font-bold">{/^\d+$/.test(counted.trim()) ? counted.trim() : "—"}</dd></div>
+              <div className="rounded-xl bg-slate-50 px-2 py-2"><dt className="text-slate-500">הפרש</dt><dd className="text-xl font-bold">{item.quantity == null || !/^\d+$/.test(counted.trim()) ? "—" : Number(counted) - item.quantity}</dd></div>
+            </dl>
+            {canCount && item.heightId && (
+              <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => { event.preventDefault(); void saveCount(); }}>
+                <label className="text-xs text-slate-600">
+                  כמות שנספרה
+                  <input inputMode="numeric" aria-label="כמות שנספרה" value={counted} onChange={(event) => setCounted(event.target.value)} className="mt-1 block h-9 w-24 rounded-md border border-slate-200 text-center text-sm font-bold" />
+                </label>
+                <Button type="submit" className="h-9" disabled={busy}>שמירת ספירה</Button>
+              </form>
+            )}
+            {countNote && <p className="text-sm text-emerald-800">{countNote}</p>}
+            {!item.heightId && <p className="text-xs text-slate-500">ספירה תיפתח אחרי שהפריט קיים.</p>}
+            {item.heightId && !canCount && <p className="text-xs text-slate-500">שמירת ספירה זמינה למנהל ולמזכירה.</p>}
+            {countRows.length > 0 && (
+              <div>
+                <p className="mb-1 text-sm font-bold">היסטוריית ספירות</p>
+                <ul className="space-y-1">
+                  {countRows.map((row) => (
+                    <li key={row.id} className="rounded-lg border border-slate-200 px-2 py-1 text-xs">
+                      ספירה #{row.serial} · {row.status === "DRAFT" ? "טיוטה" : row.status === "APPROVED" ? "מאושרת" : row.status === "CANCELLED" ? "מבוטלת" : row.status}
+                      {" · "}מערכת {row.quantityAtStart == null ? "—" : row.quantityAtStart}
+                      {" · "}בפועל {row.countedQuantity == null ? "—" : row.countedQuantity}
+                      {" · "}הפרש {row.difference == null ? "—" : row.difference}
+                      <span className="block text-slate-500">{row.createdByName} · {new Date(row.createdAt).toLocaleString("he-IL")}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {history && history.rows.length > 0 && (
+              <div>
+                <p className="mb-1 text-sm font-bold">היסטוריית תנועות</p>
+                <ul className="space-y-1">
+                  {history.rows.map((row) => (
+                    <li key={row.id} className="rounded-lg border border-slate-200 px-2 py-1 text-xs">
+                      {ACTION_LABEL[row.action] ?? row.action}: {row.quantityBefore} → {row.quantityAfter}
+                      <span className="block text-slate-500">{row.userName} · {new Date(row.createdAt).toLocaleString("he-IL")}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {canEdit && edit && (
+              <form className="space-y-2 rounded-xl border border-slate-200 p-3" onSubmit={(event) => { event.preventDefault(); void saveCell(); }}>
+                <p className="text-sm font-bold">עדכון יתרה</p>
+                <p className="text-xs text-slate-500">הפעולה הזו משנה את כמות המלאי מיד. היא נפרדת משמירת הספירה.</p>
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="text-xs text-slate-600">
+                    פעולה
+                    <select aria-label="סוג עדכון כמות" value={edit.mode} onChange={(event) => setEdit({ ...edit, mode: event.target.value as QtyMode })} className="mt-1 block h-9 rounded-md border border-slate-200 bg-white px-2 text-sm">
+                      <option value="set">קביעת כמות</option>
+                      <option value="add">הוספה</option>
+                      <option value="subtract">הפחתה</option>
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600">
+                    כמות
+                    <input inputMode="numeric" aria-label="כמות לעדכון" value={edit.value} onChange={(event) => setEdit({ ...edit, value: event.target.value })} className="mt-1 block h-9 w-20 rounded-md border border-slate-200 bg-white text-center text-sm font-bold" />
+                  </label>
+                  <p className="pb-2 text-sm">התוצאה: <span className="font-bold">{preview == null ? "—" : preview}</span></p>
+                  <Button type="submit" className="h-9" disabled={busy || preview == null || preview < 0}>שמירת יתרה</Button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
+      </Modal>
 
       <Modal open={dialog != null && dialog.type !== "delete"} onClose={() => setDialog(null)} title={dialogTitle(dialog)} className="max-w-sm">
         {dialog && dialog.type !== "delete" && (
@@ -438,21 +646,6 @@ export function ZirconiaCatalogScreen() {
               <Button type="submit" disabled={busy || !draftName.trim()}>שמירה</Button>
             </div>
           </form>
-        )}
-      </Modal>
-
-      <Modal open={Boolean(history)} onClose={() => setHistory(null)} title={`היסטוריית תנועות${history?.title ? ` — ${history.title}` : ""}`} className="max-w-lg">
-        {history && history.rows.length === 0 ? <p className="text-sm text-slate-500">אין תנועות</p> : (
-          <ul className="space-y-2">
-            {history?.rows.map((row) => (
-              <li key={row.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
-                <p className="font-medium">{ACTION_LABEL[row.action] ?? row.action}</p>
-                <p>{row.quantityBefore} → {row.quantityAfter} ({row.quantityChange > 0 ? `+${row.quantityChange}` : row.quantityChange})</p>
-                <p className="text-xs text-slate-500">{row.userName} · {new Date(row.createdAt).toLocaleString("he-IL")}</p>
-                {row.reason && <p>{row.reason}</p>}
-              </li>
-            ))}
-          </ul>
         )}
       </Modal>
 
@@ -476,14 +669,16 @@ export function ZirconiaCatalogScreen() {
   );
 
   function cellButton(color: ZirconiaColorNode, label: string, height: ZirconiaHeightNode | null) {
-    const selected = edit?.colorId === color.id && edit.label === label;
+    const selected = item?.colorId === color.id && item.label === label;
     return (
       <button
         type="button"
-        disabled={!canEdit}
         aria-label={`${color.name} גובה ${label}`}
-        onClick={() => setEdit({ colorId: color.id, colorName: color.name, label, heightId: height?.id ?? null, quantity: height?.quantity ?? null, mode: "set", value: "" })}
-        className={`h-9 w-full rounded-md text-base font-bold tabular-nums ${quantityClass(height?.quantity ?? null, threshold)} ${selected ? "ring-2 ring-opal-gold" : ""} ${canEdit ? "hover:bg-slate-50" : ""}`}
+        onClick={() => {
+          if (!model) return;
+          openItem(focusFromHeight(model, variant?.id ?? "model", variant?.name ?? "", color.id, color.name, label, height));
+        }}
+        className={`h-9 w-full rounded-md text-base font-bold tabular-nums hover:bg-slate-50 ${quantityClass(height?.quantity ?? null, threshold)} ${selected ? "ring-2 ring-opal-gold" : ""}`}
       >
         {height?.quantity == null ? "—" : height.quantity}
       </button>

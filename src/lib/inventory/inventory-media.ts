@@ -5,7 +5,7 @@ import { writeAuditLog } from "@/lib/audit-log";
 import { prisma } from "@/lib/prisma";
 import { STORAGE_BUCKETS } from "@/lib/supabase/admin";
 import { buildInventoryImagePath, deleteFile, getSignedUrl, uploadFile } from "@/lib/supabase/storage";
-import { isMediaKind, isMediaLeaf, isMediaModule, type MediaModule } from "@/lib/inventory/inventory-media-shared";
+import { canStoreBarcode, isMediaKind, isMediaModule, type MediaModule } from "@/lib/inventory/inventory-media-shared";
 
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_BYTES = 6_000_000;
@@ -111,7 +111,7 @@ export async function lookupInventoryBarcode(raw: string) {
   if (scan) return { module: scan.module, entityKind: scan.entityKind, entityId: scan.entityId, code: scan.code };
   const classic = await prisma.inventoryItem.findFirst({ where: { barcode: code }, select: { id: true, name: true } });
   if (!classic) return null;
-  return { module: "CLASSIC", entityKind: "item", entityId: classic.id, code, name: classic.name };
+  return { module: "LEGACY_HIDDEN", entityKind: "item", entityId: classic.id, code, name: classic.name };
 }
 
 export async function uploadInventoryImage(input: {
@@ -205,7 +205,7 @@ export async function setPrimaryInventoryImage(imageId: string, userId: string) 
 
 async function saveCode(module: MediaModule, entityKind: string, entityId: string, code: string, userId: string) {
   await assertEntity(module, entityKind, entityId);
-  if (!isMediaLeaf(module, entityKind)) throw new AppError("VALIDATION_ERROR", "ברקוד נשמר לפריט מלאי בלבד", 400);
+  if (!canStoreBarcode(module, entityKind)) throw new AppError("VALIDATION_ERROR", "ברקוד נשמר לפריט מלאי בלבד", 400);
   await assertCodeFree(code, entityId);
   try {
     await prisma.inventoryScanCode.upsert({

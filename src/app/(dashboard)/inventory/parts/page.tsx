@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
-export default function Redirect() {
-  redirect("/inventory/classic");
+export default function LegacyPartsRedirect() {
+  redirect("/inventory");
 }

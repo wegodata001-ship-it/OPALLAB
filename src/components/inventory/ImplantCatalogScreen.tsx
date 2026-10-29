@@ -5,7 +5,8 @@ import Link from "next/link";
 import { ChevronDown, ChevronUp, Loader2, Minus, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { Header } from "@/components/layout/sidebar";
 import { InventoryModule, StockButtons } from "@/components/inventory/InventoryStockTools";
-import { MediaFace } from "@/components/inventory/InventoryMedia";
+import { BarcodeScanBox, MediaFace, useInventoryMedia } from "@/components/inventory/InventoryMedia";
+import { barcodeMarkup } from "@/lib/inventory/barcode-svg";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
@@ -15,6 +16,8 @@ import { cn } from "@/lib/utils";
 type HeightNode = {
   id: string;
   label: string;
+  unit: string;
+  notes: string;
   quantity: number;
   minQuantity: number;
   sortOrder: number;
@@ -24,7 +27,8 @@ type TypeNode = { id: string; name: string; sortOrder: number; archivedAt: strin
 type ModelNode = { id: string; name: string; sortOrder: number; archivedAt: string | null; types: TypeNode[] };
 type BrandNode = { id: string; name: string; sortOrder: number; archivedAt: string | null; models: ModelNode[] };
 type Summary = { totalQuantity: number; modelCount: number; typeCount: number; lowStockCount: number; outOfStockCount: number };
-type CatalogResponse = { canEdit: boolean; notice: string | null; summary: Summary; brands: BrandNode[] };
+type CatalogResponse = { canEdit: boolean; canCount: boolean; notice: string | null; summary: Summary; brands: BrandNode[] };
+type SizeFocus = { id: string; label: string; path: string; quantity: number; barcode: string };
 type MovementRow = {
   id: string;
   action: "IN" | "OUT" | "SET";
@@ -67,6 +71,35 @@ function qtyOf(heights: HeightNode[]): number {
   return active(heights).reduce((sum, height) => sum + height.quantity, 0);
 }
 
+function locateHeight(rows: BrandNode[], id: string) {
+  for (const brand of rows) {
+    for (const model of brand.models) {
+      for (const type of model.types) {
+        const height = type.heights.find((item) => item.id === id);
+        if (height) return { brand, model, type, height, path: `${brand.name} / ${model.name} / ${type.name}` };
+      }
+    }
+  }
+  return null;
+}
+
+function pathForType(rows: BrandNode[], typeId: string) {
+  for (const brand of rows) {
+    for (const model of brand.models) {
+      const type = model.types.find((item) => item.id === typeId);
+      if (type) return `${brand.name} / ${model.name} / ${type.name}`;
+    }
+  }
+  return "";
+}
+
+const BARCODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function suggestBarcode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return `OP${[...bytes].map((value) => BARCODE_ALPHABET[value % BARCODE_ALPHABET.length]).join("")}`;
+}
+
 async function requestCatalog(input: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: unknown; query?: string }): Promise<CatalogResponse> {
   const res = await fetch(`/api/inventory/implants${input.query ?? ""}`, {
     method: input.method,
@@ -83,6 +116,8 @@ export function ImplantCatalogScreen() {
   const [brands, setBrands] = useState<BrandNode[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [canEdit, setCanEdit] = useState(false);
+  const [canCount, setCanCount] = useState(false);
+  const media = useInventoryMedia();
   const [openBrands, setOpenBrands] = useState<string[]>([]);
   const [openModels, setOpenModels] = useState<string[]>([]);
   const [openTypes, setOpenTypes] = useState<string[]>([]);
@@ -98,6 +133,15 @@ export function ImplantCatalogScreen() {
   const [draftName, setDraftName] = useState("");
   const [draftQty, setDraftQty] = useState("0");
   const [draftMin, setDraftMin] = useState("0");
+  const [draftUnit, setDraftUnit] = useState("");
+  const [draftNotes, setDraftNotes] = useState("");
+  const [draftBarcode, setDraftBarcode] = useState("");
+  const [savedBarcode, setSavedBarcode] = useState("");
+  const [draftFile, setDraftFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [focus, setFocus] = useState<SizeFocus | null>(null);
+  const [counted, setCounted] = useState("");
+  const [countNote, setCountNote] = useState<string | null>(null);
   const [movements, setMovements] = useState<MovementRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
@@ -105,6 +149,7 @@ export function ImplantCatalogScreen() {
     setBrands(data.brands);
     setSummary(data.summary);
     setCanEdit(data.canEdit);
+    setCanCount(data.canCount);
     if (data.notice) setNotice(data.notice);
   }, []);
 
@@ -137,20 +182,43 @@ export function ImplantCatalogScreen() {
     return () => { cancelled = true; };
   }, [apply]);
 
-  const visible = useMemo(() => filterImplantTree(brands, query, stockFilter) as BrandNode[], [brands, query, stockFilter]);
+  const barcodeHeightIds = useMemo(() => {
+    const term = query.trim().toLocaleLowerCase("he");
+    const ids = new Set<string>();
+    if (!term) return ids;
+    for (const [id, record] of media.byId) {
+      if (record.entityKind === "height" && record.barcode.toLocaleLowerCase("he").includes(term)) ids.add(id);
+    }
+    return ids;
+  }, [media.byId, query]);
+
+  const visible = useMemo(() => filterImplantTree(brands, query, stockFilter, barcodeHeightIds) as BrandNode[], [brands, query, stockFilter, barcodeHeightIds]);
 
   useEffect(() => {
     if (!query.trim() && stockFilter === "all") return;
-    const next = expandImplantMatches(brands, query, stockFilter);
+    const next = expandImplantMatches(brands, query, stockFilter, barcodeHeightIds);
     setOpenBrands(next.brands);
     setOpenModels(next.models);
     setOpenTypes(next.types);
-  }, [brands, query, stockFilter]);
+  }, [brands, query, stockFilter, barcodeHeightIds]);
+
+  function resetDraftMedia() {
+    setDraftUnit("");
+    setDraftNotes("");
+    setDraftBarcode("");
+    setSavedBarcode("");
+    setDraftFile(null);
+    setPreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+  }
 
   function openAdd(kind: Level, parentId?: string) {
     setDraftName("");
     setDraftQty("0");
     setDraftMin("0");
+    resetDraftMedia();
     setDialog({ mode: "add", kind, parentId });
   }
 
@@ -163,7 +231,108 @@ export function ImplantCatalogScreen() {
     setDraftName(height.label);
     setDraftQty(String(height.quantity));
     setDraftMin(String(height.minQuantity));
+    resetDraftMedia();
+    setDraftUnit(height.unit);
+    setDraftNotes(height.notes);
+    const code = media.byId.get(height.id)?.barcode ?? "";
+    setDraftBarcode(code);
+    setSavedBarcode(code);
     setDialog({ mode: "edit-height", id: height.id });
+  }
+
+  async function chooseSizeImage(file: File | null) {
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setError("אפשר להעלות JPG, PNG או WEBP");
+      return;
+    }
+    if (file.size > 6_000_000) {
+      setError("גודל התמונה גדול מדי");
+      return;
+    }
+    setDraftFile(file);
+    setPreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return URL.createObjectURL(file);
+    });
+  }
+
+  async function suggestFreeBarcode() {
+    if (savedBarcode.trim()) return;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const code = suggestBarcode();
+      const res = await fetch(`/api/inventory/media?code=${encodeURIComponent(code)}`, { credentials: "include" });
+      const json = (await res.json()) as { success?: boolean; data?: { match: unknown } };
+      if (json.success && !json.data?.match) {
+        setDraftBarcode(code);
+        return;
+      }
+    }
+    setError("לא הצלחנו ליצור ברקוד פנוי");
+  }
+
+  function printDraftBarcode() {
+    const graphic = barcodeMarkup(draftBarcode);
+    if (!graphic.svg) {
+      setError("אי אפשר להדפיס את הברקוד הזה כ־Code 128");
+      return;
+    }
+    const popup = window.open("", "_blank", "noopener,width=420,height=320");
+    if (!popup) return;
+    popup.document.write(`<!doctype html><html dir="rtl"><body style="font-family:sans-serif;text-align:center;padding:16px">${graphic.svg}<p>${draftName}</p><p>${draftBarcode}</p><script>print()<\/script></body></html>`);
+    popup.document.close();
+  }
+
+  function openSizeFocus(heightId: string, barcode = "") {
+    const found = locateHeight(brands, heightId);
+    if (!found) {
+      setError("המידה לא נמצאה");
+      return;
+    }
+    setOpenBrands((current) => current.includes(found.brand.id) ? current : [...current, found.brand.id]);
+    setOpenModels((current) => current.includes(found.model.id) ? current : [...current, found.model.id]);
+    setOpenTypes((current) => current.includes(found.type.id) ? current : [...current, found.type.id]);
+    setFocus({
+      id: found.height.id,
+      label: found.height.label,
+      path: found.path,
+      quantity: found.height.quantity,
+      barcode: barcode || media.byId.get(found.height.id)?.barcode || "",
+    });
+    setCounted("");
+    setCountNote("הסריקה לא שינתה את כמות המלאי.");
+  }
+
+  async function saveCount() {
+    if (!focus) return;
+    const value = Number(counted);
+    if (!Number.isInteger(value) || value < 0) {
+      setError("כמות שנספרה אינה תקינה");
+      return;
+    }
+    const before = focus.quantity;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/inventory/counts", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "count-item", type: "IMPLANTS", itemId: focus.id, countedQuantity: value }),
+      });
+      const json = (await res.json()) as { success?: boolean; data?: { itemCount?: { difference: number | null } }; error?: { message?: string } };
+      if (!json.success) throw new Error(json.error?.message ?? "שמירת הספירה נכשלה");
+      const fresh = await requestCatalog({ method: "GET" });
+      apply(fresh);
+      const after = locateHeight(fresh.brands, focus.id)?.height.quantity;
+      const difference = json.data?.itemCount?.difference;
+      setCountNote(`נספר ${value}. הפרש ${difference ?? "—"}. הכמות במלאי נשארה ${after ?? before}. הספירה ממתינה לאישור מנהל.`);
+      if (after !== undefined) setFocus((current) => current ? { ...current, quantity: after } : current);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "שמירת הספירה נכשלה");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveDialog() {
@@ -177,17 +346,63 @@ export function ImplantCatalogScreen() {
       ok = await run(() => requestCatalog({ method: "POST", body: { kind: "type", parentId: dialog.parentId, name: draftName } }));
     }
     if (dialog.mode === "add" && dialog.kind === "height" && dialog.parentId) {
-      ok = await run(() => requestCatalog({
-        method: "POST",
-        body: { kind: "height", parentId: dialog.parentId, label: draftName, quantity: Number(draftQty), minQuantity: Number(draftMin), reason },
-      }));
+      const parentId = dialog.parentId;
+      ok = await run(async () => {
+        const form = new FormData();
+        form.set("kind", "height");
+        form.set("parentId", parentId);
+        form.set("label", draftName);
+        form.set("unit", draftUnit);
+        form.set("notes", draftNotes);
+        form.set("quantity", draftQty.trim() === "" ? "0" : draftQty);
+        form.set("minQuantity", draftMin.trim() === "" ? "0" : draftMin);
+        form.set("barcode", draftBarcode);
+        form.set("reason", reason);
+        if (draftFile) form.set("file", draftFile);
+        const res = await fetch("/api/inventory/implants", { method: "POST", credentials: "include", body: form });
+        const json = (await res.json()) as { success: boolean; data?: CatalogResponse; error?: { message?: string } };
+        if (!json.success || !json.data) throw new Error(json.error?.message ?? "שגיאה בשמירה");
+        return json.data;
+      });
+      if (ok) await media.reload();
     }
     if (dialog.mode === "edit") ok = await run(() => requestCatalog({ method: "PATCH", body: { kind: dialog.kind, id: dialog.id, name: draftName } }));
     if (dialog.mode === "edit-height") {
+      const heightId = dialog.id;
       ok = await run(() => requestCatalog({
         method: "PATCH",
-        body: { kind: "height", id: dialog.id, label: draftName, quantity: Number(draftQty), minQuantity: Number(draftMin), reason },
+        body: { kind: "height", id: heightId, label: draftName, unit: draftUnit, notes: draftNotes, minQuantity: Number(draftMin), reason },
       }));
+      if (ok && draftBarcode.trim() !== savedBarcode.trim()) {
+        const response = await fetch("/api/inventory/media", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: draftBarcode.trim() ? "barcode" : "clear-barcode",
+            module: "IMPLANTS",
+            entityKind: "height",
+            entityId: heightId,
+            code: draftBarcode.trim(),
+          }),
+        });
+        const json = (await response.json()) as { success?: boolean; error?: { message?: string } };
+        if (!json.success) setError(json.error?.message ?? "שמירת הברקוד נכשלה");
+      }
+      if (ok && draftFile) {
+        const previousId = media.byId.get(heightId)?.images.find((image) => image.isPrimary)?.id;
+        const form = new FormData();
+        form.set("module", "IMPLANTS");
+        form.set("entityKind", "height");
+        form.set("entityId", heightId);
+        form.set("file", draftFile);
+        form.set("makePrimary", "1");
+        const response = await fetch("/api/inventory/media", { method: "POST", credentials: "include", body: form });
+        const json = (await response.json()) as { success?: boolean; error?: { message?: string } };
+        if (!json.success) setError(json.error?.message ?? "העלאת התמונה נכשלה");
+        else if (previousId) await fetch(`/api/inventory/media?imageId=${previousId}`, { method: "DELETE", credentials: "include" });
+      }
+      if (ok) await media.reload();
     }
     if (ok) setDialog(null);
   }
@@ -234,7 +449,14 @@ export function ImplantCatalogScreen() {
         description="חברה, דגם, סוג שתל ומידה"
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <StockButtons type="IMPLANTS" />
+            <StockButtons type="IMPLANTS" onLeafScan={(hit) => {
+              if (hit.entityKind !== "height") {
+                setError("הברקוד לא מזהה מידה סופית");
+                return;
+              }
+              setError(null);
+              openSizeFocus(hit.entityId, hit.code);
+            }} />
             <Link href="/inventory" className="text-sm font-medium text-slate-600 underline-offset-4 hover:text-opal-gold-dark hover:underline">חזרה למלאי</Link>
           </div>
         }
@@ -280,6 +502,7 @@ export function ImplantCatalogScreen() {
                       title={brand.name}
                       meta={`${brand.models.length} דגמים`}
                       kind="brand"
+                      imageSize="card"
                       id={brand.id}
                       canEdit={canEdit}
                       busy={busy}
@@ -300,6 +523,7 @@ export function ImplantCatalogScreen() {
                                 title={model.name}
                                 meta={`${model.types.length} סוגים`}
                                 kind="model"
+                                imageSize="thumb"
                                 id={model.id}
                                 canEdit={canEdit}
                                 busy={busy}
@@ -320,6 +544,7 @@ export function ImplantCatalogScreen() {
                                           title={type.name}
                                           meta={`${type.heights.length} מידות · ${qtyOf(type.heights)} במלאי`}
                                           kind="type"
+                                          imageSize="thumb"
                                           id={type.id}
                                           canEdit={canEdit}
                                           busy={busy}
@@ -332,14 +557,17 @@ export function ImplantCatalogScreen() {
                                         <Collapse open={typeOpen}>
                                           <div className="py-2 sm:-ms-12">
                                             {type.heights.length === 0 ? <p className="px-3 text-sm text-slate-500">אין מידות</p> : (
-                                              <HeightTable
+                                              <HeightCards
                                                 rows={type.heights}
                                                 canEdit={canEdit}
+                                                canCount={canCount}
                                                 busy={busy}
+                                                barcodeOf={(id) => media.byId.get(id)?.barcode ?? ""}
                                                 onQuantity={changeQuantity}
                                                 onEdit={openHeightEdit}
                                                 onDelete={(row) => setPendingDelete({ kind: "height", id: row.id, name: row.label })}
                                                 onHistory={openHistory}
+                                                onCount={(row) => openSizeFocus(row.id)}
                                                 onReorder={(id, direction) => void reorder("height", type.heights.map((item) => item.id), id, direction, type.id)}
                                               />
                                             )}
@@ -370,20 +598,97 @@ export function ImplantCatalogScreen() {
         </div>
       )}
 
-      <Modal open={Boolean(dialog && dialog.mode !== "history")} onClose={() => setDialog(null)} title={dialogTitle(dialog)} className="max-w-md">
+      <Modal open={Boolean(dialog && dialog.mode !== "history" && !isHeightDialog(dialog))} onClose={() => setDialog(null)} title={dialogTitle(dialog)} className="max-w-md">
         <div className="space-y-3">
-          <Input autoFocus placeholder={dialog?.mode === "edit-height" || (dialog?.mode === "add" && dialog.kind === "height") ? "מידה" : "שם"} value={draftName} onChange={(event) => setDraftName(event.target.value)} aria-label="שם" />
-          {(dialog?.mode === "edit-height" || (dialog?.mode === "add" && dialog.kind === "height")) && (
-            <>
-              <Input inputMode="numeric" placeholder="כמות" value={draftQty} onChange={(event) => setDraftQty(event.target.value)} aria-label="כמות" />
-              <Input inputMode="numeric" placeholder="סף מלאי נמוך" value={draftMin} onChange={(event) => setDraftMin(event.target.value)} aria-label="סף מלאי נמוך" />
-            </>
-          )}
+          <label className="block text-sm font-medium text-slate-700">שם
+            <Input autoFocus className="mt-1" value={draftName} onChange={(event) => setDraftName(event.target.value)} aria-label="שם" />
+          </label>
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="outline" onClick={() => setDialog(null)}>ביטול</Button>
           <Button onClick={() => void saveDialog()} disabled={busy || !draftName.trim()}>שמירה</Button>
         </div>
+      </Modal>
+
+      <Modal open={isHeightDialog(dialog)} onClose={() => setDialog(null)} title={dialog?.mode === "edit-height" ? "עריכת מידה" : "הוספת מידה"} className="max-w-xl">
+        <div className="space-y-3">
+          <p className="text-sm text-slate-500">{dialog && (dialog.mode === "add" && dialog.kind === "height" && dialog.parentId ? pathForType(brands, dialog.parentId) : dialog.mode === "edit-height" ? locateHeight(brands, dialog.id)?.path : "")}</p>
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-3">
+            <p className="mb-2 text-sm font-medium text-slate-700">תמונת המידה</p>
+            <div className="flex min-h-36 items-center justify-center overflow-hidden rounded-2xl bg-white">
+              {previewUrl || (dialog?.mode === "edit-height" ? media.byId.get(dialog.id)?.images.find((image) => image.isPrimary)?.url : "") ? <img src={previewUrl || media.byId.get(dialog?.mode === "edit-height" ? dialog.id : "")?.images.find((image) => image.isPrimary)?.url || ""} alt="" className="max-h-48 w-full object-contain" /> : <span className="text-sm text-slate-400">הוסף תמונה</span>}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <label className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">העלאה
+                <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => void chooseSizeImage(event.target.files?.[0] ?? null)} />
+              </label>
+              <label className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">צילום
+                <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="sr-only" onChange={(event) => void chooseSizeImage(event.target.files?.[0] ?? null)} />
+              </label>
+              {previewUrl && <Button type="button" variant="outline" onClick={() => { setDraftFile(null); setPreviewUrl((current) => { if (current) URL.revokeObjectURL(current); return null; }); }}>הסרת תמונה</Button>}
+            </div>
+          </div>
+          <label className="block text-sm font-medium text-slate-700">מידה
+            <Input className="mt-1" value={draftName} onChange={(event) => setDraftName(event.target.value)} aria-label="מידה" />
+          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-sm font-medium text-slate-700">יחידת מידה
+              <Input className="mt-1" value={draftUnit} onChange={(event) => setDraftUnit(event.target.value)} aria-label="יחידת מידה" placeholder="מ״מ" />
+            </label>
+            <label className="block text-sm font-medium text-slate-700">{dialog?.mode === "edit-height" ? "סף מלאי נמוך" : "כמות התחלתית"}
+              <Input className="mt-1" inputMode="numeric" value={dialog?.mode === "edit-height" ? draftMin : draftQty} onChange={(event) => (dialog?.mode === "edit-height" ? setDraftMin(event.target.value) : setDraftQty(event.target.value))} aria-label={dialog?.mode === "edit-height" ? "סף מלאי נמוך" : "כמות התחלתית"} />
+            </label>
+          </div>
+          {dialog?.mode === "add" && (
+            <label className="block text-sm font-medium text-slate-700">סף מלאי נמוך
+              <Input className="mt-1" inputMode="numeric" value={draftMin} onChange={(event) => setDraftMin(event.target.value)} aria-label="סף מלאי נמוך" />
+            </label>
+          )}
+          {dialog?.mode === "edit-height" && <p className="text-xs text-slate-500">שינוי כמות נעשה מכפתורי ההוספה וההפחתה בכרטיס, ונרשם כתנועת מלאי.</p>}
+          <label className="block text-sm font-medium text-slate-700">ברקוד
+            <Input className="mt-1" value={draftBarcode} onChange={(event) => setDraftBarcode(event.target.value)} aria-label="ברקוד" />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" disabled={busy || Boolean(savedBarcode.trim())} onClick={() => void suggestFreeBarcode()}>צור ברקוד</Button>
+            <Button type="button" variant="outline" disabled={!draftBarcode.trim()} onClick={printDraftBarcode}>הדפסת מדבקה</Button>
+          </div>
+          {savedBarcode.trim() && <p className="text-xs text-slate-500">ברקוד קיים לא מוחלף אוטומטית. אפשר לערוך אותו ידנית.</p>}
+          <BarcodeScanBox videoId="implant-size-barcode" onCapture={(code) => setDraftBarcode(code)} />
+          <label className="block text-sm font-medium text-slate-700">הערות
+            <textarea className="mt-1 min-h-20 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" value={draftNotes} onChange={(event) => setDraftNotes(event.target.value)} aria-label="הערות" />
+          </label>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="outline" onClick={() => setDialog(null)}>ביטול</Button>
+          <Button onClick={() => void saveDialog()} disabled={busy || !draftName.trim()}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}שמירת מידה</Button>
+        </div>
+      </Modal>
+
+      <Modal open={Boolean(focus)} onClose={() => setFocus(null)} title="ספירת מידה" className="max-w-lg">
+        {focus && (
+          <div className="space-y-3">
+            <div className="flex items-start gap-3">
+              <MediaFace kind="height" id={focus.id} name={focus.label} canEdit={false} size="thumb" />
+              <div>
+                <p className="text-sm text-slate-500">{focus.path}</p>
+                <p className="font-bold text-slate-900">{focus.label}</p>
+                <p className="text-sm text-slate-600">ברקוד {focus.barcode || "אין"}</p>
+                <p className="text-sm text-slate-600">כמות במערכת {focus.quantity}</p>
+              </div>
+            </div>
+            <p className="text-sm text-slate-500">סריקה לבדה אינה משנה כמות. ההפרש נשמר לספירה וממתין לאישור מנהל.</p>
+            {canCount && (
+              <label className="block text-sm font-medium text-slate-700">כמות שנספרה
+                <Input className="mt-1" inputMode="numeric" value={counted} onChange={(event) => setCounted(event.target.value)} aria-label="כמות שנספרה" />
+              </label>
+            )}
+            {countNote && <p className="text-sm text-slate-700">{countNote}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setFocus(null)}>סגירה</Button>
+              {canCount && <Button disabled={busy} onClick={() => void saveCount()}>שמירת ספירה</Button>}
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal open={dialog?.mode === "history"} onClose={() => setDialog(null)} title={dialog?.mode === "history" ? `היסטוריה · ${dialog.label}` : ""} className="max-w-lg">
@@ -414,6 +719,11 @@ export function ImplantCatalogScreen() {
   );
 }
 
+function isHeightDialog(dialog: Dialog | null): boolean {
+  if (!dialog || dialog.mode === "history") return false;
+  return dialog.mode === "edit-height" || (dialog.mode === "add" && dialog.kind === "height");
+}
+
 function dialogTitle(dialog: Dialog | null): string {
   if (!dialog || dialog.mode === "history") return "";
   if (dialog.mode === "edit-height") return "עריכת מידה";
@@ -435,11 +745,12 @@ function Collapse({ open, children }: { open: boolean; children: ReactNode }) {
   );
 }
 
-function Row({ open, title, meta, kind, id, canEdit, busy, onToggle, onEdit, onDelete, onUp, onDown }: {
+function Row({ open, title, meta, kind, imageSize = "card", id, canEdit, busy, onToggle, onEdit, onDelete, onUp, onDown }: {
   open: boolean;
   title: string;
   meta: string;
   kind: "brand" | "model" | "type";
+  imageSize?: "card" | "thumb";
   id: string;
   canEdit: boolean;
   busy: boolean;
@@ -451,7 +762,7 @@ function Row({ open, title, meta, kind, id, canEdit, busy, onToggle, onEdit, onD
 }) {
   return (
     <div className={cn("flex items-center gap-2 rounded-xl border bg-white px-3 py-2", open ? "border-opal-gold" : "border-slate-200")}>
-      <MediaFace kind={kind} id={id} name={title} canEdit={canEdit} />
+      <MediaFace kind={kind} id={id} name={title} canEdit={canEdit} size={imageSize} />
       <button type="button" onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2 text-right" aria-expanded={open}>
         <span className="min-w-0 flex-1">
           <span className="block font-bold text-slate-900">{title}</span>
@@ -487,69 +798,49 @@ function Archive({ rows, kind, canEdit, busy, onRestore }: { rows: { id: string;
   );
 }
 
-function HeightTable({ rows, canEdit, busy, onQuantity, onEdit, onDelete, onHistory, onReorder }: {
+function HeightCards({ rows, canEdit, canCount, busy, barcodeOf, onQuantity, onEdit, onDelete, onHistory, onCount, onReorder }: {
   rows: HeightNode[];
   canEdit: boolean;
+  canCount: boolean;
   busy: boolean;
+  barcodeOf: (id: string) => string;
   onQuantity: (id: string, patch: { delta?: number; quantity?: number }) => Promise<void>;
   onEdit: (row: HeightNode) => void;
   onDelete: (row: HeightNode) => void;
   onHistory: (row: HeightNode) => void;
+  onCount: (row: HeightNode) => void;
   onReorder: (id: string, direction: -1 | 1) => void;
 }) {
   return (
-    <>
-      <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white md:block">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-900 text-white">
-            <tr>
-              <th className="px-3 py-2 text-right font-medium">מידה</th>
-              <th className="px-3 py-2 text-right font-medium">כמות</th>
-              <th className="px-3 py-2 text-right font-medium">עדכון</th>
-              <th className="px-3 py-2 text-right font-medium">פעולות</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id} className="border-t border-slate-100">
-                <td className="px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <MediaFace kind="height" id={row.id} name={row.label} canEdit={canEdit} />
-                    <div>
-                      <p className="font-medium text-slate-900">{row.label}</p>
-                      <p className="text-xs text-slate-500">סף נמוך {row.minQuantity}</p>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-3 py-2"><QtyBadge row={row} /></td>
-                <td className="px-3 py-2">{canEdit && <QuantityControl item={row} disabled={busy} onChange={onQuantity} />}</td>
-                <td className="px-3 py-2"><HeightActions row={row} canEdit={canEdit} busy={busy} onEdit={onEdit} onDelete={onDelete} onHistory={onHistory} onReorder={onReorder} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <ul className="space-y-2 md:hidden">
-        {rows.map((row) => (
+    <ul className="grid gap-2 sm:grid-cols-2">
+      {rows.map((row) => {
+        const barcode = barcodeOf(row.id);
+        return (
           <li key={row.id} className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <MediaFace kind="height" id={row.id} name={row.label} canEdit={canEdit} />
-                <div>
-                  <p className="font-bold text-slate-900">{row.label}</p>
-                  <p className="text-xs text-slate-500">סף נמוך {row.minQuantity}</p>
+            <div className="flex items-start gap-3">
+              <MediaFace kind="height" id={row.id} name={row.label} canEdit={canEdit} size="thumb" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-900">{row.label}{row.unit ? ` ${row.unit}` : ""}</p>
+                    <p className="truncate text-xs text-slate-500" title={barcode || undefined}>ברקוד {barcode || "אין"}</p>
+                    {row.notes && <p className="truncate text-xs text-slate-400">{row.notes}</p>}
+                  </div>
+                  <QtyBadge row={row} />
                 </div>
               </div>
-              <QtyBadge row={row} />
             </div>
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               {canEdit && <QuantityControl item={row} disabled={busy} onChange={onQuantity} />}
-              <HeightActions row={row} canEdit={canEdit} busy={busy} onEdit={onEdit} onDelete={onDelete} onHistory={onHistory} onReorder={onReorder} />
+              <div className="flex flex-wrap items-center gap-1">
+                {canCount && <button type="button" className="text-xs text-slate-600 hover:underline" disabled={busy} onClick={() => onCount(row)}>ספירת מלאי</button>}
+                <HeightActions row={row} canEdit={canEdit} busy={busy} onEdit={onEdit} onDelete={onDelete} onHistory={onHistory} onReorder={onReorder} />
+              </div>
             </div>
           </li>
-        ))}
-      </ul>
-    </>
+        );
+      })}
+    </ul>
   );
 }
 

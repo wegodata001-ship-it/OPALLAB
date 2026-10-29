@@ -139,7 +139,7 @@ export async function createTitaniumNode(input: {
   name?: string;
   modelId?: string;
   radiusId?: string;
-}): Promise<void> {
+}): Promise<string> {
   const category = await requireCategory();
   if (category.archivedAt) {
     throw new AppError("CONFLICT", "הקטגוריה בארכיון. יש לשחזר אותה לפני הוספה.", 409);
@@ -152,10 +152,10 @@ export async function createTitaniumNode(input: {
       where: { categoryId: category.id, archivedAt: null },
       _max: { sortOrder: true },
     });
-    await prisma.titaniumModel.create({
+    const created = await prisma.titaniumModel.create({
       data: { categoryId: category.id, name, sortOrder: (last._max.sortOrder ?? -1) + 1 },
     });
-    return;
+    return created.id;
   }
 
   if (input.kind === "radius") {
@@ -170,10 +170,10 @@ export async function createTitaniumNode(input: {
       where: { modelId: model.id, archivedAt: null },
       _max: { sortOrder: true },
     });
-    await prisma.titaniumRadius.create({
+    const created = await prisma.titaniumRadius.create({
       data: { modelId: model.id, name, sortOrder: (last._max.sortOrder ?? -1) + 1 },
     });
-    return;
+    return created.id;
   }
 
   const label = cleanName(input.name, "גודל");
@@ -187,9 +187,36 @@ export async function createTitaniumNode(input: {
     where: { radiusId: radius.id, archivedAt: null },
     _max: { sortOrder: true },
   });
-  await prisma.titaniumSize.create({
+  const created = await prisma.titaniumSize.create({
     data: { radiusId: radius.id, label, sortOrder: (last._max.sortOrder ?? -1) + 1 },
   });
+  return created.id;
+}
+
+async function removeEntityMedia(module: "TITANIUM", entityKind: string, entityId: string) {
+  const { deleteFile } = await import("@/lib/supabase/storage");
+  const { STORAGE_BUCKETS } = await import("@/lib/supabase/admin");
+  const images = await prisma.inventoryImage.findMany({ where: { module, entityKind, entityId } });
+  for (const image of images) {
+    await deleteFile(STORAGE_BUCKETS.INVENTORY_IMAGES, image.storagePath).catch(() => undefined);
+  }
+  await prisma.inventoryImage.deleteMany({ where: { module, entityKind, entityId } });
+  await prisma.inventoryScanCode.deleteMany({ where: { module, entityKind, entityId } });
+}
+
+export async function discardNewTitaniumRadius(id: string): Promise<void> {
+  const sizes = await prisma.titaniumSize.count({ where: { radiusId: id } });
+  if (sizes > 0) throw new AppError("CONFLICT", "לרדיוס יש גדלים ולא ניתן לבטל אותו", 409);
+  await removeEntityMedia("TITANIUM", "radius", id);
+  await prisma.titaniumRadius.deleteMany({ where: { id } });
+}
+
+export async function discardNewTitaniumSize(id: string): Promise<void> {
+  const size = await prisma.titaniumSize.findUnique({ where: { id }, include: { _count: { select: { movements: true } } } });
+  if (!size) return;
+  if (size.quantity != null || size._count.movements > 0) throw new AppError("CONFLICT", "לגודל יש מלאי ולא ניתן לבטל אותו", 409);
+  await removeEntityMedia("TITANIUM", "size", id);
+  await prisma.titaniumSize.deleteMany({ where: { id } });
 }
 
 export async function updateTitaniumCategory(input: {

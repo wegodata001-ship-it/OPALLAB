@@ -5,9 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { assertCanManageInventory, assertModuleAccess, requireSessionUser } from "@/lib/rbac";
 import { isSystemAdminUser } from "@/lib/user-roles";
 import {
-  createSimpleStockItem,
+  createSimpleStockProduct,
   deleteSimpleStockItem,
   listSimpleStock,
+  listSimpleStockHistory,
   updateSimpleStockItem,
 } from "@/lib/inventory/simple-stock";
 
@@ -20,7 +21,13 @@ export async function GET(request: Request) {
   try {
     const user = await requireSessionUser();
     await assertModuleAccess(user, "inventory", "SIMPLE_STOCK_VIEW");
-    const kind = parseKind(new URL(request.url).searchParams.get("kind"));
+    const url = new URL(request.url);
+    const kind = parseKind(url.searchParams.get("kind"));
+    if (url.searchParams.get("history") === "1") {
+      const id = url.searchParams.get("id")?.trim();
+      if (!id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
+      return jsonOk({ history: await listSimpleStockHistory(id) });
+    }
     const items = await listSimpleStock(kind);
     return jsonOk({ kind, items, canEdit: isSystemAdminUser(user) });
   } catch (error) {
@@ -33,24 +40,47 @@ export async function POST(request: Request) {
     const user = await requireSessionUser();
     await assertModuleAccess(user, "inventory", "SIMPLE_STOCK_EDIT");
     await assertCanManageInventory(user);
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("multipart/form-data")) {
+      const form = await request.formData();
+      const kind = parseKind(String(form.get("kind") ?? ""));
+      const file = form.get("file");
+      const minRaw = String(form.get("minQuantity") ?? "").trim();
+      const quantityRaw = String(form.get("quantity") ?? "").trim();
+      await createSimpleStockProduct({
+        kind,
+        name: String(form.get("name") ?? ""),
+        quantity: quantityRaw === "" ? 0 : Number(quantityRaw),
+        unit: String(form.get("unit") ?? ""),
+        note: String(form.get("note") ?? ""),
+        minQuantity: minRaw === "" ? null : Number(minRaw),
+        barcode: String(form.get("barcode") ?? ""),
+        image: file instanceof File && file.size > 0 ? { bytes: Buffer.from(await file.arrayBuffer()), mimeType: file.type } : null,
+        performedBy: user.id,
+      });
+      return jsonOk({ kind, items: await listSimpleStock(kind), canEdit: true });
+    }
     const body = await parseJsonBody<{
       kind?: string;
       name?: string;
       quantity?: number;
       unit?: string;
       note?: string;
+      minQuantity?: number | null;
+      barcode?: string;
     }>(request);
     const kind = parseKind(body.kind);
-    await createSimpleStockItem({
+    await createSimpleStockProduct({
       kind,
       name: body.name ?? "",
       quantity: body.quantity,
       unit: body.unit,
       note: body.note,
+      minQuantity: body.minQuantity,
+      barcode: body.barcode,
       performedBy: user.id,
     });
-    const items = await listSimpleStock(kind);
-    return jsonOk({ kind, items, canEdit: true });
+    return jsonOk({ kind, items: await listSimpleStock(kind), canEdit: true });
   } catch (error) {
     return jsonError(error);
   }
@@ -68,6 +98,7 @@ export async function PATCH(request: Request) {
       unit?: string;
       note?: string;
       delta?: number;
+      minQuantity?: number | null;
     }>(request);
     if (!body.id) throw new AppError("VALIDATION_ERROR", "חסר מזהה", 400);
     await updateSimpleStockItem({
@@ -77,12 +108,12 @@ export async function PATCH(request: Request) {
       unit: body.unit,
       note: body.note,
       delta: body.delta,
+      minQuantity: body.minQuantity,
       performedBy: user.id,
     });
-    const existing = await prisma.simpleStockItem.findUnique({ where: { id: body.id }, select: { kind: true } });
-    if (!existing) throw new AppError("NOT_FOUND", "המוצר לא נמצא", 404);
-    const items = await listSimpleStock(existing.kind);
-    return jsonOk({ kind: existing.kind, items, canEdit: true });
+    const kind = await prisma.simpleStockItem.findUnique({ where: { id: body.id }, select: { kind: true } });
+    const items = kind ? await listSimpleStock(kind.kind) : [];
+    return jsonOk({ items, canEdit: true });
   } catch (error) {
     return jsonError(error);
   }

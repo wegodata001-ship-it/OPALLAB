@@ -6,10 +6,13 @@ import {
   requireSessionUser,
 } from "@/lib/rbac";
 import { canDeleteOrders } from "@/lib/user-roles";
+import { setInventoryBarcode, uploadInventoryImage } from "@/lib/inventory/inventory-media";
 import {
   adjustTitaniumQuantity,
   createTitaniumNode,
   deleteTitaniumNode,
+  discardNewTitaniumRadius,
+  discardNewTitaniumSize,
   getTitaniumCatalog,
   renameTitaniumNode,
   reorderTitaniumNodes,
@@ -43,11 +46,45 @@ export async function POST(request: Request) {
     const user = await requireSessionUser();
     await assertModuleAccess(user, "inventory", "TITANIUM_CATALOG");
     await assertCanManageTitaniumCatalog(user);
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("multipart/form-data")) {
+      const form = await request.formData();
+      const kind = String(form.get("kind") ?? "");
+      if (kind !== "radius" && kind !== "size") throw new AppError("VALIDATION_ERROR", "סוג לא תקין", 400);
+      const file = form.get("file");
+      const id = await createTitaniumNode({
+        kind,
+        name: String(form.get("name") ?? ""),
+        modelId: String(form.get("modelId") ?? "") || undefined,
+        radiusId: String(form.get("radiusId") ?? "") || undefined,
+      });
+      try {
+        if (file instanceof File && file.size > 0) {
+          await uploadInventoryImage({
+            module: "TITANIUM",
+            entityKind: kind,
+            entityId: id,
+            userId: user.id,
+            bytes: Buffer.from(await file.arrayBuffer()),
+            mimeType: file.type,
+            makePrimary: true,
+          });
+        }
+        const barcode = String(form.get("barcode") ?? "").trim();
+        if (barcode) await setInventoryBarcode({ module: "TITANIUM", entityKind: kind, entityId: id, code: barcode, userId: user.id });
+      } catch (error) {
+        if (kind === "radius") await discardNewTitaniumRadius(id);
+        else await discardNewTitaniumSize(id);
+        throw error;
+      }
+      return jsonOk(await payload(true));
+    }
     const body = await parseJsonBody<{
       kind?: string;
       name?: string;
       modelId?: string;
       radiusId?: string;
+      barcode?: string;
       id?: string;
       delta?: number;
       quantity?: number;
@@ -68,7 +105,16 @@ export async function POST(request: Request) {
     }
     const kind = parseKind(body.kind);
     if (kind === "category") throw new AppError("VALIDATION_ERROR", "סוג לא תקין", 400);
-    await createTitaniumNode({ kind, name: body.name, modelId: body.modelId, radiusId: body.radiusId });
+    const id = await createTitaniumNode({ kind, name: body.name, modelId: body.modelId, radiusId: body.radiusId });
+    if (body.barcode?.trim() && (kind === "radius" || kind === "size")) {
+      try {
+        await setInventoryBarcode({ module: "TITANIUM", entityKind: kind, entityId: id, code: body.barcode, userId: user.id });
+      } catch (error) {
+        if (kind === "radius") await discardNewTitaniumRadius(id);
+        else await discardNewTitaniumSize(id);
+        throw error;
+      }
+    }
     return jsonOk(await payload(true));
   } catch (error) {
     return jsonError(error);
